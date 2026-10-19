@@ -55,7 +55,13 @@
     url = null;
   }
 
-  async function ownWindow() {
+  /** Bild neu aufbauen (z. B. nach einem Hänger). */
+  export function reconnect() {
+    if (frame && url) frame.src = url;
+  }
+
+  /** App im Hub beenden und normal im eigenen Fenster starten. */
+  export async function ownWindow() {
     if (url) await stop();
     api.launch(id).then(
       () => toast(`${tool.entry.name} im eigenen Fenster gestartet`, "info"),
@@ -66,21 +72,13 @@
 
 {#if url}
   <div class="embed">
-    <div class="bar">
-      <span class="badge accent">● im Hub</span>
-      <span class="muted small">Klick ins Bild, um zu tippen.</span>
-      <span class="spacer"></span>
-      <button onclick={() => frame && (frame.src = url!)}>Neu verbinden</button>
-      <button onclick={ownWindow}>Im eigenen Fenster</button>
-      <button class="danger" onclick={stop}>Beenden</button>
-    </div>
     <iframe
       bind:this={frame}
       class="card"
       title={tool.entry.name}
       src={url}
       allow="clipboard-read; clipboard-write"
-      onload={() => frame?.focus()}
+      onload={() => frame?.focus({ preventScroll: true })}
     ></iframe>
   </div>
 {:else}
@@ -96,11 +94,9 @@
         <button class="primary" disabled={!!missing || starting} onclick={start}>
           {starting ? "Startet … (beim ersten Mal ein paar Sekunden)" : "▶ Im Hub starten"}
         </button>
-        <button onclick={ownWindow}>Im eigenen Fenster</button>
       </div>
       <p class="muted small">
-        „Im Hub“ läuft die App auf einem eigenen virtuellen Bildschirm und erscheint hier. Für 3D-Spiele ist das
-        eigene Fenster besser.
+        Die App läuft dann hier im Hub. Für 3D-Spiele ist „Im eigenen Fenster“ (oben rechts) besser.
       </p>
     </div>
   </section>
@@ -113,15 +109,6 @@
     gap: 8px;
     flex: 1;
     min-height: 0;
-  }
-  .bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-  .spacer {
-    flex: 1;
   }
   iframe {
     flex: 1;

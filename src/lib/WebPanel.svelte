@@ -53,19 +53,16 @@
     }
   }
 
-  const openWindow = () => api.webWindow(id).catch((e) => toast(errText(e)));
+  export const openWindow = () => api.webWindow(id).catch((e) => toast(errText(e)));
+
+  /** Eingebettete Seite neu laden. */
+  export function reconnect() {
+    if (frame) frame.src = src;
+    else poll();
+  }
 </script>
 
 <div class="web">
-  <div class="bar">
-    <code class="muted">{tool.manifest.web_url}</code>
-    <span class="spacer"></span>
-    {#if reachable}
-      <button onclick={() => frame && (frame.src = src)}>Neu laden</button>
-    {/if}
-    <button onclick={openWindow}>Im eigenen Fenster öffnen</button>
-  </div>
-
   {#if reachable === null}
     <p class="muted">Prüfe Web-Interface …</p>
   {:else if !reachable}
@@ -93,14 +90,6 @@
     gap: 8px;
     flex: 1;
     min-height: 0;
-  }
-  .bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .spacer {
-    flex: 1;
   }
   iframe {
     flex: 1;

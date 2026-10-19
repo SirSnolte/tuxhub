@@ -29,6 +29,9 @@
   let busy = $state(false);
   /** Läuft die App gerade „im Hub“? Dann README ausblenden und Start-Knopf oben sparen. */
   let embedded = $state(false);
+  let embedPanel = $state<EmbedPanel>();
+  let webPanel = $state<WebPanel>();
+  const webTool = $derived(!!m.web_url && !m.ui);
   const plainApp = $derived(tool.level === 0 && tool.can_launch);
   let update = $state<string | null>(null);
   let checked = $state(false);
@@ -133,6 +136,12 @@
       {#if tool.running}
         <button disabled={busy} onclick={() => run(() => api.stop(id))}>Prozess beenden</button>
       {/if}
+      {#if (plainApp && embedded) || webTool}
+        <button onclick={() => (webTool ? webPanel?.reconnect() : embedPanel?.reconnect())}>Neu verbinden</button>
+      {/if}
+      {#if plainApp || webTool}
+        <button onclick={() => (webTool ? webPanel?.openWindow() : embedPanel?.ownWindow())}>Im eigenen Fenster</button>
+      {/if}
       <button
         class="danger"
         disabled={busy}
@@ -162,7 +171,7 @@
   {#if m.ui}
     <iframe bind:this={frame} class="tool-ui card" title={tool.entry.name} src={`tool://${id}/${m.ui}`}></iframe>
   {:else if m.web_url}
-    <WebPanel {tool} />
+    <WebPanel {tool} bind:this={webPanel} />
   {:else if (m.actions?.length ?? 0) > 0 || (m.settings?.length ?? 0) > 0}
     <section class="card body">
       {#if m.actions?.length}
@@ -180,7 +189,7 @@
       {/if}
     </section>
   {:else if plainApp}
-    <EmbedPanel {tool} bind:running={embedded} />
+    <EmbedPanel {tool} bind:running={embedded} bind:this={embedPanel} />
   {:else}
     <section class="card body">
       <p class="muted">Für dieses Tool wurde keine Startdatei gefunden.</p>
