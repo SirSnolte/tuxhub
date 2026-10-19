@@ -589,6 +589,14 @@ pub fn run() {
             }
             shortcuts::rebind(app.handle().clone());
             updates::spawn_checker(app.handle().clone());
+            let embed_dir = app
+                .state::<Hub>()
+                .tools_dir
+                .parent()
+                .map(|p| p.join("embed"));
+            if let Some(dir) = embed_dir {
+                tauri::async_runtime::spawn(async move { embed::cleanup_stale(&dir).await });
+            }
             Ok(())
         })
         .on_window_event(|window, event| {

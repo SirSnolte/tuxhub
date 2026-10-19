@@ -17,6 +17,10 @@
   /** War schon mal ein Fenster da? Dann heißt „kein Fenster“: wird beendet. */
   let wasReady = $state(false);
   let checkingEnd = false;
+  /** Zeitpunkte stiller Neuverbindungen – gegen Endlosschleifen. */
+  let retries: number[] = [];
+  /** Zu viele Abbrüche hintereinander: nicht mehr automatisch neu verbinden. */
+  let lost = $state(false);
 
   $effect(() => {
     running = url !== null;
@@ -54,6 +58,7 @@
   });
 
   function inspect() {
+    if (lost) return;
     try {
       const w = frame?.contentWindow;
       if (!w) return;
@@ -62,7 +67,10 @@
         handleDisconnect();
         return;
       }
-      const has = !!w.document.querySelector("#screen .window");
+      // App-Fenster sind <div>s mit rein numerischer Fenster-ID direkt in #screen
+      // (die Klasse „window“ überschreibt xpra später mit wmclass-Klassen).
+      const screen = w.document.getElementById("screen");
+      const has = !!screen && Array.from(screen.children).some((c) => c.tagName === "DIV" && /^\d+$/.test(c.id));
       ready = has;
       if (has) wasReady = true;
     } catch {
@@ -80,7 +88,14 @@
       clearInterval(watch);
       url = null;
     } else if (frame) {
-      frame.src = s.url;
+      const now = Date.now();
+      retries = retries.filter((t) => now - t < 20000);
+      if (retries.length >= 3) {
+        lost = true;
+      } else {
+        retries.push(now);
+        frame.src = s.url;
+      }
     }
     checkingEnd = false;
   }
@@ -107,6 +122,8 @@
   export function reconnect() {
     if (frame && url) {
       ready = false;
+      lost = false;
+      retries = [];
       frame.src = url;
     }
   }
@@ -154,8 +171,13 @@
           </div>
         </div>
         <div class="sk-label">
-          <span class="spin"></span>
-          {wasReady ? `${tool.entry.name} wird beendet …` : `${tool.entry.name} startet …`}
+          {#if lost}
+            Verbindung zu {tool.entry.name} verloren
+            <button class="small-btn" onclick={reconnect}>Neu verbinden</button>
+          {:else}
+            <span class="spin"></span>
+            {wasReady ? `${tool.entry.name} wird beendet …` : `${tool.entry.name} startet …`}
+          {/if}
         </div>
       </div>
     {/if}
@@ -286,6 +308,10 @@
     font-size: 13px;
     white-space: nowrap;
   }
+  .small-btn {
+    padding: 2px 10px;
+    font-size: 12px;
+  }
   .spin {
     width: 14px;
     height: 14px;
@@ -309,7 +335,11 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .sk,
-    .spin {
+    .small-btn {
+    padding: 2px 10px;
+    font-size: 12px;
+  }
+  .spin {
       animation: none;
     }
   }

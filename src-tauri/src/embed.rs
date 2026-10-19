@@ -23,6 +23,8 @@ const PORTALS_CONF: &str = "[preferred]\ndefault=gtk\n";
 struct Session {
     display: u32,
     port: u16,
+    /// Merkdatei mit der Display-Nummer – zum Aufräumen nach einem Absturz
+    marker: PathBuf,
     xpra: Child,
     watcher: Option<Child>,
 }
@@ -197,6 +199,9 @@ pub async fn start<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<EmbedInfo
         .arg(format!("--start-child={}", run_sh.display()))
         .args([
             "--exit-with-children=yes",
+            // Mehrere Clients erlauben – sonst wirft jeder neue den alten raus
+            // und zwei Ansichten verbinden sich gegenseitig endlos neu.
+            "--sharing=yes",
             "--dbus=yes",
             "--mdns=no",
             "--pulseaudio=no",
@@ -214,9 +219,12 @@ pub async fn start<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<EmbedInfo
         .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("xpra konnte nicht gestartet werden: {e}"))?;
+    let marker = dir.join("session");
+    let _ = std::fs::write(&marker, display.to_string());
     let mut session = Session {
         display,
         port,
+        marker,
         xpra,
         watcher: None,
     };
@@ -292,7 +300,43 @@ pub async fn stop_all<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Beim Hub-Start: Sitzungen beenden, die ein vorheriger Hub-Prozess
+/// hinterlassen hat (z. B. nach Absturz oder Neustart im Entwicklungsmodus).
+/// Betrifft nur Displays, die der Hub selbst in seinen Merkdateien notiert hat.
+pub async fn cleanup_stale(embed_dir: &Path) {
+    // Nur Sitzungen von vor diesem Hub-Start – nie eine, die gerade frisch startet.
+    let hub_start = std::time::SystemTime::now();
+    let Ok(rd) = std::fs::read_dir(embed_dir) else {
+        return;
+    };
+    for entry in rd.flatten() {
+        let marker = entry.path().join("session");
+        let older = std::fs::metadata(&marker)
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| t < hub_start);
+        if !older {
+            continue;
+        }
+        let Some(display) = std::fs::read_to_string(&marker)
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let _ = tokio::time::timeout(
+            Duration::from_secs(8),
+            Command::new("xpra")
+                .arg("stop")
+                .arg(format!(":{display}"))
+                .output(),
+        )
+        .await;
+        let _ = std::fs::remove_file(marker);
+    }
+}
+
 async fn shutdown(mut s: Session) {
+    let _ = std::fs::remove_file(&s.marker);
     // Sauber beenden lassen (räumt Display und Kinder auf), sonst hart.
     let _ = tokio::time::timeout(
         Duration::from_secs(5),
