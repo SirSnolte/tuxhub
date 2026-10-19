@@ -411,7 +411,7 @@ mod tests {
     #[test]
     fn display_and_port() {
         let d = free_display(&[110, 111]).unwrap();
-        assert!(d >= 110 && d != 110 && d != 111);
+        assert!(d > 111);
         assert!(free_port().unwrap() > 0);
     }
 }
