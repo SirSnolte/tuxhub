@@ -1,0 +1,91 @@
+[
+  {
+    "id": "protonup-qt",
+    "name": "ProtonUp-Qt",
+    "description": "Installiert und verwaltet Proton-GE, Wine-GE und andere Kompatibilitäts-Tools für Steam, Lutris und Heroic.",
+    "icon": "🧪",
+    "category": "Kompatibilität",
+    "repo": "DavidoTek/ProtonUp-Qt",
+    "homepage": "https://github.com/DavidoTek/ProtonUp-Qt",
+    "source": {
+      "type": "flatpak",
+      "flatpak_id": "net.davidotek.pupgui2"
+    }
+  },
+  {
+    "id": "protonplus",
+    "name": "ProtonPlus",
+    "description": "Moderner Manager für Proton-, Wine- und DXVK-Versionen.",
+    "icon": "➕",
+    "category": "Kompatibilität",
+    "repo": "Vysp3r/ProtonPlus",
+    "homepage": "https://github.com/Vysp3r/ProtonPlus",
+    "source": {
+      "type": "flatpak",
+      "flatpak_id": "com.vysp3r.ProtonPlus"
+    }
+  },
+  {
+    "id": "mangojuice",
+    "name": "MangoJuice",
+    "description": "Grafische Oberfläche zum Konfigurieren des MangoHud-Overlays (FPS, Temperaturen, Frametimes).",
+    "icon": "🥭",
+    "category": "Overlay",
+    "repo": "radiolamp/mangojuice",
+    "homepage": "https://github.com/radiolamp/mangojuice",
+    "source": {
+      "type": "flatpak",
+      "flatpak_id": "io.github.radiolamp.mangojuice"
+    }
+  },
+  {
+    "id": "heroic",
+    "name": "Heroic Games Launcher",
+    "description": "Launcher für Epic, GOG und Amazon Prime Gaming – direkt als AppImage von GitHub.",
+    "icon": "🛡️",
+    "category": "Launcher",
+    "repo": "Heroic-Games-Launcher/HeroicGamesLauncher",
+    "homepage": "https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher",
+    "source": {
+      "type": "github-release",
+      "asset": "*x86_64.AppImage"
+    }
+  },
+  {
+    "id": "lutris",
+    "name": "Lutris",
+    "description": "Spiele aus vielen Quellen installieren und starten – mit Install-Skripten der Community.",
+    "icon": "🦦",
+    "category": "Launcher",
+    "homepage": "https://lutris.net",
+    "source": {
+      "type": "flatpak",
+      "flatpak_id": "net.lutris.Lutris"
+    }
+  },
+  {
+    "id": "bottles",
+    "name": "Bottles",
+    "description": "Windows-Programme und -Spiele in isolierten Wine-Umgebungen ausführen.",
+    "icon": "🍾",
+    "category": "Kompatibilität",
+    "homepage": "https://usebottles.com",
+    "source": {
+      "type": "flatpak",
+      "flatpak_id": "com.usebottles.bottles"
+    }
+  },
+  {
+    "id": "piper",
+    "name": "Piper",
+    "description": "Gaming-Mäuse konfigurieren (DPI, Tasten, LEDs) über libratbag.",
+    "icon": "🐭",
+    "category": "Eingabe",
+    "repo": "libratbag/piper",
+    "homepage": "https://github.com/libratbag/piper",
+    "source": {
+      "type": "flatpak",
+      "flatpak_id": "org.freedesktop.Piper"
+    }
+  }
+]
