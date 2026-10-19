@@ -8,17 +8,17 @@
 //! `addon-event` im Frontend.
 
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 
 type Reply = Result<Value, String>;
 type Pending = Arc<std::sync::Mutex<HashMap<u64, oneshot::Sender<Reply>>>>;
@@ -112,11 +112,22 @@ impl Runtime {
             pending2.lock().unwrap().clear();
             let _ = app2.emit(
                 "addon-event",
-                AddonEvent { addon, method: "exited".into(), params: Value::Null },
+                AddonEvent {
+                    addon,
+                    method: "exited".into(),
+                    params: Value::Null,
+                },
             );
         });
 
-        procs.insert(id.to_string(), Proc { child, stdin, pending });
+        procs.insert(
+            id.to_string(),
+            Proc {
+                child,
+                stdin,
+                pending,
+            },
+        );
         Ok(true)
     }
 
@@ -154,7 +165,10 @@ impl Runtime {
             // Erst höflich fragen, dann hart beenden.
             let _ = p.stdin.write_all(b"{\"method\":\"shutdown\"}\n").await;
             let _ = p.stdin.flush().await;
-            if tokio::time::timeout(Duration::from_secs(2), p.child.wait()).await.is_err() {
+            if tokio::time::timeout(Duration::from_secs(2), p.child.wait())
+                .await
+                .is_err()
+            {
                 let _ = p.child.kill().await;
             }
         }

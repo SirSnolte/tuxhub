@@ -6,7 +6,7 @@
 //! - `files/`    – entpacktes Release (nur bei GitHub-Releases)
 
 use crate::github;
-use crate::manifest::{safe_relative, valid_id, Manifest};
+use crate::manifest::{Manifest, safe_relative, valid_id};
 use serde::{Deserialize, Serialize};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -91,7 +91,14 @@ struct Progress<'a> {
 }
 
 fn progress(app: &AppHandle, id: &str, text: impl Into<String>, fraction: Option<f64>) {
-    let _ = app.emit("tool-progress", Progress { id, text: text.into(), fraction });
+    let _ = app.emit(
+        "tool-progress",
+        Progress {
+            id,
+            text: text.into(),
+            fraction,
+        },
+    );
 }
 
 impl Installed {
@@ -130,7 +137,9 @@ impl Installed {
 }
 
 pub fn load_all(tools_dir: &Path) -> Vec<Installed> {
-    let Ok(rd) = std::fs::read_dir(tools_dir) else { return vec![] };
+    let Ok(rd) = std::fs::read_dir(tools_dir) else {
+        return vec![];
+    };
     let mut out: Vec<Installed> = rd
         .flatten()
         .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
@@ -146,7 +155,7 @@ pub fn load_all(tools_dir: &Path) -> Vec<Installed> {
             }
         })
         .collect();
-    out.sort_by(|a, b| a.entry.name.to_lowercase().cmp(&b.entry.name.to_lowercase()));
+    out.sort_by_key(|a| a.entry.name.to_lowercase());
     out
 }
 
@@ -160,8 +169,11 @@ pub fn load(tools_dir: &Path, id: &str) -> Result<Installed, String> {
 }
 
 fn write_record(dir: &Path, inst: &Installed) -> Result<(), String> {
-    std::fs::write(dir.join("tool.json"), serde_json::to_string_pretty(inst).unwrap())
-        .map_err(|e| e.to_string())
+    std::fs::write(
+        dir.join("tool.json"),
+        serde_json::to_string_pretty(inst).unwrap(),
+    )
+    .map_err(|e| e.to_string())
 }
 
 async fn run(cmd: &str, args: &[&str]) -> Result<(), String> {
@@ -177,7 +189,11 @@ async fn run(cmd: &str, args: &[&str]) -> Result<(), String> {
     }
 }
 
-pub async fn install(app: &AppHandle, tools_dir: &Path, entry: &Entry) -> Result<Installed, String> {
+pub async fn install(
+    app: &AppHandle,
+    tools_dir: &Path,
+    entry: &Entry,
+) -> Result<Installed, String> {
     entry.validate()?;
     match &entry.source {
         Source::GithubRelease { asset } => {
@@ -189,16 +205,42 @@ pub async fn install(app: &AppHandle, tools_dir: &Path, entry: &Entry) -> Result
                 progress(app, &entry.id, "Flathub einrichten …", None);
                 run(
                     "flatpak",
-                    &["remote-add", "--user", "--if-not-exists", "flathub",
-                      "https://dl.flathub.org/repo/flathub.flatpakrepo"],
+                    &[
+                        "remote-add",
+                        "--user",
+                        "--if-not-exists",
+                        "flathub",
+                        "https://dl.flathub.org/repo/flathub.flatpakrepo",
+                    ],
                 )
                 .await?;
             }
-            progress(app, &entry.id, format!("Installiere {flatpak_id} – das kann dauern …"), None);
-            run("flatpak", &["install", "--user", "-y", "--noninteractive", remote, flatpak_id]).await?;
+            progress(
+                app,
+                &entry.id,
+                format!("Installiere {flatpak_id} – das kann dauern …"),
+                None,
+            );
+            run(
+                "flatpak",
+                &[
+                    "install",
+                    "--user",
+                    "-y",
+                    "--noninteractive",
+                    remote,
+                    flatpak_id,
+                ],
+            )
+            .await?;
             let dir = tools_dir.join(&entry.id);
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            let inst = Installed { entry: entry.clone(), version: None, root: None, detected_run: None };
+            let inst = Installed {
+                entry: entry.clone(),
+                version: None,
+                root: None,
+                detected_run: None,
+            };
             write_record(&dir, &inst)?;
             Ok(inst)
         }
@@ -219,7 +261,9 @@ async fn install_github(
     let asset = rel
         .assets
         .iter()
-        .find(|a| github::glob_match(pattern, &a.name) && safe_relative(&a.name) && !a.name.contains('/'))
+        .find(|a| {
+            github::glob_match(pattern, &a.name) && safe_relative(&a.name) && !a.name.contains('/')
+        })
         .ok_or_else(|| format!("Kein Download in {} passt zu {pattern:?}", rel.tag_name))?
         .clone();
 
@@ -234,7 +278,12 @@ async fn install_github(
     let size = asset.size;
     github::download(repo, &asset, &download, |done| {
         let mb = done as f64 / 1_048_576.0;
-        progress(app, id, format!("Lade {} ({mb:.1} MB)", asset.name), (size > 0).then(|| done as f64 / size as f64));
+        progress(
+            app,
+            id,
+            format!("Lade {} ({mb:.1} MB)", asset.name),
+            (size > 0).then(|| done as f64 / size as f64),
+        );
     })
     .await?;
 
@@ -244,21 +293,43 @@ async fn install_github(
         .iter()
         .any(|ext| lower.ends_with(ext));
     if archive {
-        run("tar", &["-xf", &download.to_string_lossy(), "-C", &files.to_string_lossy()]).await?;
+        run(
+            "tar",
+            &[
+                "-xf",
+                &download.to_string_lossy(),
+                "-C",
+                &files.to_string_lossy(),
+            ],
+        )
+        .await?;
         std::fs::remove_file(&download).map_err(|e| e.to_string())?;
     } else if lower.ends_with(".zip") {
-        run("unzip", &["-q", &download.to_string_lossy(), "-d", &files.to_string_lossy()]).await?;
+        run(
+            "unzip",
+            &[
+                "-q",
+                &download.to_string_lossy(),
+                "-d",
+                &files.to_string_lossy(),
+            ],
+        )
+        .await?;
         std::fs::remove_file(&download).map_err(|e| e.to_string())?;
     } else {
         // Einzelne Datei (AppImage oder Binary)
         let target = files.join(&asset.name);
         std::fs::rename(&download, &target).map_err(|e| e.to_string())?;
-        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| e.to_string())?;
     }
 
     // Archive mit genau einem Oberordner: den als Wurzel nehmen.
     let mut root = "files".to_string();
-    let top: Vec<_> = std::fs::read_dir(&files).map_err(|e| e.to_string())?.flatten().collect();
+    let top: Vec<_> = std::fs::read_dir(&files)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .collect();
     if top.len() == 1 && top[0].path().is_dir() {
         root = format!("files/{}", top[0].file_name().to_string_lossy());
     }
@@ -270,7 +341,11 @@ async fn install_github(
         detected_run: None,
     };
     let root_dir = staging.join(inst.root.as_deref().unwrap());
-    let has_run = entry.manifest.as_ref().and_then(|m| m.run.as_ref()).is_some()
+    let has_run = entry
+        .manifest
+        .as_ref()
+        .and_then(|m| m.run.as_ref())
+        .is_some()
         || Manifest::load(&root_dir)?.and_then(|m| m.run).is_some();
     if !has_run {
         inst.detected_run = detect_executable(&root_dir);
@@ -296,11 +371,16 @@ fn detect_executable(dir: &Path) -> Option<String> {
         .flatten()
         .filter(|e| e.path().is_file())
         .map(|e| {
-            let exec = e.metadata().is_ok_and(|m| m.permissions().mode() & 0o111 != 0);
+            let exec = e
+                .metadata()
+                .is_ok_and(|m| m.permissions().mode() & 0o111 != 0);
             (e.file_name().to_string_lossy().into_owned(), exec)
         })
         .collect();
-    if let Some((name, _)) = files.iter().find(|(n, _)| n.to_lowercase().ends_with(".appimage")) {
+    if let Some((name, _)) = files
+        .iter()
+        .find(|(n, _)| n.to_lowercase().ends_with(".appimage"))
+    {
         return Some(name.clone());
     }
     let exec: Vec<_> = files.iter().filter(|(_, x)| *x).collect();
@@ -309,9 +389,13 @@ fn detect_executable(dir: &Path) -> Option<String> {
 
 /// Verknüpft einen lokalen Ordner mit `tuxhub.toml` als Tool (Entwicklermodus).
 pub fn link_local(tools_dir: &Path, path: &Path) -> Result<Installed, String> {
-    let path = path.canonicalize().map_err(|e| format!("{}: {e}", path.display()))?;
+    let path = path
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", path.display()))?;
     let m = Manifest::load(&path)?.ok_or("Im Ordner liegt keine tuxhub.toml")?;
-    let id = m.id.clone().ok_or("tuxhub.toml braucht für lokale Tools eine `id`")?;
+    let id =
+        m.id.clone()
+            .ok_or("tuxhub.toml braucht für lokale Tools eine `id`")?;
     let entry = Entry {
         name: m.name.clone().unwrap_or_else(|| id.clone()),
         description: m.description.clone().unwrap_or_default(),
@@ -319,24 +403,38 @@ pub fn link_local(tools_dir: &Path, path: &Path) -> Result<Installed, String> {
         category: Some("Lokal".into()),
         repo: None,
         homepage: None,
-        source: Source::Local { path: path.to_string_lossy().into_owned() },
+        source: Source::Local {
+            path: path.to_string_lossy().into_owned(),
+        },
         manifest: None,
         id,
     };
     entry.validate()?;
     let dir = tools_dir.join(&entry.id);
     if dir.join("tool.json").exists() {
-        return Err(format!("Ein Tool mit der ID {:?} ist schon installiert", entry.id));
+        return Err(format!(
+            "Ein Tool mit der ID {:?} ist schon installiert",
+            entry.id
+        ));
     }
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let inst = Installed { version: m.version.clone(), entry, root: None, detected_run: None };
+    let inst = Installed {
+        version: m.version.clone(),
+        entry,
+        root: None,
+        detected_run: None,
+    };
     write_record(&dir, &inst)?;
     Ok(inst)
 }
 
 pub async fn uninstall(tools_dir: &Path, inst: &Installed) -> Result<(), String> {
     if let Source::Flatpak { flatpak_id, .. } = &inst.entry.source {
-        run("flatpak", &["uninstall", "-y", "--noninteractive", flatpak_id]).await?;
+        run(
+            "flatpak",
+            &["uninstall", "-y", "--noninteractive", flatpak_id],
+        )
+        .await?;
     }
     // Bei lokalen Tools wird nur die Verknüpfung entfernt, nie der Ordner selbst.
     std::fs::remove_dir_all(tools_dir.join(inst.id())).map_err(|e| e.to_string())

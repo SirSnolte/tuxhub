@@ -5,9 +5,9 @@
 //! `tuxhub.toml` wird als `<tool>::<aktion>` registriert. Die endgültige
 //! Taste legt der Desktop fest (der Nutzer kann sie dort ändern).
 
-use crate::{tools, Hub};
-use ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut};
+use crate::{Hub, tools};
 use ashpd::desktop::Session;
+use ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut};
 use futures_util::StreamExt;
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -38,12 +38,74 @@ fn set_status(app: &AppHandle, status: Status) {
     let _ = app.emit("shortcuts-changed", status);
 }
 
+const APP_ID: &str = "dev.tuxhub.app";
+
+/// Meldet den Hub beim Portal unter seiner App-ID an. Das Portal verlangt
+/// dafür eine passende `.desktop`-Datei; fehlt sie, legt der Hub eine für den
+/// aktuellen Nutzer an. Nur einmal pro Prozess möglich.
+async fn register_app_id() {
+    static DONE: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+    DONE.get_or_init(|| async {
+        if let Err(e) = ensure_desktop_file() {
+            eprintln!("Hotkeys: .desktop-Datei konnte nicht angelegt werden: {e}");
+        }
+        match APP_ID.try_into() {
+            Ok(app_id) => {
+                if let Err(e) = ashpd::register_host_app(app_id).await {
+                    eprintln!("Hotkeys: App-ID-Registrierung fehlgeschlagen: {e}");
+                }
+            }
+            Err(e) => eprintln!("Hotkeys: ungültige App-ID: {e}"),
+        }
+    })
+    .await;
+}
+
+fn ensure_desktop_file() -> std::io::Result<()> {
+    let name = format!("{APP_ID}.desktop");
+    let data_dirs =
+        std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
+    if std::env::split_paths(&data_dirs).any(|d| d.join("applications").join(&name).is_file()) {
+        return Ok(());
+    }
+    let home = std::env::var_os("HOME").ok_or(std::io::ErrorKind::NotFound)?;
+    let dir = std::env::var_os("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::Path::new(&home).join(".local/share"))
+        .join("applications");
+    std::fs::create_dir_all(&dir)?;
+    let exe = std::env::current_exe()?;
+    // Im Entwicklungsmodus nicht im Startmenü anzeigen.
+    let hidden = if cfg!(debug_assertions) {
+        "NoDisplay=true\n"
+    } else {
+        ""
+    };
+    let content = format!(
+        "[Desktop Entry]\nType=Application\nName=tuxhub\nComment=Modularer Hub für Linux-Gaming\n\
+         Exec=\"{}\"\nIcon=applications-games\nCategories=Game;Utility;\n{hidden}",
+        exe.display()
+    );
+    let path = dir.join(&name);
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(content.as_str()) {
+        std::fs::write(path, content)?;
+    }
+    Ok(())
+}
+
 /// (Neu) registriert alle Hotkeys der installierten Tools.
 pub fn rebind(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         if let Err(e) = bind(&app).await {
             eprintln!("Hotkeys: {e}");
-            set_status(&app, Status { available: false, message: e, bindings: vec![] });
+            set_status(
+                &app,
+                Status {
+                    available: false,
+                    message: e,
+                    bindings: vec![],
+                },
+            );
         }
     });
 }
@@ -69,24 +131,29 @@ async fn bind(app: &AppHandle) -> Result<(), String> {
         }
     }
     if wanted.is_empty() {
-        set_status(app, Status {
-            available: true,
-            message: "Keine installierten Tools mit Hotkeys.".into(),
-            bindings: vec![],
-        });
+        set_status(
+            app,
+            Status {
+                available: true,
+                message: "Keine installierten Tools mit Hotkeys.".into(),
+                bindings: vec![],
+            },
+        );
         return Ok(());
     }
 
-    // Ältere Portale kennen die Registry nicht – dann geht es trotzdem weiter.
-    if let Ok(app_id) = "dev.tuxhub.app".try_into() {
-        let _ = ashpd::register_host_app(app_id).await;
-    }
+    register_app_id().await;
     let portal_err = |e: ashpd::Error| format!("Hotkey-Portal nicht verfügbar: {e}");
     let gs = GlobalShortcuts::new().await.map_err(portal_err)?;
-    let session = gs.create_session(Default::default()).await.map_err(portal_err)?;
+    let session = gs
+        .create_session(Default::default())
+        .await
+        .map_err(portal_err)?;
     let shortcuts: Vec<NewShortcut> = wanted
         .iter()
-        .map(|(id, desc, trigger)| NewShortcut::new(id.as_str(), desc.as_str()).preferred_trigger(trigger.as_str()))
+        .map(|(id, desc, trigger)| {
+            NewShortcut::new(id.as_str(), desc.as_str()).preferred_trigger(trigger.as_str())
+        })
         .collect();
     let bound = gs
         .bind_shortcuts(&session, &shortcuts, None, Default::default())
@@ -108,7 +175,14 @@ async fn bind(app: &AppHandle) -> Result<(), String> {
             })
         })
         .collect();
-    set_status(app, Status { available: true, message: String::new(), bindings });
+    set_status(
+        app,
+        Status {
+            available: true,
+            message: String::new(),
+            bindings,
+        },
+    );
 
     let mut activated = gs.receive_activated().await.map_err(portal_err)?;
     *slot = Some(session);
@@ -120,7 +194,9 @@ async fn bind(app: &AppHandle) -> Result<(), String> {
             if GENERATION.load(Ordering::SeqCst) != generation {
                 break;
             }
-            let Some((tool, action)) = ev.shortcut_id().split_once("::") else { continue };
+            let Some((tool, action)) = ev.shortcut_id().split_once("::") else {
+                continue;
+            };
             if let Err(e) = crate::run_action(&app, tool, action).await {
                 let _ = app.emit("toast", format!("{tool}: {e}"));
             }

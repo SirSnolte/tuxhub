@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <title>Demo-Tool</title>
+    <script src="/__tuxhub/bridge.js"></script>
+    <style>
+      :root { color-scheme: light dark; font: 14px/1.5 system-ui, sans-serif; }
+      body { margin: 0; padding: 20px; background: transparent; }
+      .big { font-size: 48px; font-weight: 700; }
+      button { font: inherit; padding: 6px 14px; border-radius: 8px; }
+      input { font: inherit; padding: 5px 8px; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <h2>Eigene Oberfläche aus dem Tool-Ordner</h2>
+    <p>Diese Seite liegt in <code>ui/index.html</code> und spricht über die Bridge mit <code>demo.py</code>.</p>
+    <div class="big" id="count">–</div>
+    <p id="text"></p>
+    <p>
+      <button id="btn">Zählen</button>
+      <input id="greeting" placeholder="Begrüßung" />
+      <button id="save">Speichern</button>
+    </p>
+    <p id="echo"></p>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      tuxhub.on("status", (s) => {
+        $("count").textContent = s.count ?? "–";
+        $("text").textContent = s.text ?? "";
+      });
+      $("btn").onclick = () => tuxhub.action("count").catch((e) => alert(e.message));
+      $("save").onclick = () => tuxhub.saveSettings({ greeting: $("greeting").value });
+      tuxhub.getSettings().then((s) => ($("greeting").value = s.greeting));
+      tuxhub.call("echo", { ping: "pong" }).then((r) => ($("echo").textContent = "Echo vom Prozess: " + JSON.stringify(r)));
+    </script>
+  </body>
+</html>

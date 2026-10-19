@@ -106,13 +106,16 @@ impl Manifest {
     pub fn validate(&self) -> Result<(), String> {
         for cmd in [&self.run, &self.rpc].into_iter().flatten() {
             if !safe_relative(&cmd.command) {
-                return Err(format!("Befehl {:?} muss relativ zum Tool-Ordner sein", cmd.command));
+                return Err(format!(
+                    "Befehl {:?} muss relativ zum Tool-Ordner sein",
+                    cmd.command
+                ));
             }
         }
-        if let Some(ui) = &self.ui {
-            if !safe_relative(ui) {
-                return Err(format!("ui {ui:?} muss relativ zum Tool-Ordner sein"));
-            }
+        if let Some(ui) = &self.ui
+            && !safe_relative(ui)
+        {
+            return Err(format!("ui {ui:?} muss relativ zum Tool-Ordner sein"));
         }
         Ok(())
     }

@@ -6,9 +6,9 @@ mod tools;
 
 use manifest::Manifest;
 use serde::Serialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
-use tauri::http::{header, Response, StatusCode};
+use tauri::http::{Response, StatusCode, header};
 use tauri::{AppHandle, Manager};
 use tools::{Entry, Installed, Source};
 
@@ -35,12 +35,12 @@ impl Hub {
     /// Defaults aus dem Manifest, überschrieben mit den gespeicherten Werten.
     fn settings(&self, id: &str, m: &Manifest) -> Map<String, Value> {
         let mut values = m.default_settings();
-        if let Ok(s) = std::fs::read_to_string(self.settings_path(id)) {
-            if let Ok(Value::Object(saved)) = serde_json::from_str(&s) {
-                for (k, v) in saved {
-                    if values.contains_key(&k) {
-                        values.insert(k, v);
-                    }
+        if let Ok(s) = std::fs::read_to_string(self.settings_path(id))
+            && let Ok(Value::Object(saved)) = serde_json::from_str(&s)
+        {
+            for (k, v) in saved {
+                if values.contains_key(&k) {
+                    values.insert(k, v);
                 }
             }
         }
@@ -55,7 +55,8 @@ impl Hub {
 }
 
 fn parse_workshop(s: &str) -> Result<Vec<Entry>, String> {
-    let entries: Vec<Entry> = serde_json::from_str(s).map_err(|e| format!("Workshop-Index ungültig: {e}"))?;
+    let entries: Vec<Entry> =
+        serde_json::from_str(s).map_err(|e| format!("Workshop-Index ungültig: {e}"))?;
     Ok(entries
         .into_iter()
         .filter(|e| match e.validate() {
@@ -70,12 +71,11 @@ fn parse_workshop(s: &str) -> Result<Vec<Entry>, String> {
 
 /// Lädt den Workshop-Index aus dem Hub-Repo, sonst den mitgelieferten.
 async fn workshop_entries() -> (Vec<Entry>, bool) {
-    if !cfg!(debug_assertions) {
-        if let Ok(s) = github::raw_file(WORKSHOP_REPO, WORKSHOP_PATH).await {
-            if let Ok(entries) = parse_workshop(&s) {
-                return (entries, true);
-            }
-        }
+    if !cfg!(debug_assertions)
+        && let Ok(s) = github::raw_file(WORKSHOP_REPO, WORKSHOP_PATH).await
+        && let Ok(entries) = parse_workshop(&s)
+    {
+        return (entries, true);
     }
     (parse_workshop(WORKSHOP_BUNDLED).unwrap_or_default(), false)
 }
@@ -85,7 +85,10 @@ async fn workshop_entries() -> (Vec<Entry>, bool) {
 async fn ensure_rpc(app: &AppHandle, id: &str) -> Result<(), String> {
     let hub = app.state::<Hub>();
     let (inst, m) = hub.load(id)?;
-    let rpc = m.rpc.clone().ok_or("Dieses Tool hat keinen Hintergrundprozess (`rpc`)")?;
+    let rpc = m
+        .rpc
+        .clone()
+        .ok_or("Dieses Tool hat keinen Hintergrundprozess (`rpc`)")?;
     let root = inst.root_dir(&hub.tools_dir).ok_or("Kein Tool-Ordner")?;
     let exe = root.join(&rpc.command);
     if !exe.is_file() {
@@ -108,7 +111,10 @@ pub(crate) async fn run_action(app: &AppHandle, id: &str, action: &str) -> Resul
         }
     }
     ensure_rpc(app, id).await?;
-    app.state::<Hub>().runtime.call(id, "action", json!({ "id": action })).await
+    app.state::<Hub>()
+        .runtime
+        .call(id, "action", json!({ "id": action }))
+        .await
 }
 
 // ---------------------------------------------------------------- Workshop
@@ -136,7 +142,10 @@ async fn workshop_list(app: AppHandle) -> WorkshopView {
     WorkshopView {
         entries: entries
             .into_iter()
-            .map(|entry| WorkshopItem { installed: installed.contains(&entry.id), entry })
+            .map(|entry| WorkshopItem {
+                installed: installed.contains(&entry.id),
+                entry,
+            })
             .collect(),
         live,
     }
@@ -188,7 +197,9 @@ async fn tool_list(app: AppHandle) -> Vec<ToolView> {
             can_launch: manifest.run.is_some()
                 || inst.detected_run.is_some()
                 || matches!(inst.entry.source, Source::Flatpak { .. }),
-            path: inst.root_dir(&hub.tools_dir).map(|p| p.to_string_lossy().into_owned()),
+            path: inst
+                .root_dir(&hub.tools_dir)
+                .map(|p| p.to_string_lossy().into_owned()),
             version: inst.version.clone().or_else(|| manifest.version.clone()),
             entry: inst.entry,
             manifest,
@@ -236,7 +247,11 @@ fn get_settings(app: AppHandle, id: String) -> Result<Map<String, Value>, String
 }
 
 #[tauri::command]
-async fn save_settings(app: AppHandle, id: String, values: Map<String, Value>) -> Result<(), String> {
+async fn save_settings(
+    app: AppHandle,
+    id: String,
+    values: Map<String, Value>,
+) -> Result<(), String> {
     let hub = app.state::<Hub>();
     let (_, m) = hub.load(&id)?;
     let mut merged = hub.settings(&id, &m);
@@ -245,10 +260,15 @@ async fn save_settings(app: AppHandle, id: String, values: Map<String, Value>) -
             merged.insert(k, v);
         }
     }
-    std::fs::write(hub.settings_path(&id), serde_json::to_string_pretty(&merged).unwrap())
-        .map_err(|e| e.to_string())?;
+    std::fs::write(
+        hub.settings_path(&id),
+        serde_json::to_string_pretty(&merged).unwrap(),
+    )
+    .map_err(|e| e.to_string())?;
     if hub.runtime.is_running(&id).await {
-        hub.runtime.call(&id, "configure", Value::Object(merged)).await?;
+        hub.runtime
+            .call(&id, "configure", Value::Object(merged))
+            .await?;
     }
     Ok(())
 }
@@ -260,7 +280,12 @@ async fn tool_action(app: AppHandle, id: String, action: String) -> Result<Value
 
 /// Freier RPC-Aufruf – für eigene Tool-Oberflächen über die JS-Bridge.
 #[tauri::command]
-async fn tool_call(app: AppHandle, id: String, method: String, params: Value) -> Result<Value, String> {
+async fn tool_call(
+    app: AppHandle,
+    id: String,
+    method: String,
+    params: Value,
+) -> Result<Value, String> {
     ensure_rpc(&app, &id).await?;
     app.state::<Hub>().runtime.call(&id, &method, params).await
 }
@@ -287,19 +312,36 @@ fn serve_tool(app: &AppHandle, uri: &tauri::http::Uri) -> Response<Vec<u8>> {
             .body(body)
             .unwrap()
     };
-    let not_found = || reply(StatusCode::NOT_FOUND, "text/plain", b"nicht gefunden".to_vec());
+    let not_found = || {
+        reply(
+            StatusCode::NOT_FOUND,
+            "text/plain",
+            b"nicht gefunden".to_vec(),
+        )
+    };
 
     let id = uri.host().unwrap_or_default();
     let path = percent_decode(uri.path().trim_start_matches('/'));
     if path == "__tuxhub/bridge.js" {
-        return reply(StatusCode::OK, "text/javascript", BRIDGE_JS.as_bytes().to_vec());
+        return reply(
+            StatusCode::OK,
+            "text/javascript",
+            BRIDGE_JS.as_bytes().to_vec(),
+        );
     }
     let hub = app.state::<Hub>();
-    let Ok(inst) = tools::load(&hub.tools_dir, id) else { return not_found() };
-    let Some(root) = inst.root_dir(&hub.tools_dir).and_then(|r| r.canonicalize().ok()) else {
+    let Ok(inst) = tools::load(&hub.tools_dir, id) else {
         return not_found();
     };
-    let Ok(file) = root.join(&path).canonicalize() else { return not_found() };
+    let Some(root) = inst
+        .root_dir(&hub.tools_dir)
+        .and_then(|r| r.canonicalize().ok())
+    else {
+        return not_found();
+    };
+    let Ok(file) = root.join(&path).canonicalize() else {
+        return not_found();
+    };
     // Nichts außerhalb des Tool-Ordners ausliefern.
     if !file.starts_with(&root) || !file.is_file() {
         return not_found();
@@ -311,7 +353,13 @@ fn serve_tool(app: &AppHandle, uri: &tauri::http::Uri) -> Response<Vec<u8>> {
 }
 
 fn mime_for(p: &Path) -> &'static str {
-    match p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase().as_str() {
+    match p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase()
+        .as_str()
+    {
         "html" | "htm" => "text/html; charset=utf-8",
         "js" | "mjs" => "text/javascript",
         "css" => "text/css",
@@ -336,15 +384,15 @@ fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Some(b) = std::str::from_utf8(&bytes[i + 1..i + 3])
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Some(b) = std::str::from_utf8(&bytes[i + 1..i + 3])
                 .ok()
                 .and_then(|h| u8::from_str_radix(h, 16).ok())
-            {
-                out.push(b);
-                i += 3;
-                continue;
-            }
+        {
+            out.push(b);
+            i += 3;
+            continue;
         }
         out.push(bytes[i]);
         i += 1;
