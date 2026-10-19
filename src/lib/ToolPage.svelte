@@ -203,9 +203,6 @@
     </section>
   {/if}
 
-  {#if tool.path}
-    <p class="muted path">Ordner: <code>{tool.path}</code></p>
-  {/if}
 </div>
 
 <style>
@@ -280,10 +277,5 @@
     min-height: 480px;
     width: 100%;
     padding: 0;
-  }
-  .path {
-    font-size: 12px;
-    margin: 0;
-    word-break: break-all;
   }
 </style>

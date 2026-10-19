@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
+  import { fade } from "svelte/transition";
   import { api, errText, type Tool } from "./api";
   import { toast } from "./state.svelte";
 
@@ -17,6 +18,13 @@
   /** War schon mal ein Fenster da? Dann heißt „kein Fenster“: wird beendet. */
   let wasReady = $state(false);
   let checkingEnd = false;
+  /** Seit wann sieht das Fenster fertig aus? Erst nach STABLE_MS wird es gezeigt. */
+  let readySince: number | null = null;
+  const STABLE_MS = 600;
+  /** Seit wann gibt es überhaupt ein Fenster? Nach FALLBACK_MS wird es auf jeden Fall gezeigt
+   *  (für Apps, die sich nicht maximieren lassen). */
+  let winSince: number | null = null;
+  const FALLBACK_MS = 3000;
   /** Zeitpunkte stiller Neuverbindungen – gegen Endlosschleifen. */
   let retries: number[] = [];
   /** Zu viele Abbrüche hintereinander: nicht mehr automatisch neu verbinden. */
@@ -37,6 +45,8 @@
     url = u;
     ready = false;
     wasReady = false;
+    readySince = null;
+    winSince = null;
     clearInterval(watch);
     // Der xpra-Client kommt von derselben Herkunft wie der Hub, deshalb können
     // wir in den iframe schauen: Fenster da? Oder auf die Verbindungsseite gesprungen?
@@ -70,9 +80,38 @@
       // App-Fenster sind <div>s mit rein numerischer Fenster-ID direkt in #screen
       // (die Klasse „window“ überschreibt xpra später mit wmclass-Klassen).
       const screen = w.document.getElementById("screen");
-      const has = !!screen && Array.from(screen.children).some((c) => c.tagName === "DIV" && /^\d+$/.test(c.id));
-      ready = has;
-      if (has) wasReady = true;
+      const win = screen
+        ? (Array.from(screen.children).find((c) => c.tagName === "DIV" && /^\d+$/.test(c.id)) as HTMLElement | undefined)
+        : undefined;
+      // Fertig = Fenster da, maximiert (füllt die Fläche) und Inhalt gezeichnet.
+      const canvas = win?.querySelector("canvas");
+      const filled =
+        !!win &&
+        !!screen &&
+        win.offsetWidth >= screen.clientWidth - 24 &&
+        win.offsetHeight >= screen.clientHeight - 24 &&
+        !!canvas &&
+        canvas.width > 0;
+      if (!win) {
+        winSince = null;
+        readySince = null;
+        ready = false;
+        return;
+      }
+      winSince ??= Date.now();
+      if (!filled) {
+        readySince = null;
+        if (Date.now() - winSince >= FALLBACK_MS) {
+          ready = true;
+          wasReady = true;
+        }
+        return;
+      }
+      readySince ??= Date.now();
+      if (Date.now() - readySince >= STABLE_MS) {
+        ready = true;
+        wasReady = true;
+      }
     } catch {
       ready = false;
     }
@@ -122,6 +161,8 @@
   export function reconnect() {
     if (frame && url) {
       ready = false;
+      readySince = null;
+      winSince = null;
       lost = false;
       retries = [];
       frame.src = url;
@@ -150,7 +191,7 @@
       ></iframe>
     {/if}
     {#if !ready}
-      <div class="skeleton" aria-busy="true" aria-label={wasReady ? "Wird beendet" : "App startet"}>
+      <div class="skeleton" out:fade={{ duration: 250 }} aria-busy="true" aria-label={wasReady ? "Wird beendet" : "App startet"}>
         <div class="sk-side">
           <span class="sk sk-logo"></span>
           <span class="sk sk-dot"></span>
