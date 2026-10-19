@@ -47,6 +47,18 @@ impl Hub {
         values
     }
 
+    fn dyn_shortcuts_path(&self, id: &str) -> PathBuf {
+        self.settings_dir.join(format!("{id}.shortcuts.json"))
+    }
+
+    /// Hotkeys, die ein Tool zur Laufzeit gemeldet hat (z. B. eines pro Makro).
+    pub(crate) fn dyn_shortcuts(&self, id: &str) -> Vec<DynShortcut> {
+        std::fs::read_to_string(self.dyn_shortcuts_path(id))
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
     fn load(&self, id: &str) -> Result<(Installed, Manifest), String> {
         let inst = tools::load(&self.tools_dir, id)?;
         let m = inst.manifest(&self.tools_dir);
@@ -102,11 +114,49 @@ async fn ensure_rpc(app: &AppHandle, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Clone, Serialize, serde::Deserialize, PartialEq)]
+pub(crate) struct DynShortcut {
+    pub id: String,
+    pub label: String,
+    pub shortcut: String,
+}
+
+/// Ein Tool meldet per `{"method":"shortcuts","params":[{id,label,shortcut}]}`
+/// seine aktuellen Laufzeit-Hotkeys. Bei Änderungen wird neu gebunden.
+pub(crate) fn tool_shortcuts_changed(app: &AppHandle, id: &str, params: &Value) {
+    let Ok(list) = serde_json::from_value::<Vec<DynShortcut>>(params.clone()) else {
+        eprintln!("{id}: ungültige shortcuts-Meldung");
+        return;
+    };
+    let list: Vec<DynShortcut> = list
+        .into_iter()
+        .filter(|s| !s.id.is_empty() && !s.id.contains("::") && !s.shortcut.trim().is_empty())
+        .take(64)
+        .collect();
+    let hub = app.state::<Hub>();
+    if hub.dyn_shortcuts(id) == list {
+        return;
+    }
+    let path = hub.dyn_shortcuts_path(id);
+    let res = if list.is_empty() {
+        std::fs::remove_file(&path).or(Ok(()))
+    } else {
+        std::fs::write(&path, serde_json::to_string_pretty(&list).unwrap())
+    };
+    if let Err(e) = res {
+        eprintln!("{id}: Hotkeys nicht gespeichert: {e}");
+        return;
+    }
+    shortcuts::rebind(app.clone());
+}
+
 pub(crate) async fn run_action(app: &AppHandle, id: &str, action: &str) -> Result<Value, String> {
     {
         let hub = app.state::<Hub>();
         let (_, m) = hub.load(id)?;
-        if !m.actions.iter().any(|a| a.id == action) {
+        if !m.actions.iter().any(|a| a.id == action)
+            && !hub.dyn_shortcuts(id).iter().any(|s| s.id == action)
+        {
             return Err(format!("{id} kennt die Aktion {action:?} nicht"));
         }
     }
@@ -221,6 +271,7 @@ async fn tool_uninstall(app: AppHandle, id: String) -> Result<(), String> {
     hub.runtime.stop(&id).await;
     tools::uninstall(&hub.tools_dir, &inst).await?;
     let _ = std::fs::remove_file(hub.settings_path(&id));
+    let _ = std::fs::remove_file(hub.dyn_shortcuts_path(&id));
     shortcuts::rebind(app.clone());
     Ok(())
 }

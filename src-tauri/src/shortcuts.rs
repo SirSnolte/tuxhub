@@ -133,6 +133,10 @@ async fn bind(app: &AppHandle) -> Result<(), String> {
                     wanted.push((format!("{}::{}", inst.entry.id, a.id), desc, trigger));
                 }
             }
+            for d in hub.dyn_shortcuts(&inst.entry.id) {
+                let desc = format!("{}: {}", inst.entry.name, d.label);
+                wanted.push((format!("{}::{}", inst.entry.id, d.id), desc, d.shortcut));
+            }
         }
     }
     if wanted.is_empty() {

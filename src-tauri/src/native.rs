@@ -98,6 +98,13 @@ impl Runtime {
                         let _ = tx.send(reply);
                     }
                 } else if let Some(method) = msg.get("method").and_then(Value::as_str) {
+                    if method == "shortcuts" {
+                        crate::tool_shortcuts_changed(
+                            &app2,
+                            &addon,
+                            msg.get("params").unwrap_or(&Value::Null),
+                        );
+                    }
                     let _ = app2.emit(
                         "addon-event",
                         AddonEvent {
