@@ -68,22 +68,6 @@ pub fn missing() -> Option<String> {
     None
 }
 
-fn html5_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
-    let dir = if cfg!(debug_assertions) {
-        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/resources/xpra-html5"))
-    } else {
-        app.path()
-            .resource_dir()
-            .map_err(|e| e.to_string())?
-            .join("resources/xpra-html5")
-    };
-    if dir.join("index.html").is_file() {
-        Ok(dir)
-    } else {
-        Err(format!("xpra-Web-Client fehlt in {}", dir.display()))
-    }
-}
-
 fn free_display(taken: &[u32]) -> Option<u32> {
     (110..400).find(|n| {
         !taken.contains(n)
@@ -155,8 +139,13 @@ fn run_script(lc: &tools::LaunchCmd, portal_conf_dir: &Path) -> String {
     s
 }
 
+/// Der xpra-Web-Client liegt bei den Hub-Dateien (`static/xpra`) und wird
+/// damit von derselben Herkunft wie der Hub geladen. Als fremder iframe darf er
+/// in WebKitGTK kein sessionStorage nutzen und startet gar nicht erst.
 fn url(port: u16) -> String {
-    format!("http://127.0.0.1:{port}/?floating_menu=false&sound=false")
+    format!(
+        "/xpra/index.html?server=127.0.0.1&port={port}&ssl=false&floating_menu=false&sound=false"
+    )
 }
 
 pub async fn start<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<EmbedInfo, String> {
@@ -196,7 +185,6 @@ pub async fn start<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<EmbedInfo
     let taken: Vec<u32> = sessions.values().map(|s| s.display).collect();
     let display = free_display(&taken).ok_or("Kein freies X-Display gefunden")?;
     let port = free_port()?;
-    let html5 = html5_dir(app)?;
     let log = std::fs::File::create(dir.join("xpra.log")).map_err(|e| e.to_string())?;
     let log2 = log.try_clone().map_err(|e| e.to_string())?;
 
@@ -205,7 +193,7 @@ pub async fn start<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<EmbedInfo
         .arg(format!(":{display}"))
         .arg("--daemon=no")
         .arg(format!("--bind-tcp=127.0.0.1:{port}"))
-        .arg(format!("--html={}", html5.display()))
+        .arg("--html=off")
         .arg(format!("--start-child={}", run_sh.display()))
         .args([
             "--exit-with-children=yes",
@@ -393,10 +381,25 @@ mod tests {
             .await
             .expect("Sitzung startet");
         println!("URL: {}", info.url);
-        let body = reqwest::get(&info.url).await.unwrap().text().await.unwrap();
         assert!(
-            body.to_lowercase().contains("xpra"),
-            "Web-Client wird ausgeliefert"
+            info.url
+                .starts_with("/xpra/index.html?server=127.0.0.1&port=")
+        );
+        let port: u16 = info
+            .url
+            .split("port=")
+            .nth(1)
+            .unwrap()
+            .split('&')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(
+            tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .is_ok(),
+            "Sitzung erreichbar"
         );
         assert!(status(app.handle(), "gif-color-changer").await.is_some());
         if std::env::var("TUXHUB_KEEP").is_ok() {
