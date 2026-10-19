@@ -10,7 +10,7 @@ use crate::manifest::{Manifest, safe_relative, valid_id};
 use serde::{Deserialize, Serialize};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Runtime};
 use tokio::process::Command;
 
 /// Ein Eintrag im Workshop (`registry/index.json`).
@@ -90,7 +90,12 @@ struct Progress<'a> {
     fraction: Option<f64>,
 }
 
-fn progress(app: &AppHandle, id: &str, text: impl Into<String>, fraction: Option<f64>) {
+fn progress<R: Runtime>(
+    app: &AppHandle<R>,
+    id: &str,
+    text: impl Into<String>,
+    fraction: Option<f64>,
+) {
     let _ = app.emit(
         "tool-progress",
         Progress {
@@ -189,8 +194,8 @@ async fn run(cmd: &str, args: &[&str]) -> Result<(), String> {
     }
 }
 
-pub async fn install(
-    app: &AppHandle,
+pub async fn install<R: Runtime>(
+    app: &AppHandle<R>,
     tools_dir: &Path,
     entry: &Entry,
 ) -> Result<Installed, String> {
@@ -248,8 +253,8 @@ pub async fn install(
     }
 }
 
-async fn install_github(
-    app: &AppHandle,
+async fn install_github<R: Runtime>(
+    app: &AppHandle<R>,
     tools_dir: &Path,
     entry: &Entry,
     repo: &str,
@@ -341,13 +346,10 @@ async fn install_github(
         detected_run: None,
     };
     let root_dir = staging.join(inst.root.as_deref().unwrap());
-    let has_run = entry
-        .manifest
-        .as_ref()
-        .and_then(|m| m.run.as_ref())
-        .is_some()
-        || Manifest::load(&root_dir)?.and_then(|m| m.run).is_some();
-    if !has_run {
+    // Nur raten, wenn es gar kein Manifest gibt (Stufe 0). Ein Manifest ohne
+    // `run` heißt: Das Tool wird ausschließlich über den Hub bedient.
+    let has_manifest = entry.manifest.is_some() || Manifest::load(&root_dir)?.is_some();
+    if !has_manifest {
         inst.detected_run = detect_executable(&root_dir);
     }
     write_record(&staging, &inst)?;
@@ -487,6 +489,35 @@ pub async fn check_update(inst: &Installed) -> Result<Option<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Lädt das Autoclicker-Release wirklich von GitHub (Netzwerk + Zugriff
+    /// auf das Repo nötig): `cargo test -- --ignored`
+    #[tokio::test]
+    #[ignore]
+    async fn installs_autoclicker_release() {
+        let entries: Vec<Entry> =
+            serde_json::from_str(include_str!("../../registry/index.json")).unwrap();
+        let entry = entries.into_iter().find(|e| e.id == "autoclicker").unwrap();
+        let app = tauri::test::mock_app();
+        let tmp = std::env::temp_dir().join(format!("tuxhub-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let inst = install(app.handle(), &tmp, &entry).await.unwrap();
+        assert!(inst.version.as_deref().unwrap().starts_with('v'));
+        assert_eq!(
+            inst.detected_run, None,
+            "Hub-Tool ohne [run] darf keinen Startbefehl raten"
+        );
+        let m = inst.manifest(&tmp);
+        assert_eq!(m.level(), 2);
+        let root = inst.root_dir(&tmp).unwrap();
+        assert!(root.join(&m.rpc.unwrap().command).is_file());
+        // Erneut installieren = Update-Pfad
+        install(app.handle(), &tmp, &entry).await.unwrap();
+        assert_eq!(load_all(&tmp).len(), 1);
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
 
     #[test]
     fn workshop_index_parses() {
