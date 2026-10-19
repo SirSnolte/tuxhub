@@ -296,6 +296,11 @@ async fn tool_stop(app: AppHandle, id: String) {
 }
 
 #[tauri::command]
+async fn shortcuts_configure() -> Result<(), String> {
+    shortcuts::configure().await
+}
+
+#[tauri::command]
 fn shortcut_status(app: AppHandle) -> shortcuts::Status {
     app.state::<Hub>().shortcuts.lock().unwrap().clone()
 }
@@ -434,6 +439,7 @@ pub fn run() {
             tool_call,
             tool_stop,
             shortcut_status,
+            shortcuts_configure,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

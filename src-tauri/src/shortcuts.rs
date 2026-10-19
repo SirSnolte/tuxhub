@@ -31,7 +31,12 @@ pub struct Binding {
 
 /// Generation der aktuellen Bindung; alte Listener beenden sich daran.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
-static SESSION: Mutex<Option<Session<GlobalShortcuts>>> = Mutex::const_new(None);
+/// Aktive Portal-Sitzung (für Neu-Bindung und den Einstellungsdialog).
+struct Active {
+    portal: GlobalShortcuts,
+    session: Session<GlobalShortcuts>,
+}
+static SESSION: Mutex<Option<Active>> = Mutex::const_new(None);
 
 fn set_status(app: &AppHandle, status: Status) {
     *app.state::<Hub>().shortcuts.lock().unwrap() = status.clone();
@@ -114,7 +119,7 @@ async fn bind(app: &AppHandle) -> Result<(), String> {
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let mut slot = SESSION.lock().await;
     if let Some(old) = slot.take() {
-        let _ = old.close().await;
+        let _ = old.session.close().await;
     }
 
     let mut wanted = Vec::new();
@@ -155,15 +160,27 @@ async fn bind(app: &AppHandle) -> Result<(), String> {
             NewShortcut::new(id.as_str(), desc.as_str()).preferred_trigger(trigger.as_str())
         })
         .collect();
-    let bound = gs
+    // Bricht der Nutzer den Dialog des Desktops ab, sind die Hotkeys trotzdem
+    // registriert – nur eben nicht belegt. Dann den aktuellen Stand abfragen.
+    let bound = match gs
         .bind_shortcuts(&session, &shortcuts, None, Default::default())
         .await
         .map_err(portal_err)?
         .response()
-        .map_err(|e| format!("Hotkeys wurden nicht bestätigt: {e}"))?;
+    {
+        Ok(b) => b.shortcuts().to_vec(),
+        Err(ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled)) => gs
+            .list_shortcuts(&session, Default::default())
+            .await
+            .map_err(portal_err)?
+            .response()
+            .map_err(portal_err)?
+            .shortcuts()
+            .to_vec(),
+        Err(e) => return Err(format!("Hotkeys wurden nicht bestätigt: {e}")),
+    };
 
-    let bindings = bound
-        .shortcuts()
+    let bindings: Vec<Binding> = bound
         .iter()
         .filter_map(|s| {
             let (tool, action) = s.id().split_once("::")?;
@@ -175,17 +192,25 @@ async fn bind(app: &AppHandle) -> Result<(), String> {
             })
         })
         .collect();
+    let unassigned = bindings.iter().any(|b| b.trigger.is_empty());
     set_status(
         app,
         Status {
             available: true,
-            message: String::new(),
+            message: if unassigned {
+                "Einige Hotkeys sind noch nicht belegt.".into()
+            } else {
+                String::new()
+            },
             bindings,
         },
     );
 
     let mut activated = gs.receive_activated().await.map_err(portal_err)?;
-    *slot = Some(session);
+    *slot = Some(Active {
+        portal: gs,
+        session,
+    });
     drop(slot);
 
     let app = app.clone();
@@ -203,4 +228,20 @@ async fn bind(app: &AppHandle) -> Result<(), String> {
         }
     });
     Ok(())
+}
+
+/// Öffnet den Hotkey-Dialog des Desktops (Portal-Version 2+).
+pub async fn configure() -> Result<(), String> {
+    let slot = SESSION.lock().await;
+    let active = slot.as_ref().ok_or("Keine Hotkeys registriert")?;
+    if active.portal.version() < 2 {
+        return Err(
+            "Dein Desktop unterstützt das nicht – bitte in den Systemeinstellungen ändern".into(),
+        );
+    }
+    active
+        .portal
+        .configure_shortcuts(&active.session, None, Default::default())
+        .await
+        .map_err(|e| e.to_string())
 }

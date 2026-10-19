@@ -86,6 +86,7 @@ export const api = {
     invoke<unknown>("tool_call", { id, method, params }),
   stop: (id: string) => invoke<void>("tool_stop", { id }),
   shortcuts: () => invoke<ShortcutStatus>("shortcut_status"),
+  configureShortcuts: () => invoke<void>("shortcuts_configure"),
 };
 
 export const sourceLabel = (s: Source) =>

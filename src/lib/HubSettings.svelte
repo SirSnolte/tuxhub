@@ -43,6 +43,7 @@
     {:else if shortcuts.bindings.length === 0}
       <p class="muted">{shortcuts.message || "Keine Hotkeys registriert."}</p>
     {:else}
+      {#if shortcuts.message}<p class="notice">{shortcuts.message}</p>{/if}
       <table>
         <tbody>
           {#each shortcuts.bindings as b (b.tool + b.action)}
@@ -53,6 +54,9 @@
           {/each}
         </tbody>
       </table>
+      <p>
+        <button onclick={() => api.configureShortcuts().catch((e) => toast(errText(e)))}>Hotkeys festlegen …</button>
+      </p>
     {/if}
   </section>
 
