@@ -4,12 +4,20 @@
   import { hub, onToolEvent, toast } from "./state.svelte";
   import Readme from "./Readme.svelte";
   import SettingsForm from "./SettingsForm.svelte";
+  import WebPanel from "./WebPanel.svelte";
 
   let {
     tool,
     shortcuts,
+    knownUpdate = null,
     onchanged,
-  }: { tool: Tool; shortcuts: ShortcutStatus | null; onchanged: () => void } = $props();
+  }: {
+    tool: Tool;
+    shortcuts: ShortcutStatus | null;
+    /** Von der automatischen Update-Prüfung gefundene Version */
+    knownUpdate?: string | null;
+    onchanged: () => void;
+  } = $props();
 
   const id = $derived(tool.entry.id);
   const m = $derived(tool.manifest);
@@ -22,9 +30,9 @@
   let checked = $state(false);
 
   $effect(() => {
-    // Beim Wechsel des Tools Update-Status zurücksetzen.
+    // Beim Wechsel des Tools den Stand der automatischen Prüfung übernehmen.
     void id;
-    update = null;
+    update = knownUpdate;
     checked = false;
   });
 
@@ -150,7 +158,7 @@
   {#if m.ui}
     <iframe bind:this={frame} class="tool-ui card" title={tool.entry.name} src={`tool://${id}/${m.ui}`}></iframe>
   {:else if m.web_url}
-    <iframe class="tool-ui card" title={tool.entry.name} src={m.web_url}></iframe>
+    <WebPanel {tool} />
   {:else if (m.actions?.length ?? 0) > 0 || (m.settings?.length ?? 0) > 0}
     <section class="card body">
       {#if m.actions?.length}

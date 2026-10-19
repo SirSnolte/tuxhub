@@ -43,12 +43,19 @@ oder `flatpak` (`flatpak_id`). Optional kann `manifest` das `tuxhub.toml`
 des Tools ersetzen – so lassen sich fremde Tools integrieren, ohne dass deren
 Repo etwas ändern muss.
 
+## Im Hintergrund
+
+Der Hub läuft nach dem Schließen im Tray weiter, damit globale Hotkeys
+funktionieren (abschaltbar in den Einstellungen). Optional startet er beim
+Anmelden (`~/.config/autostart`), auf Wunsch nur im Tray. Installierte Tools
+werden alle 6 Stunden auf neue Releases geprüft.
+
 ## Integrationsstufen
 
 | Stufe | Das Tool braucht | Der Hub kann |
 |---|---|---|
 | 0 | nichts (Release oder Flatpak) | installieren, starten, aktualisieren, README zeigen |
-| 1 | ein lokales Web-Interface (`web_url`) | es im Hub einbetten |
+| 1 | ein lokales Web-Interface (`web_url`) | es im Hub einbetten – auch wenn es Einbetten per Header verbietet (lokaler Proxy), oder im eigenen Fenster öffnen |
 | 2 | `tuxhub.toml` | Einstellungen, Aktionen, globale Hotkeys, eigene HTML-Oberfläche |
 
 ### `tuxhub.toml`

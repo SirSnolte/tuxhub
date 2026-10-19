@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, errText, type ShortcutStatus } from "./api";
+  import { api, errText, type HubSettings, type ShortcutStatus } from "./api";
   import { toast } from "./state.svelte";
 
   let {
@@ -9,6 +9,33 @@
   }: { shortcuts: ShortcutStatus | null; onopen: (id: string) => void; onchanged: () => void } = $props();
 
   let path = $state("");
+  let hs = $state<HubSettings | null>(null);
+  let checking = $state(false);
+  api.hubSettings().then((s) => (hs = s));
+
+  async function setHub(key: keyof HubSettings, value: boolean) {
+    if (!hs) return;
+    const next = { ...hs, [key]: value };
+    try {
+      await api.setHubSettings(next);
+      hs = next;
+    } catch (e) {
+      toast(errText(e));
+    }
+  }
+
+  async function checkNow() {
+    checking = true;
+    try {
+      const u = await api.checkUpdates();
+      const n = Object.keys(u).length;
+      toast(n ? `${n} Update${n > 1 ? "s" : ""} gefunden` : "Alle Tools sind aktuell", "info");
+    } catch (e) {
+      toast(errText(e));
+    } finally {
+      checking = false;
+    }
+  }
   let linking = $state(false);
 
   async function link() {
@@ -29,6 +56,34 @@
 
 <div class="settings">
   <h1>Einstellungen</h1>
+
+  <section class="card">
+    <h2>Allgemein</h2>
+    {#if hs}
+      <label class="toggle">
+        <input type="checkbox" checked={hs.autostart} onchange={(e) => setHub("autostart", e.currentTarget.checked)} />
+        <span>Beim Anmelden starten</span>
+      </label>
+      <label class="toggle">
+        <input
+          type="checkbox"
+          checked={hs.start_minimized}
+          disabled={!hs.autostart}
+          onchange={(e) => setHub("start_minimized", e.currentTarget.checked)}
+        />
+        <span>Dabei nur im Tray starten (ohne Fenster)</span>
+      </label>
+      <label class="toggle">
+        <input type="checkbox" checked={hs.close_to_tray} onchange={(e) => setHub("close_to_tray", e.currentTarget.checked)} />
+        <span>Schließen minimiert in den Tray – Hotkeys funktionieren weiter</span>
+      </label>
+      <label class="toggle">
+        <input type="checkbox" checked={hs.check_updates} onchange={(e) => setHub("check_updates", e.currentTarget.checked)} />
+        <span>Automatisch nach Tool-Updates suchen (alle 6 Stunden)</span>
+      </label>
+      <p><button disabled={checking} onclick={checkNow}>{checking ? "Suche …" : "Jetzt nach Updates suchen"}</button></p>
+    {/if}
+  </section>
 
   <section class="card">
     <h2>Hotkeys</h2>
@@ -113,6 +168,12 @@
     border: 1px solid var(--border);
     border-radius: 4px;
     padding: 1px 6px;
+  }
+  .toggle {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    padding: 6px 0;
   }
   .link {
     display: flex;

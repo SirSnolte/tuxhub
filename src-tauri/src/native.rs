@@ -166,6 +166,13 @@ impl Runtime {
             .is_some_and(|p| matches!(p.child.try_wait(), Ok(None)))
     }
 
+    pub async fn stop_all(&self) {
+        let ids: Vec<String> = self.procs.lock().await.keys().cloned().collect();
+        for id in ids {
+            self.stop(&id).await;
+        }
+    }
+
     pub async fn stop(&self, id: &str) {
         let proc = self.procs.lock().await.remove(id);
         if let Some(mut p) = proc {

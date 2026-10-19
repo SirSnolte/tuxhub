@@ -2,7 +2,10 @@ mod github;
 mod manifest;
 mod native;
 mod shortcuts;
+mod system;
 mod tools;
+mod updates;
+mod webui;
 
 use manifest::Manifest;
 use serde::Serialize;
@@ -23,11 +26,28 @@ const BRIDGE_JS: &str = include_str!("bridge.js");
 pub struct Hub {
     tools_dir: PathBuf,
     settings_dir: PathBuf,
+    hub_settings_path: PathBuf,
     runtime: native::Runtime,
     shortcuts: std::sync::Mutex<shortcuts::Status>,
+    settings: std::sync::Mutex<system::HubSettings>,
+    /// Tool-ID → neuere Version
+    updates: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
 }
 
 impl Hub {
+    #[cfg(test)]
+    pub(crate) fn for_test(tools_dir: PathBuf, settings_dir: PathBuf) -> Self {
+        Self {
+            hub_settings_path: settings_dir.join("hub.json"),
+            tools_dir,
+            settings_dir,
+            runtime: native::Runtime::default(),
+            shortcuts: Default::default(),
+            settings: Default::default(),
+            updates: Default::default(),
+        }
+    }
+
     fn settings_path(&self, id: &str) -> PathBuf {
         self.settings_dir.join(format!("{id}.json"))
     }
@@ -217,6 +237,7 @@ async fn tool_install(app: AppHandle, id: String) -> Result<(), String> {
     // Bei Updates den alten Prozess vorher beenden.
     hub.runtime.stop(&id).await;
     tools::install(&app, &hub.tools_dir, &entry).await?;
+    updates::forget(&app, &id);
     shortcuts::rebind(app.clone());
     Ok(())
 }
@@ -272,6 +293,7 @@ async fn tool_uninstall(app: AppHandle, id: String) -> Result<(), String> {
     tools::uninstall(&hub.tools_dir, &inst).await?;
     let _ = std::fs::remove_file(hub.settings_path(&id));
     let _ = std::fs::remove_file(hub.dyn_shortcuts_path(&id));
+    updates::forget(&app, &id);
     shortcuts::rebind(app.clone());
     Ok(())
 }
@@ -344,6 +366,46 @@ async fn tool_call(
 #[tauri::command]
 async fn tool_stop(app: AppHandle, id: String) {
     app.state::<Hub>().runtime.stop(&id).await;
+}
+
+// ------------------------------------------------------- Hub & Updates
+
+#[tauri::command]
+fn hub_settings_get(app: AppHandle) -> system::HubSettings {
+    app.state::<Hub>().settings.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn hub_settings_set(app: AppHandle, settings: system::HubSettings) -> Result<(), String> {
+    let hub = app.state::<Hub>();
+    system::apply_autostart(&settings)?;
+    settings
+        .save(&hub.hub_settings_path)
+        .map_err(|e| e.to_string())?;
+    *hub.settings.lock().unwrap() = settings;
+    Ok(())
+}
+
+#[tauri::command]
+fn updates_list(app: AppHandle) -> std::collections::BTreeMap<String, String> {
+    app.state::<Hub>().updates.lock().unwrap().clone()
+}
+
+#[tauri::command]
+async fn updates_check(app: AppHandle) -> std::collections::BTreeMap<String, String> {
+    updates::check_all(&app).await
+}
+
+#[tauri::command]
+async fn tool_web_status(app: AppHandle, id: String) -> Result<bool, String> {
+    let url = webui::web_url(&app, &id)?;
+    Ok(webui::reachable(&url).await)
+}
+
+#[tauri::command]
+fn tool_web_window(app: AppHandle, id: String) -> Result<(), String> {
+    let name = tools::load(&app.state::<Hub>().tools_dir, &id)?.entry.name;
+    webui::open_window(&app, &id, &name)
 }
 
 #[tauri::command]
@@ -459,21 +521,58 @@ fn percent_decode(s: &str) -> String {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Muss das erste Plugin sein: Ein zweiter Start holt nur das Fenster nach vorn.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            system::show_window(app)
+        }))
         .plugin(tauri_plugin_opener::init())
         .register_uri_scheme_protocol("tool", |ctx, req| serve_tool(ctx.app_handle(), req.uri()))
+        .register_asynchronous_uri_scheme_protocol("toolweb", |ctx, req, responder| {
+            let app = ctx.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                responder.respond(webui::proxy(&app, req).await);
+            });
+        })
         .setup(|app| {
             let tools_dir = app.path().app_data_dir()?.join("tools");
-            let settings_dir = app.path().app_config_dir()?.join("settings");
+            let config_dir = app.path().app_config_dir()?;
+            let settings_dir = config_dir.join("settings");
             std::fs::create_dir_all(&tools_dir)?;
             std::fs::create_dir_all(&settings_dir)?;
+            let hub_settings_path = config_dir.join("hub.json");
+            let settings = system::HubSettings::load(&hub_settings_path);
             app.manage(Hub {
                 tools_dir,
                 settings_dir,
+                hub_settings_path,
                 runtime: native::Runtime::default(),
                 shortcuts: Default::default(),
+                settings: std::sync::Mutex::new(settings),
+                updates: Default::default(),
             });
+
+            if let Err(e) = system::setup_tray(app.handle()) {
+                eprintln!("Tray-Icon nicht verfügbar: {e}");
+            }
+            // Das Fenster startet versteckt; nur beim Autostart mit --minimized bleibt es so.
+            if !std::env::args().any(|a| a == system::MINIMIZED_ARG) {
+                system::show_window(app.handle());
+            }
             shortcuts::rebind(app.handle().clone());
+            updates::spawn_checker(app.handle().clone());
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let app = window.app_handle();
+                let to_tray = window.label() == "main"
+                    && app.state::<Hub>().settings.lock().unwrap().close_to_tray
+                    && app.try_state::<system::TrayItems>().is_some();
+                if to_tray {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             workshop_list,
@@ -491,6 +590,12 @@ pub fn run() {
             tool_stop,
             shortcut_status,
             shortcuts_configure,
+            hub_settings_get,
+            hub_settings_set,
+            updates_list,
+            updates_check,
+            tool_web_status,
+            tool_web_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

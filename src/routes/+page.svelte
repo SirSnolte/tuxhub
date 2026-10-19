@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { api, errText, type ShortcutStatus, type Tool } from "$lib/api";
+  import { api, errText, type ShortcutStatus, type Tool, type Updates } from "$lib/api";
   import { hub, startListening, toast } from "$lib/state.svelte";
   import ToolPage from "$lib/ToolPage.svelte";
   import Workshop from "$lib/Workshop.svelte";
@@ -12,6 +12,24 @@
   let tools = $state<Tool[]>([]);
   let shortcuts = $state<ShortcutStatus | null>(null);
   let view = $state<View>({ kind: "workshop" });
+  let updates = $state<Updates>({});
+  let updatingAll = $state(false);
+  const updateCount = $derived(Object.keys(updates).length);
+
+  async function updateAll() {
+    updatingAll = true;
+    for (const id of Object.keys(updates)) {
+      const name = tools.find((t) => t.entry.id === id)?.entry.name ?? id;
+      try {
+        await api.install(id);
+        toast(`${name} aktualisiert`, "info");
+      } catch (e) {
+        toast(`${name}: ${errText(e)}`);
+      }
+    }
+    updatingAll = false;
+    refresh();
+  }
 
   const currentId = $derived(view.kind === "tool" ? view.id : null);
   const current = $derived(tools.find((t) => t.entry.id === currentId));
@@ -33,7 +51,9 @@
       if (tools.length) view = { kind: "tool", id: tools[0].entry.id };
     });
     api.shortcuts().then((s) => (shortcuts = s));
+    api.updates().then((u) => (updates = u));
     const un = [
+      listen<Updates>("updates-changed", ({ payload }) => (updates = payload)),
       listen<ShortcutStatus>("shortcuts-changed", ({ payload }) => (shortcuts = payload)),
       // Laufstatus aktuell halten, wenn ein Tool-Prozess startet oder endet.
       listen("addon-event", ({ payload }) => {
@@ -57,6 +77,11 @@
     </button>
 
     <div class="section">Meine Tools</div>
+    {#if updateCount > 0}
+      <button class="update-all" disabled={updatingAll} onclick={updateAll}>
+        ⬆ {updatingAll ? "Aktualisiere …" : updateCount === 1 ? "1 Update installieren" : `${updateCount} Updates installieren`}
+      </button>
+    {/if}
     {#each tools as t (t.entry.id)}
       <button
         class="nav"
@@ -65,6 +90,7 @@
       >
         <span>{t.entry.icon ?? "🧩"}</span>
         <span class="label">{t.entry.name}</span>
+        {#if updates[t.entry.id]}<span class="upd" title="Update auf {updates[t.entry.id]}">⬆</span>{/if}
         {#if hub.status[t.entry.id]?.running}<span class="dot" title="aktiv"></span>{/if}
       </button>
     {:else}
@@ -84,7 +110,7 @@
       <HubSettings {shortcuts} onopen={open} onchanged={refresh} />
     {:else if current}
       {#key current.entry.id}
-        <ToolPage tool={current} {shortcuts} onchanged={refresh} />
+        <ToolPage tool={current} {shortcuts} knownUpdate={updates[current.entry.id] ?? null} onchanged={refresh} />
       {/key}
     {/if}
   </main>
@@ -141,6 +167,18 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .upd {
+    font-size: 12px;
+    color: var(--accent);
+    font-weight: 700;
+  }
+  .update-all {
+    margin: 0 4px 6px;
+    font-size: 13px;
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--accent);
   }
   .dot {
     width: 8px;

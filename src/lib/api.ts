@@ -70,6 +70,16 @@ export type ShortcutStatus = {
 
 export type Settings = Record<string, unknown>;
 
+export type HubSettings = {
+  autostart: boolean;
+  start_minimized: boolean;
+  close_to_tray: boolean;
+  check_updates: boolean;
+};
+
+/** Tool-ID → neue Version */
+export type Updates = Record<string, string>;
+
 export const api = {
   workshop: () => invoke<Workshop>("workshop_list"),
   readme: (repo: string) => invoke<string>("workshop_readme", { repo }),
@@ -87,6 +97,12 @@ export const api = {
   stop: (id: string) => invoke<void>("tool_stop", { id }),
   shortcuts: () => invoke<ShortcutStatus>("shortcut_status"),
   configureShortcuts: () => invoke<void>("shortcuts_configure"),
+  hubSettings: () => invoke<HubSettings>("hub_settings_get"),
+  setHubSettings: (settings: HubSettings) => invoke<void>("hub_settings_set", { settings }),
+  updates: () => invoke<Updates>("updates_list"),
+  checkUpdates: () => invoke<Updates>("updates_check"),
+  webStatus: (id: string) => invoke<boolean>("tool_web_status", { id }),
+  webWindow: (id: string) => invoke<void>("tool_web_window", { id }),
 };
 
 export const sourceLabel = (s: Source) =>
