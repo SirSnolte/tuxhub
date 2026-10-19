@@ -103,6 +103,10 @@ export const api = {
   checkUpdates: () => invoke<Updates>("updates_check"),
   webStatus: (id: string) => invoke<boolean>("tool_web_status", { id }),
   webWindow: (id: string) => invoke<void>("tool_web_window", { id }),
+  embedMissing: () => invoke<string | null>("embed_missing"),
+  embedStart: (id: string) => invoke<{ url: string }>("embed_start", { id }),
+  embedStatus: (id: string) => invoke<{ url: string } | null>("embed_status", { id }),
+  embedStop: (id: string) => invoke<void>("embed_stop", { id }),
 };
 
 export const sourceLabel = (s: Source) =>

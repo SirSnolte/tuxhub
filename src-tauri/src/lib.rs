@@ -1,3 +1,4 @@
+mod embed;
 mod github;
 mod manifest;
 mod native;
@@ -32,6 +33,8 @@ pub struct Hub {
     settings: std::sync::Mutex<system::HubSettings>,
     /// Tool-ID → neuere Version
     updates: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
+    /// Laufende „Im Hub anzeigen“-Sitzungen
+    embeds: embed::Sessions,
 }
 
 impl Hub {
@@ -45,6 +48,7 @@ impl Hub {
             shortcuts: Default::default(),
             settings: Default::default(),
             updates: Default::default(),
+            embeds: Default::default(),
         }
     }
 
@@ -236,6 +240,7 @@ async fn tool_install(app: AppHandle, id: String) -> Result<(), String> {
     let hub = app.state::<Hub>();
     // Bei Updates den alten Prozess vorher beenden.
     hub.runtime.stop(&id).await;
+    embed::stop(&app, &id).await;
     tools::install(&app, &hub.tools_dir, &entry).await?;
     updates::forget(&app, &id);
     shortcuts::rebind(app.clone());
@@ -290,6 +295,7 @@ async fn tool_uninstall(app: AppHandle, id: String) -> Result<(), String> {
     let hub = app.state::<Hub>();
     let inst = tools::load(&hub.tools_dir, &id)?;
     hub.runtime.stop(&id).await;
+    embed::stop(&app, &id).await;
     tools::uninstall(&hub.tools_dir, &inst).await?;
     let _ = std::fs::remove_file(hub.settings_path(&id));
     let _ = std::fs::remove_file(hub.dyn_shortcuts_path(&id));
@@ -406,6 +412,28 @@ async fn tool_web_status(app: AppHandle, id: String) -> Result<bool, String> {
 fn tool_web_window(app: AppHandle, id: String) -> Result<(), String> {
     let name = tools::load(&app.state::<Hub>().tools_dir, &id)?.entry.name;
     webui::open_window(&app, &id, &name)
+}
+
+// --------------------------------------------------- Im Hub anzeigen
+
+#[tauri::command]
+fn embed_missing() -> Option<String> {
+    embed::missing()
+}
+
+#[tauri::command]
+async fn embed_start(app: AppHandle, id: String) -> Result<embed::EmbedInfo, String> {
+    embed::start(&app, &id).await
+}
+
+#[tauri::command]
+async fn embed_status(app: AppHandle, id: String) -> Option<embed::EmbedInfo> {
+    embed::status(&app, &id).await
+}
+
+#[tauri::command]
+async fn embed_stop(app: AppHandle, id: String) {
+    embed::stop(&app, &id).await
 }
 
 #[tauri::command]
@@ -549,6 +577,7 @@ pub fn run() {
                 shortcuts: Default::default(),
                 settings: std::sync::Mutex::new(settings),
                 updates: Default::default(),
+                embeds: Default::default(),
             });
 
             if let Err(e) = system::setup_tray(app.handle()) {
@@ -596,9 +625,19 @@ pub fn run() {
             updates_check,
             tool_web_status,
             tool_web_window,
+            embed_missing,
+            embed_start,
+            embed_status,
+            embed_stop,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Eingebettete App-Sitzungen beim Beenden mit aufräumen.
+            if let tauri::RunEvent::Exit = event {
+                tauri::async_runtime::block_on(embed::stop_all(app));
+            }
+        });
 }
 
 #[cfg(test)]

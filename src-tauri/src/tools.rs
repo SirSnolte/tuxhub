@@ -442,14 +442,22 @@ pub async fn uninstall(tools_dir: &Path, inst: &Installed) -> Result<(), String>
     std::fs::remove_dir_all(tools_dir.join(inst.id())).map_err(|e| e.to_string())
 }
 
-/// Startet das Tool ganz normal als eigenes Programm.
-pub fn launch(tools_dir: &Path, inst: &Installed) -> Result<(), String> {
-    let mut cmd = match &inst.entry.source {
-        Source::Flatpak { flatpak_id, .. } => {
-            let mut c = std::process::Command::new("flatpak");
-            c.args(["run", flatpak_id]);
-            c
-        }
+/// Wie ein Tool gestartet wird: Programm, Argumente, Arbeitsordner.
+pub struct LaunchCmd {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    pub cwd: Option<PathBuf>,
+    pub flatpak: bool,
+}
+
+pub fn launch_cmd(tools_dir: &Path, inst: &Installed) -> Result<LaunchCmd, String> {
+    match &inst.entry.source {
+        Source::Flatpak { flatpak_id, .. } => Ok(LaunchCmd {
+            program: "flatpak".into(),
+            args: vec!["run".into(), flatpak_id.clone()],
+            cwd: None,
+            flatpak: true,
+        }),
         _ => {
             let root = inst.root_dir(tools_dir).ok_or("Kein Tool-Ordner")?;
             let manifest = inst.manifest(tools_dir);
@@ -462,11 +470,24 @@ pub fn launch(tools_dir: &Path, inst: &Installed) -> Result<(), String> {
             if !exe.is_file() {
                 return Err(format!("{} fehlt", exe.display()));
             }
-            let mut c = std::process::Command::new(exe);
-            c.args(args).current_dir(root);
-            c
+            Ok(LaunchCmd {
+                program: exe,
+                args,
+                cwd: Some(root),
+                flatpak: false,
+            })
         }
-    };
+    }
+}
+
+/// Startet das Tool ganz normal als eigenes Programm.
+pub fn launch(tools_dir: &Path, inst: &Installed) -> Result<(), String> {
+    let lc = launch_cmd(tools_dir, inst)?;
+    let mut cmd = std::process::Command::new(&lc.program);
+    cmd.args(&lc.args);
+    if let Some(cwd) = &lc.cwd {
+        cmd.current_dir(cwd);
+    }
     let mut child = cmd
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())

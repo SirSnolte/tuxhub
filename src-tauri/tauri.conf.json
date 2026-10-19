@@ -39,6 +39,9 @@
       "icons/icon.ico"
     ],
     "category": "Game",
-    "shortDescription": "Modularer Hub f\u00fcr Linux-Gaming"
+    "shortDescription": "Modularer Hub f\u00fcr Linux-Gaming",
+    "resources": {
+      "resources/xpra-html5/": "resources/xpra-html5/"
+    }
   }
 }

@@ -5,6 +5,7 @@
   import Readme from "./Readme.svelte";
   import SettingsForm from "./SettingsForm.svelte";
   import WebPanel from "./WebPanel.svelte";
+  import EmbedPanel from "./EmbedPanel.svelte";
 
   let {
     tool,
@@ -26,6 +27,9 @@
   const isLocal = $derived(tool.entry.source.type === "local");
 
   let busy = $state(false);
+  /** Läuft die App gerade „im Hub“? Dann README ausblenden und Start-Knopf oben sparen. */
+  let embedded = $state(false);
+  const plainApp = $derived(tool.level === 0 && tool.can_launch);
   let update = $state<string | null>(null);
   let checked = $state(false);
 
@@ -112,7 +116,7 @@
       </div>
     </div>
     <div class="buttons">
-      {#if tool.can_launch}
+      {#if tool.can_launch && !plainApp}
         <button class="primary" disabled={busy} onclick={() => run(() => api.launch(id), `${tool.entry.name} gestartet`)}>
           Starten
         </button>
@@ -175,19 +179,16 @@
         <SettingsForm toolId={id} settings={m.settings} />
       {/if}
     </section>
+  {:else if plainApp}
+    <EmbedPanel {tool} bind:running={embedded} />
   {:else}
     <section class="card body">
-      <p>
-        {tool.entry.name} läuft als eigenes Programm. Mit <b>Starten</b> öffnest du es in einem eigenen Fenster.
-      </p>
-      {#if !tool.can_launch}
-        <p class="muted">Für dieses Tool wurde keine Startdatei gefunden.</p>
-      {/if}
+      <p class="muted">Für dieses Tool wurde keine Startdatei gefunden.</p>
       {#if tool.entry.description}<p class="muted">{tool.entry.description}</p>{/if}
     </section>
   {/if}
 
-  {#if tool.entry.repo && !m.ui && !m.web_url}
+  {#if tool.entry.repo && !m.ui && !m.web_url && !embedded}
     <section class="card body">
       <Readme repo={tool.entry.repo} />
     </section>

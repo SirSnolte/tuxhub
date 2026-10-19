@@ -54,7 +54,7 @@ werden alle 6 Stunden auf neue Releases geprüft.
 
 | Stufe | Das Tool braucht | Der Hub kann |
 |---|---|---|
-| 0 | nichts (Release oder Flatpak) | installieren, starten, aktualisieren, README zeigen |
+| 0 | nichts (Release oder Flatpak) | installieren, aktualisieren, README zeigen, starten – im eigenen Fenster oder **im Hub** (eigener virtueller Bildschirm über xpra) |
 | 1 | ein lokales Web-Interface (`web_url`) | es im Hub einbetten – auch wenn es Einbetten per Header verbietet (lokaler Proxy), oder im eigenen Fenster öffnen |
 | 2 | `tuxhub.toml` | Einstellungen, Aktionen, globale Hotkeys, eigene HTML-Oberfläche |
 
