@@ -513,6 +513,9 @@ mod tests {
         assert_eq!(m.level(), 2);
         let root = inst.root_dir(&tmp).unwrap();
         assert!(root.join(&m.rpc.unwrap().command).is_file());
+        if let Some(ui) = &m.ui {
+            assert!(root.join(ui).is_file(), "UI {ui} fehlt im Release");
+        }
         // Erneut installieren = Update-Pfad
         install(app.handle(), &tmp, &entry).await.unwrap();
         assert_eq!(load_all(&tmp).len(), 1);

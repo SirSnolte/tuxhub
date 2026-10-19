@@ -12,6 +12,19 @@
     }
   },
   {
+    "id": "streamcontroller",
+    "name": "StreamController",
+    "description": "Elgato Stream Deck unter Linux steuern – mit Plugins. Tipp: Davids Plugin „BetterVolumeMixer“ (Lautstärke pro App) gibt es im integrierten Store.",
+    "icon": "🎛️",
+    "category": "Eingabe",
+    "repo": "StreamController/StreamController",
+    "homepage": "https://github.com/Dav1d-Fn/StreamController-BetterVolumeMixer",
+    "source": {
+      "type": "flatpak",
+      "flatpak_id": "com.core447.StreamController"
+    }
+  },
+  {
     "id": "protonup-qt",
     "name": "ProtonUp-Qt",
     "description": "Installiert und verwaltet Proton-GE, Wine-GE und andere Kompatibilitäts-Tools für Steam, Lutris und Heroic.",
@@ -98,6 +111,18 @@
     "source": {
       "type": "flatpak",
       "flatpak_id": "org.freedesktop.Piper"
+    }
+  },
+  {
+    "id": "gif-color-changer",
+    "name": "GIF Color Changer",
+    "description": "Farben in animierten GIFs ersetzen – präzise, schnell und verlustfrei, alles lokal. Von Dav1d-Fn.",
+    "icon": "🎨",
+    "category": "Kreativ",
+    "repo": "Dav1d-Fn/gif-color-changer",
+    "source": {
+      "type": "github-release",
+      "asset": "*amd64.AppImage"
     }
   }
 ]
