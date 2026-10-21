@@ -1,3 +1,0 @@
-xpra HTML5-Client, unverändert übernommen aus
-https://github.com/Xpra-org/xpra-html5 (Tag v20).
-Lizenz: Mozilla Public License 2.0, siehe LICENSE.

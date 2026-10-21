@@ -1,10 +1,10 @@
-//! Stufe 1: Web-Oberflächen von Tools im Hub einbetten.
+//! Integration level 1: embed the web interface of a tool.
 //!
-//! Viele Web-UIs verbieten das Einbetten per `X-Frame-Options` oder
-//! `Content-Security-Policy: frame-ancestors`. Der Hub reicht lokale Web-UIs
-//! deshalb über `toolweb://<id>/<pfad>` durch und entfernt diese Header.
-//! Nur Loopback-Adressen werden durchgereicht – der Hub ist kein offener Proxy.
-//! WebSockets gehen über diesen Weg nicht; dafür gibt es das eigene Fenster.
+//! Many web interfaces forbid embedding through `X-Frame-Options` or
+//! `Content-Security-Policy: frame-ancestors`. tuxly therefore serves local
+//! web interfaces through `toolweb://<id>/<path>` and removes these headers.
+//! Only loopback addresses are proxied, so tuxly is never an open proxy.
+//! WebSockets are not proxied; the separate window covers that case.
 
 use crate::{Hub, tools};
 use reqwest::Url;
@@ -17,11 +17,11 @@ fn client() -> &'static reqwest::Client {
     static C: OnceLock<reqwest::Client> = OnceLock::new();
     C.get_or_init(|| {
         reqwest::Client::builder()
-            // Weiterleitungen soll die eingebettete Seite selbst sehen.
+            // Redirects are passed through to the embedded page.
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(30))
             .build()
-            .expect("HTTP-Client")
+            .expect("HTTP client")
     })
 }
 
@@ -35,16 +35,16 @@ pub fn is_loopback(url: &Url) -> bool {
         }
 }
 
-/// Web-URL eines installierten Tools.
+/// Web interface URL of an installed tool.
 pub fn web_url<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<Url, String> {
     let hub = app.state::<Hub>();
     let inst = tools::load(&hub.tools_dir, id)?;
     let m = inst.manifest(&hub.tools_dir);
-    let raw = m.web_url.ok_or("Dieses Tool hat kein Web-Interface")?;
-    Url::parse(&raw).map_err(|e| format!("web_url ungültig: {e}"))
+    let raw = m.web_url.ok_or("this tool has no web interface")?;
+    Url::parse(&raw).map_err(|e| format!("invalid web_url: {e}"))
 }
 
-/// Ist das Web-Interface erreichbar?
+/// Whether the web interface responds.
 pub async fn reachable(url: &Url) -> bool {
     client()
         .get(url.clone())
@@ -54,9 +54,17 @@ pub async fn reachable(url: &Url) -> bool {
         .is_ok()
 }
 
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
 fn error_page(status: StatusCode, text: &str) -> Response<Vec<u8>> {
     let body = format!(
-        "<!doctype html><meta charset=utf-8><body style=\"font:14px system-ui;padding:20px;color:#888\">{text}</body>"
+        "<!doctype html><meta charset=utf-8><body style=\"font:14px system-ui;padding:20px;color:#888\">{}</body>",
+        html_escape(text)
     );
     Response::builder()
         .status(status)
@@ -65,7 +73,7 @@ fn error_page(status: StatusCode, text: &str) -> Response<Vec<u8>> {
         .unwrap()
 }
 
-/// Leitet eine Anfrage an `toolweb://<id>/…` an das Web-Interface des Tools weiter.
+/// Forwards a request for `toolweb://<id>/…` to the web interface of the tool.
 pub async fn proxy<R: Runtime>(app: &AppHandle<R>, req: Request<Vec<u8>>) -> Response<Vec<u8>> {
     let id = req.uri().host().unwrap_or_default().to_string();
     let base = match web_url(app, &id) {
@@ -73,7 +81,7 @@ pub async fn proxy<R: Runtime>(app: &AppHandle<R>, req: Request<Vec<u8>>) -> Res
         Ok(_) => {
             return error_page(
                 StatusCode::FORBIDDEN,
-                "Nur lokale Web-Interfaces werden eingebettet.",
+                "Only local web interfaces can be embedded.",
             );
         }
         Err(e) => return error_page(StatusCode::NOT_FOUND, &e),
@@ -85,14 +93,14 @@ pub async fn proxy<R: Runtime>(app: &AppHandle<R>, req: Request<Vec<u8>>) -> Res
         .map(|p| p.as_str())
         .unwrap_or("/");
     let Ok(target) = Url::parse(&format!("{origin}{path}")) else {
-        return error_page(StatusCode::BAD_REQUEST, "Ungültiger Pfad");
+        return error_page(StatusCode::BAD_REQUEST, "Invalid path");
     };
 
     let method = reqwest::Method::from_bytes(req.method().as_str().as_bytes())
         .unwrap_or(reqwest::Method::GET);
     let mut out = client().request(method, target);
     for (name, value) in req.headers() {
-        // Host/Origin/Referer würden `toolweb://` verraten und Prüfungen im Tool auslösen.
+        // Host, Origin and Referer would expose `toolweb://` and trip checks in the tool.
         if !matches!(
             name.as_str(),
             "host" | "origin" | "referer" | "connection" | "content-length"
@@ -105,7 +113,7 @@ pub async fn proxy<R: Runtime>(app: &AppHandle<R>, req: Request<Vec<u8>>) -> Res
         Err(e) => {
             return error_page(
                 StatusCode::BAD_GATEWAY,
-                &format!("Web-Interface nicht erreichbar: {e}"),
+                &format!("The web interface is not reachable: {e}"),
             );
         }
     };
@@ -123,7 +131,7 @@ pub async fn proxy<R: Runtime>(app: &AppHandle<R>, req: Request<Vec<u8>>) -> Res
         ) {
             continue;
         }
-        // Absolute Weiterleitungen auf das Tool selbst wieder durch den Proxy schicken.
+        // Route absolute redirects to the tool itself back through the proxy.
         if n == "location"
             && let Ok(loc) = value.to_str()
             && let Some(rest) = loc.strip_prefix(&origin)
@@ -138,12 +146,12 @@ pub async fn proxy<R: Runtime>(app: &AppHandle<R>, req: Request<Vec<u8>>) -> Res
     match resp.bytes().await {
         Ok(body) => builder
             .body(body.to_vec())
-            .unwrap_or_else(|_| error_page(StatusCode::BAD_GATEWAY, "Antwort unlesbar")),
+            .unwrap_or_else(|_| error_page(StatusCode::BAD_GATEWAY, "Unreadable response")),
         Err(e) => error_page(StatusCode::BAD_GATEWAY, &e.to_string()),
     }
 }
 
-/// Öffnet das Web-Interface in einem eigenen Fenster (mit WebSockets usw.).
+/// Opens the web interface in a separate window (supports WebSockets).
 pub fn open_window(app: &AppHandle, id: &str, title: &str) -> Result<(), String> {
     let url = web_url(app, id)?;
     let label = format!("web-{}", id.replace('.', "-"));
@@ -166,7 +174,7 @@ mod tests {
     use std::io::{Read, Write};
     use std::path::PathBuf;
 
-    /// Mini-Server: eine Antwort pro Verbindung, merkt sich die Anfragen.
+    /// Minimal server: one response per connection, records the requests.
     fn serve(
         responses: impl FnOnce(u16) -> Vec<String>,
     ) -> (u16, std::sync::mpsc::Receiver<String>) {
@@ -190,7 +198,7 @@ mod tests {
     fn mock_hub(web_url: &str) -> (tauri::App<tauri::test::MockRuntime>, PathBuf) {
         let app = tauri::test::mock_app();
         let base = std::env::temp_dir().join(format!(
-            "tuxhub-web-{}-{}",
+            "tuxly-web-{}-{}",
             std::process::id(),
             web_url.len()
         ));
@@ -199,7 +207,7 @@ mod tests {
         std::fs::create_dir_all(&tool_dir).unwrap();
         std::fs::create_dir_all(tools_dir.join("w")).unwrap();
         std::fs::write(
-            tool_dir.join("tuxhub.toml"),
+            tool_dir.join("tuxly.toml"),
             format!("id = \"w\"\nname = \"W\"\nweb_url = \"{web_url}\"\n"),
         )
         .unwrap();
@@ -220,7 +228,7 @@ mod tests {
         let (port, rx) = serve(|port| {
             vec![
                 "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nX-Frame-Options: DENY\r\n\
-                 Content-Security-Policy: frame-ancestors 'none'\r\nX-Keep: ja\r\nContent-Length: 5\r\n\r\nhallo"
+                 Content-Security-Policy: frame-ancestors 'none'\r\nX-Keep: yes\r\nContent-Length: 5\r\n\r\nhallo"
                     .to_string(),
                 format!("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{port}/login?a=b\r\nContent-Length: 0\r\n\r\n"),
                 "HTTP/1.1 302 Found\r\nLocation: https://example.com/\r\nContent-Length: 0\r\n\r\n".to_string(),
@@ -238,15 +246,15 @@ mod tests {
         assert!(seen.starts_with("GET /ui/index.html?x=1 "), "{seen}");
         assert!(
             !seen.to_lowercase().contains("origin:"),
-            "Origin darf nicht weitergegeben werden"
+            "the Origin header must not be forwarded"
         );
         assert_eq!(resp.status(), 200);
         assert_eq!(resp.body(), b"hallo");
         assert!(resp.headers().get("x-frame-options").is_none());
         assert!(resp.headers().get("content-security-policy").is_none());
-        assert_eq!(resp.headers().get("x-keep").unwrap(), "ja");
+        assert_eq!(resp.headers().get("x-keep").unwrap(), "yes");
 
-        // Weiterleitung auf das Tool selbst → wieder durch den Proxy
+        // A redirect to the tool itself goes back through the proxy.
         let req = Request::builder().uri("toolweb://w/").body(vec![]).unwrap();
         let resp = proxy(app.handle(), req).await;
         assert_eq!(resp.status(), 302);
@@ -255,7 +263,7 @@ mod tests {
             "toolweb://w/login?a=b"
         );
 
-        // Fremde Weiterleitungen bleiben, wie sie sind
+        // Redirects to other hosts are left unchanged.
         let req = Request::builder()
             .uri("toolweb://w/x")
             .body(vec![])

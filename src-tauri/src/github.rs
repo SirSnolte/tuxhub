@@ -1,7 +1,8 @@
-//! Minimaler GitHub-Client für Releases und READMEs.
+//! Minimal GitHub client for releases, READMEs and repository files.
 //!
-//! Mit Token (Umgebungsvariable `GITHUB_TOKEN`/`GH_TOKEN` oder `gh auth token`)
-//! funktionieren auch private Repos, und das Rate-Limit ist höher.
+//! Requests are anonymous by default. If `GITHUB_TOKEN` or `GH_TOKEN` is set,
+//! or the GitHub CLI is logged in, its token is sent to api.github.com only.
+//! This raises the rate limit and gives access to private repositories.
 
 use serde::Deserialize;
 use std::path::Path;
@@ -46,7 +47,7 @@ fn client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
-            .user_agent(concat!("tuxhub/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("tuxly/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("HTTP-Client")
     })
@@ -70,7 +71,7 @@ fn check_repo(repo: &str) -> Result<(), String> {
     if ok {
         Ok(())
     } else {
-        Err(format!("ungültiges Repo {repo:?}"))
+        Err(format!("invalid repository {repo:?}"))
     }
 }
 
@@ -78,14 +79,14 @@ async fn send(req: reqwest::RequestBuilder) -> Result<reqwest::Response, String>
     let resp = req
         .send()
         .await
-        .map_err(|e| format!("GitHub nicht erreichbar: {e}"))?;
+        .map_err(|e| format!("GitHub is not reachable: {e}"))?;
     match resp.status().as_u16() {
         200..=299 => Ok(resp),
-        404 => {
-            Err("Nicht gefunden – gibt es ein Release, und hast du Zugriff auf das Repo?".into())
-        }
-        403 | 429 => Err("GitHub-Limit erreicht. Mit `gh auth login` anmelden hilft.".into()),
-        s => Err(format!("GitHub antwortet mit {s}")),
+        404 => Err("not found: the repository may have no release, or it is not accessible".into()),
+        403 | 429 => Err(
+            "GitHub rate limit reached. Logging in with `gh auth login` raises the limit.".into(),
+        ),
+        s => Err(format!("GitHub responded with status {s}")),
     }
 }
 
@@ -100,7 +101,7 @@ pub async fn latest_release(repo: &str) -> Result<Release, String> {
     .await?
     .json()
     .await
-    .map_err(|e| format!("GitHub-Antwort unlesbar: {e}"))
+    .map_err(|e| format!("unexpected response from GitHub: {e}"))
 }
 
 pub async fn readme(repo: &str) -> Result<String, String> {
@@ -115,7 +116,7 @@ pub async fn readme(repo: &str) -> Result<String, String> {
     .map_err(|e| e.to_string())
 }
 
-/// Eine Datei aus dem Standard-Branch eines Repos.
+/// A file from the default branch of a repository.
 pub async fn raw_file(repo: &str, path: &str) -> Result<String, String> {
     check_repo(repo)?;
     send(
@@ -130,7 +131,7 @@ pub async fn raw_file(repo: &str, path: &str) -> Result<String, String> {
     .map_err(|e| e.to_string())
 }
 
-/// Lädt ein Release-Asset über die API (funktioniert auch bei privaten Repos).
+/// Downloads a release asset through the API (works for private repositories too).
 pub async fn download(
     repo: &str,
     asset: &Asset,
@@ -153,7 +154,7 @@ pub async fn download(
     while let Some(chunk) = resp
         .chunk()
         .await
-        .map_err(|e| format!("Download abgebrochen: {e}"))?
+        .map_err(|e| format!("download interrupted: {e}"))?
     {
         file.write_all(&chunk).await.map_err(|e| e.to_string())?;
         done += chunk.len() as u64;
@@ -162,7 +163,7 @@ pub async fn download(
     file.flush().await.map_err(|e| e.to_string())
 }
 
-/// Einfache Wildcard-Suche: `*` passt auf beliebig viele Zeichen.
+/// Simple wildcard match: `*` matches any number of characters.
 pub fn glob_match(pattern: &str, name: &str) -> bool {
     let parts: Vec<&str> = pattern.split('*').collect();
     if parts.len() == 1 {

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "tuxhub",
-  "version": "0.1.0",
-  "identifier": "dev.tuxhub.app",
+  "productName": "tuxly",
+  "version": "0.2.0",
+  "identifier": "io.github.sirsnolte.tuxly",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "tuxhub",
+        "title": "tuxly",
         "width": 1100,
         "height": 720,
         "minWidth": 760,
@@ -21,7 +21,20 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' data: blob: https: tool:",
+        "font-src": "'self' data:",
+        "connect-src": "'self' ipc: http://ipc.localhost ws://127.0.0.1:*",
+        "frame-src": "'self' tool: toolweb: http://127.0.0.1:* http://localhost:* https:",
+        "worker-src": "'self' blob:",
+        "media-src": "'self' blob:",
+        "object-src": "'none'",
+        "base-uri": "'self'",
+        "form-action": "'self'"
+      }
     }
   },
   "bundle": {
@@ -33,12 +46,27 @@
     ],
     "icon": [
       "icons/32x32.png",
+      "icons/64x64.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
+      "icons/icon.png"
     ],
     "category": "Game",
-    "shortDescription": "Modularer Hub f\u00fcr Linux-Gaming"
+    "shortDescription": "Modular hub for gaming on Linux",
+    "createUpdaterArtifacts": true,
+    "publisher": "SirSnolte",
+    "homepage": "https://github.com/SirSnolte/tuxly",
+    "license": "MIT",
+    "licenseFile": "../LICENSE",
+    "copyright": "Copyright (c) 2026 SirSnolte",
+    "longDescription": "tuxly installs, updates and launches gaming tools for Linux from a curated workshop. Tools can run in their own window or inside tuxly."
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY5NzVDODAyMEUzQkIwRDIKUldUU3NEc09Bc2gxK1hlL3l4NDNxczhvUWNUaXo1NitjTkczN2JYZG0wMjh2L2w3Q1dib1BVTEUK",
+      "endpoints": [
+        "https://github.com/SirSnolte/tuxly/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

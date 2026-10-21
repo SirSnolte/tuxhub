@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "./i18n.svelte";
   import { onDestroy } from "svelte";
   import { api, errText, type Tool } from "./api";
   import { toast } from "./state.svelte";
@@ -6,7 +7,7 @@
   let { tool }: { tool: Tool } = $props();
 
   const id = $derived(tool.entry.id);
-  // Pfad + Query der web_url übernehmen, Host/Port übernimmt der Proxy.
+  // Keep path and query of web_url; host and port are handled by the proxy.
   const src = $derived.by(() => {
     try {
       const u = new URL(tool.manifest.web_url!);
@@ -28,7 +29,7 @@
   let frame = $state<HTMLIFrameElement>();
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  // Solange das Web-Interface nicht antwortet, alle 2 s nachsehen.
+  // While the web interface does not respond, check again every 2 seconds.
   async function poll() {
     clearTimeout(timer);
     try {
@@ -46,7 +47,7 @@
   async function start() {
     try {
       await api.launch(id);
-      toast(`${tool.entry.name} gestartet – warte auf das Web-Interface …`, "info");
+      toast(t("web.startedWaiting", { name: tool.entry.name }), "info");
       poll();
     } catch (e) {
       toast(errText(e));
@@ -64,19 +65,19 @@
 
 <div class="web">
   {#if reachable === null}
-    <p class="muted">Prüfe Web-Interface …</p>
+    <p class="muted">{t("web.checking")}</p>
   {:else if !reachable}
     <div class="card empty">
-      <p>Das Web-Interface antwortet nicht. Läuft {tool.entry.name}?</p>
+      <p>{t("web.unreachable", { name: tool.entry.name })}</p>
       {#if tool.can_launch}
-        <button class="primary" onclick={start}>{tool.entry.name} starten</button>
+        <button class="primary" onclick={start}>{t("web.start", { name: tool.entry.name })}</button>
       {/if}
-      <p class="muted small">Sobald es erreichbar ist, erscheint es hier automatisch.</p>
+      <p class="muted small">{t("web.autoAppear")}</p>
     </div>
   {:else if local}
     <iframe bind:this={frame} class="card" title={tool.entry.name} {src}></iframe>
     <p class="muted small">
-      Live-Funktionen über WebSockets gehen eingebettet nicht immer – dann hilft „Im eigenen Fenster öffnen“.
+      {t("web.wsHint")}
     </p>
   {:else}
     <iframe bind:this={frame} class="card" title={tool.entry.name} src={tool.manifest.web_url}></iframe>

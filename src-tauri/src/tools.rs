@@ -1,52 +1,57 @@
-//! Installierte Tools: Workshop-Einträge installieren, starten, aktualisieren
-//! und entfernen.
+//! Installed tools: install workshop entries, launch, update and remove them.
 //!
-//! Layout unter `<data>/tools/<id>/`:
-//! - `tool.json` – Workshop-Eintrag + installierte Version
-//! - `files/`    – entpacktes Release (nur bei GitHub-Releases)
+//! Layout below `<data>/tools/<id>/`:
+//! - `tool.json`: the workshop entry and the installed version
+//! - `files/`: the extracted release (GitHub releases only)
 
 use crate::github;
 use crate::manifest::{Manifest, safe_relative, valid_id};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Runtime};
 use tokio::process::Command;
 
-/// Ein Eintrag im Workshop (`registry/index.json`).
+/// An entry of the workshop index (`registry/index.json`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entry {
     pub id: String,
     pub name: String,
     #[serde(default)]
     pub description: String,
+    /// HTTPS URL of the icon, or a path relative to the tool folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
-    /// `owner/name` auf GitHub
+    /// `owner/name` on GitHub.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
     pub source: Source,
-    /// Überschreibt ein `tuxhub.toml` aus dem Repo. So lassen sich fremde
-    /// Tools integrieren, ohne dass ihr Repo etwas ändern muss.
+    /// Replaces a `tuxly.toml` shipped by the tool, so third-party tools can
+    /// be integrated without changes to their repository.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manifest: Option<Manifest>,
+    /// Localized texts by language code, for example `{"de": {"description": "…"}}`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub translations: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum Source {
-    /// Neuestes Release von `repo`; `asset` ist ein Muster wie `*x86_64.AppImage`.
+    /// Latest release of `repo`; `asset` is a pattern such as `*x86_64.AppImage`.
     GithubRelease { asset: String },
     Flatpak {
         flatpak_id: String,
         #[serde(default = "default_remote")]
         remote: String,
     },
-    /// Lokal verknüpfter Ordner (Entwicklermodus).
+    /// A local folder linked in developer mode.
     Local { path: String },
 }
 
@@ -57,10 +62,25 @@ fn default_remote() -> String {
 impl Entry {
     pub fn validate(&self) -> Result<(), String> {
         if !valid_id(&self.id) {
-            return Err(format!("ungültige Tool-ID {:?}", self.id));
+            return Err(format!("invalid tool id {:?}", self.id));
         }
         if matches!(self.source, Source::GithubRelease { .. }) && self.repo.is_none() {
-            return Err(format!("{}: GitHub-Release braucht `repo`", self.id));
+            return Err(format!(
+                "{}: a GitHub release source requires `repo`",
+                self.id
+            ));
+        }
+        if let Source::Flatpak { flatpak_id, remote } = &self.source {
+            // Never let an id start with "-": it would be parsed as a flatpak option.
+            let ok = |s: &str| {
+                !s.is_empty()
+                    && !s.starts_with('-')
+                    && s.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+            };
+            if !ok(flatpak_id) || !ok(remote) {
+                return Err(format!("{}: invalid Flatpak id or remote", self.id));
+            }
         }
         if let Some(m) = &self.manifest {
             m.validate()?;
@@ -72,38 +92,39 @@ impl Entry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Installed {
     pub entry: Entry,
-    /// Release-Tag (GitHub) bzw. Version aus dem Manifest
+    /// Release tag (GitHub) or version from the manifest.
     #[serde(default)]
     pub version: Option<String>,
-    /// Ordner mit den Tool-Dateien, relativ zu `tools/<id>`
+    /// Folder with the tool files, relative to `tools/<id>`.
     #[serde(default)]
     pub root: Option<String>,
-    /// Automatisch erkannte Startdatei, falls das Manifest keine nennt
+    /// Detected executable when the manifest does not name one.
     #[serde(default)]
     pub detected_run: Option<String>,
 }
 
+/// Installation progress; the user interface turns `stage` into text.
 #[derive(Clone, Serialize)]
 struct Progress<'a> {
     id: &'a str,
-    text: String,
+    stage: &'static str,
+    detail: Option<&'a str>,
+    bytes: Option<u64>,
     fraction: Option<f64>,
 }
 
-fn progress<R: Runtime>(
-    app: &AppHandle<R>,
-    id: &str,
-    text: impl Into<String>,
-    fraction: Option<f64>,
-) {
-    let _ = app.emit(
-        "tool-progress",
-        Progress {
-            id,
-            text: text.into(),
-            fraction,
-        },
-    );
+fn progress<R: Runtime>(app: &AppHandle<R>, p: Progress<'_>) {
+    let _ = app.emit("tool-progress", p);
+}
+
+fn stage<'a>(id: &'a str, stage: &'static str, detail: Option<&'a str>) -> Progress<'a> {
+    Progress {
+        id,
+        stage,
+        detail,
+        bytes: None,
+        fraction: None,
+    }
 }
 
 impl Installed {
@@ -111,7 +132,7 @@ impl Installed {
         &self.entry.id
     }
 
-    /// Ordner, in dem die Dateien des Tools liegen (Flatpaks haben keinen).
+    /// Folder that contains the tool files (Flatpaks have none).
     pub fn root_dir(&self, tools_dir: &Path) -> Option<PathBuf> {
         match &self.entry.source {
             Source::Local { path } => Some(PathBuf::from(path)),
@@ -124,7 +145,7 @@ impl Installed {
         }
     }
 
-    /// Manifest aus dem Workshop-Eintrag, sonst `tuxhub.toml` des Tools.
+    /// Manifest from the workshop entry, otherwise the tool's `tuxly.toml`.
     pub fn manifest(&self, tools_dir: &Path) -> Manifest {
         if let Some(m) = &self.entry.manifest {
             return m.clone();
@@ -154,7 +175,7 @@ pub fn load_all(tools_dir: &Path) -> Vec<Installed> {
                 Ok(t) if valid_id(&t.entry.id) => Some(t),
                 Ok(_) => None,
                 Err(err) => {
-                    eprintln!("{}: tool.json kaputt: {err}", e.path().display());
+                    eprintln!("{}: invalid tool.json: {err}", e.path().display());
                     None
                 }
             }
@@ -166,10 +187,10 @@ pub fn load_all(tools_dir: &Path) -> Vec<Installed> {
 
 pub fn load(tools_dir: &Path, id: &str) -> Result<Installed, String> {
     if !valid_id(id) {
-        return Err(format!("ungültige Tool-ID {id:?}"));
+        return Err(format!("invalid tool id {id:?}"));
     }
     let s = std::fs::read_to_string(tools_dir.join(id).join("tool.json"))
-        .map_err(|_| format!("Tool {id:?} ist nicht installiert"))?;
+        .map_err(|_| format!("tool {id:?} is not installed"))?;
     serde_json::from_str(&s).map_err(|e| e.to_string())
 }
 
@@ -186,7 +207,7 @@ async fn run(cmd: &str, args: &[&str]) -> Result<(), String> {
         .args(args)
         .output()
         .await
-        .map_err(|e| format!("{cmd} nicht gefunden: {e}"))?;
+        .map_err(|e| format!("could not run {cmd}: {e}"))?;
     if out.status.success() {
         Ok(())
     } else {
@@ -205,9 +226,10 @@ pub async fn install<R: Runtime>(
             install_github(app, tools_dir, entry, entry.repo.as_deref().unwrap(), asset).await
         }
         Source::Flatpak { flatpak_id, remote } => {
-            // Benutzer-Installation: braucht kein root und umgeht Fedoras gefiltertes Flathub.
+            // Per-user installation: no root required, and it avoids the
+            // filtered Flathub remote that some distributions ship.
             if remote == "flathub" {
-                progress(app, &entry.id, "Flathub einrichten …", None);
+                progress(app, stage(&entry.id, "flathub", None));
                 run(
                     "flatpak",
                     &[
@@ -220,12 +242,7 @@ pub async fn install<R: Runtime>(
                 )
                 .await?;
             }
-            progress(
-                app,
-                &entry.id,
-                format!("Installiere {flatpak_id} – das kann dauern …"),
-                None,
-            );
+            progress(app, stage(&entry.id, "flatpak", Some(flatpak_id)));
             run(
                 "flatpak",
                 &[
@@ -249,7 +266,7 @@ pub async fn install<R: Runtime>(
             write_record(&dir, &inst)?;
             Ok(inst)
         }
-        Source::Local { .. } => Err("Lokale Tools werden verknüpft, nicht installiert".into()),
+        Source::Local { .. } => Err("local tools are linked, not installed".into()),
     }
 }
 
@@ -261,7 +278,7 @@ async fn install_github<R: Runtime>(
     pattern: &str,
 ) -> Result<Installed, String> {
     let id = entry.id.as_str();
-    progress(app, id, "Suche neuestes Release …", None);
+    progress(app, stage(id, "resolving", None));
     let rel = github::latest_release(repo).await?;
     let asset = rel
         .assets
@@ -269,11 +286,11 @@ async fn install_github<R: Runtime>(
         .find(|a| {
             github::glob_match(pattern, &a.name) && safe_relative(&a.name) && !a.name.contains('/')
         })
-        .ok_or_else(|| format!("Kein Download in {} passt zu {pattern:?}", rel.tag_name))?
+        .ok_or_else(|| format!("no asset of release {} matches {pattern:?}", rel.tag_name))?
         .clone();
 
-    // In einen Staging-Ordner installieren und erst am Ende austauschen,
-    // damit ein abgebrochenes Update die alte Version nicht zerstört.
+    // Install into a staging folder and swap at the end, so an interrupted
+    // update never breaks the installed version.
     let staging = tools_dir.join(format!(".{id}.new"));
     let _ = std::fs::remove_dir_all(&staging);
     let files = staging.join("files");
@@ -282,25 +299,29 @@ async fn install_github<R: Runtime>(
     let download = staging.join(&asset.name);
     let size = asset.size;
     github::download(repo, &asset, &download, |done| {
-        let mb = done as f64 / 1_048_576.0;
         progress(
             app,
-            id,
-            format!("Lade {} ({mb:.1} MB)", asset.name),
-            (size > 0).then(|| done as f64 / size as f64),
+            Progress {
+                id,
+                stage: "downloading",
+                detail: Some(&asset.name),
+                bytes: Some(done),
+                fraction: (size > 0).then(|| done as f64 / size as f64),
+            },
         );
     })
     .await?;
 
-    progress(app, id, "Entpacke …", None);
+    progress(app, stage(id, "extracting", None));
     let lower = asset.name.to_lowercase();
-    let archive = [".tar.gz", ".tgz", ".tar.xz", ".tar.zst", ".tar.bz2", ".tar"]
+    let is_tar = [".tar.gz", ".tgz", ".tar.xz", ".tar.zst", ".tar.bz2", ".tar"]
         .iter()
         .any(|ext| lower.ends_with(ext));
-    if archive {
+    if is_tar {
         run(
             "tar",
             &[
+                "--no-same-owner",
                 "-xf",
                 &download.to_string_lossy(),
                 "-C",
@@ -322,14 +343,14 @@ async fn install_github<R: Runtime>(
         .await?;
         std::fs::remove_file(&download).map_err(|e| e.to_string())?;
     } else {
-        // Einzelne Datei (AppImage oder Binary)
+        // A single file (AppImage or binary).
         let target = files.join(&asset.name);
         std::fs::rename(&download, &target).map_err(|e| e.to_string())?;
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
             .map_err(|e| e.to_string())?;
     }
 
-    // Archive mit genau einem Oberordner: den als Wurzel nehmen.
+    // Archives with exactly one top-level folder: use it as the root.
     let mut root = "files".to_string();
     let top: Vec<_> = std::fs::read_dir(&files)
         .map_err(|e| e.to_string())?
@@ -346,8 +367,8 @@ async fn install_github<R: Runtime>(
         detected_run: None,
     };
     let root_dir = staging.join(inst.root.as_deref().unwrap());
-    // Nur raten, wenn es gar kein Manifest gibt (Stufe 0). Ein Manifest ohne
-    // `run` heißt: Das Tool wird ausschließlich über den Hub bedient.
+    // Only guess an executable when there is no manifest at all. A manifest
+    // without `run` means the tool is operated exclusively through tuxly.
     let has_manifest = entry.manifest.is_some() || Manifest::load(&root_dir)?.is_some();
     if !has_manifest {
         inst.detected_run = detect_executable(&root_dir);
@@ -365,8 +386,8 @@ async fn install_github<R: Runtime>(
     Ok(inst)
 }
 
-/// Sucht im Tool-Ordner etwas Startbares: zuerst ein AppImage, sonst die
-/// einzige ausführbare Datei.
+/// Looks for something to launch: an AppImage first, otherwise the only
+/// executable file.
 fn detect_executable(dir: &Path) -> Option<String> {
     let files: Vec<(String, bool)> = std::fs::read_dir(dir)
         .ok()?
@@ -389,33 +410,34 @@ fn detect_executable(dir: &Path) -> Option<String> {
     (exec.len() == 1).then(|| exec[0].0.clone())
 }
 
-/// Verknüpft einen lokalen Ordner mit `tuxhub.toml` als Tool (Entwicklermodus).
+/// Links a local folder with a `tuxly.toml` as a tool (developer mode).
 pub fn link_local(tools_dir: &Path, path: &Path) -> Result<Installed, String> {
     let path = path
         .canonicalize()
         .map_err(|e| format!("{}: {e}", path.display()))?;
-    let m = Manifest::load(&path)?.ok_or("Im Ordner liegt keine tuxhub.toml")?;
+    let m = Manifest::load(&path)?.ok_or("the folder does not contain a tuxly.toml")?;
     let id =
         m.id.clone()
-            .ok_or("tuxhub.toml braucht für lokale Tools eine `id`")?;
+            .ok_or("tuxly.toml needs an `id` for local tools")?;
     let entry = Entry {
         name: m.name.clone().unwrap_or_else(|| id.clone()),
         description: m.description.clone().unwrap_or_default(),
         icon: m.icon.clone(),
-        category: Some("Lokal".into()),
+        category: Some("local".into()),
         repo: None,
         homepage: None,
         source: Source::Local {
             path: path.to_string_lossy().into_owned(),
         },
         manifest: None,
+        translations: BTreeMap::new(),
         id,
     };
     entry.validate()?;
     let dir = tools_dir.join(&entry.id);
     if dir.join("tool.json").exists() {
         return Err(format!(
-            "Ein Tool mit der ID {:?} ist schon installiert",
+            "a tool with the id {:?} is already installed",
             entry.id
         ));
     }
@@ -438,11 +460,11 @@ pub async fn uninstall(tools_dir: &Path, inst: &Installed) -> Result<(), String>
         )
         .await?;
     }
-    // Bei lokalen Tools wird nur die Verknüpfung entfernt, nie der Ordner selbst.
+    // For local tools only the link is removed, never the folder itself.
     std::fs::remove_dir_all(tools_dir.join(inst.id())).map_err(|e| e.to_string())
 }
 
-/// Wie ein Tool gestartet wird: Programm, Argumente, Arbeitsordner.
+/// How a tool is launched: program, arguments and working directory.
 pub struct LaunchCmd {
     pub program: PathBuf,
     pub args: Vec<String>,
@@ -459,16 +481,16 @@ pub fn launch_cmd(tools_dir: &Path, inst: &Installed) -> Result<LaunchCmd, Strin
             flatpak: true,
         }),
         _ => {
-            let root = inst.root_dir(tools_dir).ok_or("Kein Tool-Ordner")?;
+            let root = inst.root_dir(tools_dir).ok_or("the tool has no folder")?;
             let manifest = inst.manifest(tools_dir);
             let (command, args) = match (&manifest.run, &inst.detected_run) {
                 (Some(r), _) => (r.command.clone(), r.args.clone()),
                 (None, Some(d)) => (d.clone(), vec![]),
-                (None, None) => return Err("Dieses Tool hat keinen Startbefehl".into()),
+                (None, None) => return Err("this tool has no launch command".into()),
             };
             let exe = root.join(&command);
             if !exe.is_file() {
-                return Err(format!("{} fehlt", exe.display()));
+                return Err(format!("{} is missing", exe.display()));
             }
             Ok(LaunchCmd {
                 program: exe,
@@ -480,7 +502,7 @@ pub fn launch_cmd(tools_dir: &Path, inst: &Installed) -> Result<LaunchCmd, Strin
     }
 }
 
-/// Startet das Tool ganz normal als eigenes Programm.
+/// Launches the tool as a regular application in its own window.
 pub fn launch(tools_dir: &Path, inst: &Installed) -> Result<(), String> {
     let lc = launch_cmd(tools_dir, inst)?;
     let mut cmd = std::process::Command::new(&lc.program);
@@ -492,13 +514,13 @@ pub fn launch(tools_dir: &Path, inst: &Installed) -> Result<(), String> {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .spawn()
-        .map_err(|e| format!("Start fehlgeschlagen: {e}"))?;
-    // Prozess abwarten, damit kein Zombie zurückbleibt.
+        .map_err(|e| format!("could not start the tool: {e}"))?;
+    // Reap the process so it does not linger as a zombie.
     std::thread::spawn(move || child.wait());
     Ok(())
 }
 
-/// Liefert das neueste Release-Tag, falls es neuer ist als das installierte.
+/// Returns the latest release tag if it differs from the installed one.
 pub async fn check_update(inst: &Installed) -> Result<Option<String>, String> {
     let (Source::GithubRelease { .. }, Some(repo)) = (&inst.entry.source, &inst.entry.repo) else {
         return Ok(None);
@@ -511,8 +533,8 @@ pub async fn check_update(inst: &Installed) -> Result<Option<String>, String> {
 mod tests {
     use super::*;
 
-    /// Lädt das Autoclicker-Release wirklich von GitHub (Netzwerk + Zugriff
-    /// auf das Repo nötig): `cargo test -- --ignored`
+    /// Downloads the autoclicker release from GitHub (requires network
+    /// access): `cargo test -- --ignored`
     #[tokio::test]
     #[ignore]
     async fn installs_autoclicker_release() {
@@ -520,7 +542,7 @@ mod tests {
             serde_json::from_str(include_str!("../../registry/index.json")).unwrap();
         let entry = entries.into_iter().find(|e| e.id == "autoclicker").unwrap();
         let app = tauri::test::mock_app();
-        let tmp = std::env::temp_dir().join(format!("tuxhub-test-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("tuxly-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
@@ -528,16 +550,16 @@ mod tests {
         assert!(inst.version.as_deref().unwrap().starts_with('v'));
         assert_eq!(
             inst.detected_run, None,
-            "Hub-Tool ohne [run] darf keinen Startbefehl raten"
+            "a tool without [run] must not get a guessed command"
         );
         let m = inst.manifest(&tmp);
         assert_eq!(m.level(), 2);
         let root = inst.root_dir(&tmp).unwrap();
         assert!(root.join(&m.rpc.unwrap().command).is_file());
         if let Some(ui) = &m.ui {
-            assert!(root.join(ui).is_file(), "UI {ui} fehlt im Release");
+            assert!(root.join(ui).is_file(), "UI {ui} missing from the release");
         }
-        // Erneut installieren = Update-Pfad
+        // Installing again exercises the update path.
         install(app.handle(), &tmp, &entry).await.unwrap();
         assert_eq!(load_all(&tmp).len(), 1);
         std::fs::remove_dir_all(&tmp).unwrap();
@@ -550,6 +572,26 @@ mod tests {
         assert!(!entries.is_empty());
         for e in &entries {
             e.validate().unwrap();
+            assert!(!e.description.is_empty(), "{} has no description", e.id);
+            if let Some(icon) = &e.icon {
+                assert!(
+                    icon.starts_with("https://"),
+                    "{}: workshop icons must be HTTPS URLs",
+                    e.id
+                );
+            }
         }
+    }
+
+    #[test]
+    fn rejects_unsafe_flatpak_ids() {
+        let mut entries: Vec<Entry> =
+            serde_json::from_str(include_str!("../../registry/index.json")).unwrap();
+        let mut e = entries.remove(1);
+        e.source = Source::Flatpak {
+            flatpak_id: "--help".into(),
+            remote: "flathub".into(),
+        };
+        assert!(e.validate().is_err());
     }
 }

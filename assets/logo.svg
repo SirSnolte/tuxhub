@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>tuxly</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1d2128"/>
+      <stop offset="1" stop-color="#121419"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5fd08e"/>
+      <stop offset="1" stop-color="#36a466"/>
+    </linearGradient>
+  </defs>
+  <rect x="32" y="32" width="960" height="960" rx="224" fill="url(#bg)"/>
+  <rect x="32.5" y="32.5" width="959" height="959" rx="223.5" fill="none" stroke="#ffffff" stroke-opacity="0.06"/>
+  <rect x="232" y="232" width="250" height="250" rx="64" fill="url(#accent)"/>
+  <rect x="542" y="232" width="250" height="250" rx="64" fill="#3a414d"/>
+  <rect x="232" y="542" width="250" height="250" rx="64" fill="#3a414d"/>
+  <rect x="542" y="542" width="250" height="250" rx="64" fill="#2b313b"/>
+</svg>

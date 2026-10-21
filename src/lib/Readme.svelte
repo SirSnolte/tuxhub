@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { t } from "./i18n.svelte";
   import { marked } from "marked";
+  import DOMPurify from "dompurify";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { api, errText } from "./api";
 
@@ -17,13 +19,15 @@
     api
       .readme(r)
       .then((md) => {
-        if (r === repo) html = marked.parse(md, { async: false });
+        // READMEs come from third-party repositories: strip scripts, event
+        // handlers and other active content before rendering.
+        if (r === repo) html = DOMPurify.sanitize(marked.parse(md, { async: false }), { USE_PROFILES: { html: true } });
       })
       .catch((e) => (error = errText(e)))
       .finally(() => (loading = false));
   });
 
-  // Links nicht im Hub-Fenster öffnen, sondern im Browser.
+  // Open links in the browser instead of the tuxly window.
   function onclick(e: MouseEvent) {
     const a = (e.target as HTMLElement).closest("a");
     if (!a) return;
@@ -36,9 +40,9 @@
 </script>
 
 {#if loading}
-  <p class="muted">README wird geladen …</p>
+  <p class="muted">{t("readme.loading")}</p>
 {:else if error}
-  <p class="muted">README nicht verfügbar: {error}</p>
+  <p class="muted">{t("readme.unavailable", { error })}</p>
 {:else}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="readme" {onclick}>{@html html}</div>

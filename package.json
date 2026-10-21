@@ -1,7 +1,7 @@
 {
-  "name": "tuxhub",
-  "version": "0.1.0",
-  "description": "",
+  "name": "tuxly",
+  "version": "0.2.0",
+  "description": "Modular hub for gaming on Linux",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
@@ -14,8 +14,12 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@lucide/svelte": "^1.61.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.14.0",
+    "dompurify": "^3.4.17",
     "marked": "^16.4.2"
   },
   "devDependencies": {

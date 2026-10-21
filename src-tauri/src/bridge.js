@@ -1,18 +1,19 @@
-// tuxhub-Bridge für Tool-Oberflächen.
+// tuxly bridge for tool interfaces.
 //
-// In der eigenen HTML-Seite einbinden:
-//   <script src="/__tuxhub/bridge.js"></script>
+// Include it in the tool's HTML page:
+//   <script src="/__tuxly/bridge.js"></script>
 //
-// Danach steht `window.tuxhub` bereit:
-//   await tuxhub.call("methode", { ... })   // JSON-RPC an den rpc-Prozess des Tools
-//   await tuxhub.action("toggle")           // eine Aktion aus tuxhub.toml auslösen
-//   await tuxhub.getSettings()              // gespeicherte Einstellungen
-//   await tuxhub.saveSettings({ key: 1 })   // speichern + an den Prozess schicken
-//   await tuxhub.launch()                   // Tool normal starten
-//   tuxhub.on("status", params => …)        // Benachrichtigungen des Prozesses
-//   tuxhub.on("theme", ({ dark }) => …)     // Hell/Dunkel des Hubs
+// It provides `window.tuxly`:
+//   await tuxly.call("method", { ... })    // JSON-RPC call to the tool's rpc process
+//   await tuxly.action("toggle")           // run an action declared in tuxly.toml
+//   await tuxly.getSettings()              // saved settings
+//   await tuxly.saveSettings({ key: 1 })   // save and send to the process
+//   await tuxly.launch()                   // launch the tool in its own window
+//   tuxly.on("status", (params) => …)      // notifications from the process
+//   tuxly.on("theme", ({ dark }) => …)     // light or dark appearance of tuxly
+//   tuxly.on("locale", ({ locale }) => …)  // user interface language, for example "en" or "de"
 (() => {
-  if (window.tuxhub) return;
+  if (window.tuxly) return;
   const pending = new Map();
   const listeners = new Map();
   let next = 0;
@@ -20,7 +21,7 @@
   window.addEventListener("message", (ev) => {
     if (ev.source !== window.parent) return;
     const m = ev.data;
-    if (!m || m.tuxhub !== 1) return;
+    if (!m || m.tuxly !== 1) return;
     if (m.reply != null) {
       const p = pending.get(m.reply);
       if (!p) return;
@@ -37,11 +38,11 @@
     return new Promise((resolve, reject) => {
       const id = ++next;
       pending.set(id, { resolve, reject });
-      window.parent.postMessage({ tuxhub: 1, id, op, ...payload }, "*");
+      window.parent.postMessage({ tuxly: 1, id, op, ...payload }, "*");
     });
   }
 
-  window.tuxhub = {
+  window.tuxly = {
     call: (method, params = {}) => request("call", { method, params }),
     action: (action) => request("action", { action }),
     getSettings: () => request("getSettings", {}),
@@ -54,5 +55,5 @@
     },
   };
 
-  window.parent.postMessage({ tuxhub: 1, op: "ready" }, "*");
+  window.parent.postMessage({ tuxly: 1, op: "ready" }, "*");
 })();

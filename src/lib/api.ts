@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { i18n } from "./i18n.svelte";
 
 export type Cmd = { command: string; args?: string[] };
 
@@ -47,6 +48,8 @@ export type Entry = {
   homepage?: string;
   source: Source;
   manifest?: Manifest;
+  /** Localized texts by language code, e.g. `{ "de": { "description": "…" } }`. */
+  translations?: Record<string, { description?: string }>;
 };
 
 export type Tool = {
@@ -109,10 +112,10 @@ export const api = {
   embedStop: (id: string) => invoke<void>("embed_stop", { id }),
 };
 
-export const sourceLabel = (s: Source) =>
-  s.type === "github-release" ? "GitHub-Release" : s.type === "flatpak" ? "Flatpak" : "Lokal";
-
-export const levelLabel = ["Starten", "Web-UI", "Integriert"] as const;
+/** Description in the current UI language, falling back to the English text. */
+export function describe(entry: Entry): string {
+  return entry.translations?.[i18n.locale]?.description ?? entry.description;
+}
 
 export function errText(e: unknown): string {
   return typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e);

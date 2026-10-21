@@ -1,11 +1,11 @@
-//! Regelmäßige Suche nach neuen Releases installierter Tools.
+//! Periodic check for new releases of installed tools.
 
 use crate::{Hub, system, tools};
 use std::collections::BTreeMap;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
-/// Erste Prüfung kurz nach dem Start, danach alle 6 Stunden.
+/// First check shortly after startup, then every six hours.
 const FIRST_CHECK: Duration = Duration::from_secs(15);
 const INTERVAL: Duration = Duration::from_secs(6 * 3600);
 
@@ -22,7 +22,7 @@ pub fn spawn_checker(app: AppHandle) {
     });
 }
 
-/// Prüft alle GitHub-Tools und gibt `Tool-ID → neues Tag` zurück.
+/// Checks all GitHub-based tools and returns `tool id -> new tag`.
 pub async fn check_all(app: &AppHandle) -> BTreeMap<String, String> {
     let installed = tools::load_all(&app.state::<Hub>().tools_dir);
     let mut found = BTreeMap::new();
@@ -32,7 +32,7 @@ pub async fn check_all(app: &AppHandle) -> BTreeMap<String, String> {
                 found.insert(inst.entry.id.clone(), tag);
             }
             Ok(None) => {}
-            Err(e) => eprintln!("Update-Prüfung {}: {e}", inst.entry.id),
+            Err(e) => eprintln!("update check for {} failed: {e}", inst.entry.id),
         }
     }
     set(app, found.clone());
@@ -45,7 +45,7 @@ pub fn set(app: &AppHandle, map: BTreeMap<String, String>) {
     let _ = app.emit("updates-changed", map);
 }
 
-/// Nach einer Installation/Deinstallation den Eintrag entfernen.
+/// Removes the entry after the tool was installed or removed.
 pub fn forget(app: &AppHandle, id: &str) {
     let mut map = app.state::<Hub>().updates.lock().unwrap().clone();
     if map.remove(id).is_some() {

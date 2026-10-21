@@ -1,26 +1,53 @@
 import { listen } from "@tauri-apps/api/event";
+import { t } from "./i18n.svelte";
 
 export type ToolEvent = { addon: string; method: string; params: unknown };
-type Progress = { id: string; text: string; fraction: number | null };
+
+/** Installation progress as emitted by the backend (`tool-progress`). */
+export type Progress = {
+  id: string;
+  stage: "resolving" | "downloading" | "extracting" | "flathub" | "flatpak";
+  /** File name (downloading) or Flatpak id (flatpak). */
+  detail: string | null;
+  bytes: number | null;
+  fraction: number | null;
+};
 
 export const hub = $state({
   toasts: [] as { id: number; text: string; kind: "error" | "info" }[],
-  /** Letzte `status`-Benachrichtigung je Tool */
+  /** Last `status` notification per tool. */
   status: {} as Record<string, Record<string, unknown>>,
-  /** Laufende Installationen */
+  /** Installations in progress. */
   progress: {} as Record<string, Progress>,
 });
+
+export function progressText(p: Progress): string {
+  switch (p.stage) {
+    case "downloading":
+      return t("progress.downloading", {
+        file: p.detail ?? "",
+        mb: ((p.bytes ?? 0) / 1_048_576).toFixed(1),
+      });
+    case "flatpak":
+      return t("progress.flatpak", { id: p.detail ?? "" });
+    default:
+      return t(`progress.${p.stage}`);
+  }
+}
 
 let toastId = 0;
 export function toast(text: string, kind: "error" | "info" = "error") {
   const id = ++toastId;
   hub.toasts.push({ id, text, kind });
-  setTimeout(() => {
-    hub.toasts = hub.toasts.filter((t) => t.id !== id);
-  }, kind === "error" ? 7000 : 3500);
+  setTimeout(
+    () => {
+      hub.toasts = hub.toasts.filter((x) => x.id !== id);
+    },
+    kind === "error" ? 7000 : 3500,
+  );
 }
 
-/** Wer alle Tool-Events mitlesen will (z. B. die iframe-Bridge). */
+/** Subscribers to all tool events (for example the iframe bridge). */
 const eventListeners = new Set<(ev: ToolEvent) => void>();
 export function onToolEvent(cb: (ev: ToolEvent) => void) {
   eventListeners.add(cb);

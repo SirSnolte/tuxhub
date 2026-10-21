@@ -1,101 +1,118 @@
-# tuxhub
+<p align="center">
+  <img src="assets/logo.svg" width="96" height="96" alt="tuxly logo">
+</p>
 
-Modularer Hub für Linux-Gaming. Jedes Feature ist eine eigene Software in
-einem eigenen GitHub-Repo – der Hub installiert sie aus dem **Workshop**, hält
-sie aktuell und macht sie bedienbar. Jede Software läuft auch ohne den Hub.
+<h1 align="center">tuxly</h1>
 
-> Status: früh in Entwicklung (Phase 1). Siehe [PLAN.md](PLAN.md).
+<p align="center">
+  A modular hub for gaming on Linux.
+</p>
 
-## Entwickeln
+<p align="center">
+  <a href="https://github.com/SirSnolte/tuxly/releases/latest"><img src="https://img.shields.io/github/v/release/SirSnolte/tuxly" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/SirSnolte/tuxly" alt="License: MIT"></a>
+</p>
 
-Voraussetzungen (Fedora):
+tuxly installs, updates and launches gaming tools for Linux from a curated
+workshop. Each tool is an independent application with its own repository.
+tuxly downloads it from its official source, keeps it up to date and lets you
+use it either in its own window or directly inside tuxly.
+
+## Features
+
+- **Workshop:** a curated list of tools, installed from GitHub releases or
+  Flathub with a single click.
+- **Updates:** tuxly checks installed tools and itself for new releases.
+  Updates of tuxly are cryptographically signed and verified before they are
+  installed.
+- **Run inside tuxly:** standalone applications can run on a virtual display
+  and appear inside the tuxly window. A separate window is always available.
+- **Integration for tool authors:** tools can provide settings, actions,
+  global hotkeys and their own interface through a small manifest and a
+  JSON-RPC protocol. See [docs/tool-development.md](docs/tool-development.md).
+- **Global hotkeys on Wayland** through the XDG desktop portal, without reading
+  keyboard input.
+- English and German user interface.
+
+## Installation
+
+Download the package for your distribution from the
+[latest release](https://github.com/SirSnolte/tuxly/releases/latest):
+
+| Distribution | Package |
+|---|---|
+| Fedora, openSUSE | `.rpm` |
+| Debian, Ubuntu, Linux Mint | `.deb` |
+| Other distributions | `.AppImage` |
 
 ```bash
-sudo dnf install rust cargo webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel
+sudo dnf install ./tuxly-*.x86_64.rpm      # Fedora
+sudo apt install ./tuxly_*_amd64.deb       # Debian, Ubuntu
 ```
 
-Starten:
+tuxly updates itself from then on. Installing an update of the `.rpm` or
+`.deb` package asks for your password once, as for any system package.
+
+### Optional dependencies
+
+| Feature | Requirement |
+|---|---|
+| Running applications inside tuxly | `xpra` (available in the repositories of all major distributions) |
+| Installing Flatpak applications | `flatpak` |
+| Global hotkeys | A desktop that implements the GlobalShortcuts portal, such as KDE Plasma or GNOME 48 and later |
+
+## Building from source
+
+Requirements: Rust (stable), Node.js 20 or later, and the WebKitGTK
+development files.
 
 ```bash
-npm install
-npm run tauri dev
+# Fedora
+sudo dnf install webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel
+# Debian, Ubuntu
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+```
+
+```bash
+npm ci
+npm run tauri dev      # development build with live reload
+npm run tauri build    # release build and packages
+```
+
+Tests and checks:
+
+```bash
+cargo test
+cargo clippy --all-targets -- -D warnings
+npm run check
 ```
 
 ## Workshop
 
-Der Workshop-Index liegt in [`registry/index.json`](registry/index.json).
-Ein Eintrag:
+The workshop index is [`registry/index.json`](registry/index.json). Entries are
+reviewed before they are added. Third-party tools are developed by their
+respective authors; tuxly installs them only from their official sources and
+does not modify them.
 
-```json
-{
-  "id": "mein-tool",
-  "name": "Mein Tool",
-  "description": "Was es tut.",
-  "icon": "🎮",
-  "category": "Eingabe",
-  "repo": "SirSnolte/tuxhub-mein-tool",
-  "source": { "type": "github-release", "asset": "*x86_64.tar.gz" }
-}
-```
+Proposals for new entries are welcome as issues. Please include the repository,
+the source (GitHub release or Flathub) and a short description.
 
-`source` ist entweder `github-release` (neuestes Release, `asset` als Muster)
-oder `flatpak` (`flatpak_id`). Optional kann `manifest` das `tuxhub.toml`
-des Tools ersetzen – so lassen sich fremde Tools integrieren, ohne dass deren
-Repo etwas ändern muss.
+## Security
 
-## Im Hintergrund
+Tools installed through tuxly run with the permissions of your user account,
+like any other application. Please report vulnerabilities as described in
+[SECURITY.md](SECURITY.md).
 
-Der Hub läuft nach dem Schließen im Tray weiter, damit globale Hotkeys
-funktionieren (abschaltbar in den Einstellungen). Optional startet er beim
-Anmelden (`~/.config/autostart`), auf Wunsch nur im Tray. Installierte Tools
-werden alle 6 Stunden auf neue Releases geprüft.
+## Contributing
 
-## Integrationsstufen
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-| Stufe | Das Tool braucht | Der Hub kann |
-|---|---|---|
-| 0 | nichts (Release oder Flatpak) | installieren, aktualisieren, README zeigen, starten – im eigenen Fenster oder **im Hub** (eigener virtueller Bildschirm über xpra) |
-| 1 | ein lokales Web-Interface (`web_url`) | es im Hub einbetten – auch wenn es Einbetten per Header verbietet (lokaler Proxy), oder im eigenen Fenster öffnen |
-| 2 | `tuxhub.toml` | Einstellungen, Aktionen, globale Hotkeys, eigene HTML-Oberfläche |
+## License
 
-### `tuxhub.toml`
+tuxly is released under the [MIT License](LICENSE). Bundled third-party
+components and their licenses are listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-```toml
-id = "mein-tool"        # nur für lokal verknüpfte Tools nötig
-name = "Mein Tool"
-
-[run]                   # normal starten
-command = "mein-tool"
-
-[rpc]                   # Hintergrundprozess für den Hub
-command = "mein-tool"
-args = ["--tuxhub"]
-
-ui = "ui/index.html"    # optional: eigene Oberfläche im Hub
-
-[[settings]]
-key = "interval_ms"
-label = "Intervall"
-type = "number"         # number | select | toggle | text
-default = 100
-
-[[actions]]
-id = "toggle"
-label = "Start / Stopp"
-primary = true
-shortcut = "F8"         # globaler Hotkey über das Desktop-Portal
-```
-
-**RPC-Protokoll:** eine JSON-Nachricht pro Zeile über stdin/stdout.
-
-- Hub → Tool: `{"id":1,"method":"configure","params":{…}}`, `{"id":2,"method":"action","params":{"id":"toggle"}}`, `{"method":"shutdown"}`
-- Tool → Hub: `{"id":1,"result":…}` oder `{"id":1,"error":{"message":"…"}}`
-- Benachrichtigungen: `{"method":"status","params":{"running":true,"text":"Läuft"}}`
-
-**Eigene Oberfläche:** `<script src="/__tuxhub/bridge.js"></script>` einbinden,
-danach `tuxhub.call(...)`, `tuxhub.action(...)`, `tuxhub.getSettings()`,
-`tuxhub.saveSettings(...)` und `tuxhub.on("status", …)` nutzen.
-
-## Lizenz
-
-MIT
+Linux is a registered trademark of Linus Torvalds. All other product names are
+trademarks of their respective owners. tuxly is not affiliated with the
+projects listed in its workshop.

@@ -1,7 +1,10 @@
 <script lang="ts">
+  import { t } from "./i18n.svelte";
+  import { Play } from "@lucide/svelte";
+  import ToolIcon from "./ToolIcon.svelte";
   import { onDestroy } from "svelte";
   import { fade } from "svelte/transition";
-  import { api, errText, type Tool } from "./api";
+  import { api, describe, errText, type Tool } from "./api";
   import { toast } from "./state.svelte";
 
   let { tool, running = $bindable(false) }: { tool: Tool; running?: boolean } = $props();
@@ -13,28 +16,28 @@
   let frame = $state<HTMLIFrameElement>();
   let timer: ReturnType<typeof setInterval> | undefined;
   let watch: ReturnType<typeof setInterval> | undefined;
-  /** Ist ein App-Fenster im Client sichtbar? Bis dahin liegt das Skeleton darüber. */
+  /** Whether an application window is visible; the skeleton covers the view until then. */
   let ready = $state(false);
-  /** War schon mal ein Fenster da? Dann heißt „kein Fenster“: wird beendet. */
+  /** Whether a window was shown before; a missing window then means the app is closing. */
   let wasReady = $state(false);
   let checkingEnd = false;
-  /** Seit wann sieht das Fenster fertig aus? Erst nach STABLE_MS wird es gezeigt. */
+  /** Since when the window looks ready; it is revealed after STABLE_MS. */
   let readySince: number | null = null;
   const STABLE_MS = 600;
-  /** Seit wann gibt es überhaupt ein Fenster? Nach FALLBACK_MS wird es auf jeden Fall gezeigt
-   *  (für Apps, die sich nicht maximieren lassen). */
+  /** Since when any window exists; after FALLBACK_MS it is revealed regardless
+   *  (for applications that cannot be maximized). */
   let winSince: number | null = null;
   const FALLBACK_MS = 3000;
   /** Zeitpunkte stiller Neuverbindungen – gegen Endlosschleifen. */
   let retries: number[] = [];
-  /** Zu viele Abbrüche hintereinander: nicht mehr automatisch neu verbinden. */
+  /** Too many disconnects in a row: stop reconnecting automatically. */
   let lost = $state(false);
 
   $effect(() => {
     running = url !== null;
   });
 
-  // Beim Öffnen der Seite: läuft schon eine Sitzung? Fehlt xpra?
+  // On open: is a session already running, and is xpra installed?
   (async () => {
     missing = await api.embedMissing().catch(() => null);
     const s = await api.embedStatus(id).catch(() => null);
@@ -48,11 +51,11 @@
     readySince = null;
     winSince = null;
     clearInterval(watch);
-    // Der xpra-Client kommt von derselben Herkunft wie der Hub, deshalb können
-    // wir in den iframe schauen: Fenster da? Oder auf die Verbindungsseite gesprungen?
+    // The xpra client is served from the same origin as tuxly, so the iframe
+    // can be inspected: is a window present, or did it switch to its connect page?
     watch = setInterval(inspect, 200);
     clearInterval(timer);
-    // Merken, wenn die App drinnen geschlossen wird.
+    // Notice when the application is closed from inside.
     timer = setInterval(async () => {
       const s = await api.embedStatus(id).catch(() => null);
       if (!s) {
@@ -77,13 +80,13 @@
         handleDisconnect();
         return;
       }
-      // App-Fenster sind <div>s mit rein numerischer Fenster-ID direkt in #screen
-      // (die Klasse „window“ überschreibt xpra später mit wmclass-Klassen).
+      // Application windows are <div>s with a numeric window id directly in
+      // #screen (xpra later replaces the "window" class with wmclass classes).
       const screen = w.document.getElementById("screen");
       const win = screen
         ? (Array.from(screen.children).find((c) => c.tagName === "DIV" && /^\d+$/.test(c.id)) as HTMLElement | undefined)
         : undefined;
-      // Fertig = Fenster da, maximiert (füllt die Fläche) und Inhalt gezeichnet.
+      // Ready means: window present, maximized (fills the area) and painted.
       const canvas = win?.querySelector("canvas");
       const filled =
         !!win &&
@@ -117,7 +120,7 @@
     }
   }
 
-  /** Verbindung weg: Sitzung zu Ende → Startkarte, sonst still neu verbinden. */
+  /** Connection lost: show the start card if the session ended, otherwise reconnect. */
   async function handleDisconnect() {
     if (checkingEnd) return;
     checkingEnd = true;
@@ -128,7 +131,7 @@
       url = null;
     } else if (frame) {
       const now = Date.now();
-      retries = retries.filter((t) => now - t < 20000);
+      retries = retries.filter((ts) => now - ts < 20000);
       if (retries.length >= 3) {
         lost = true;
       } else {
@@ -157,7 +160,7 @@
     url = null;
   }
 
-  /** Bild neu aufbauen (z. B. nach einem Hänger). */
+  /** Reloads the view, for example after a stall. */
   export function reconnect() {
     if (frame && url) {
       ready = false;
@@ -169,11 +172,11 @@
     }
   }
 
-  /** App im Hub beenden und normal im eigenen Fenster starten. */
+  /** Stops the embedded session and launches the application in its own window. */
   export async function ownWindow() {
     if (url) await stop();
     api.launch(id).then(
-      () => toast(`${tool.entry.name} im eigenen Fenster gestartet`, "info"),
+      () => toast(t("embed.startedWindow", { name: tool.entry.name }), "info"),
       (e) => toast(errText(e)),
     );
   }
@@ -191,7 +194,7 @@
       ></iframe>
     {/if}
     {#if !ready}
-      <div class="skeleton" out:fade={{ duration: 250 }} aria-busy="true" aria-label={wasReady ? "Wird beendet" : "App startet"}>
+      <div class="skeleton" out:fade={{ duration: 250 }} aria-busy="true" aria-label={wasReady ? t("embed.stopping", { name: tool.entry.name }) : t("embed.starting", { name: tool.entry.name })}>
         <div class="sk-side">
           <span class="sk sk-logo"></span>
           <span class="sk sk-dot"></span>
@@ -213,11 +216,11 @@
         </div>
         <div class="sk-label">
           {#if lost}
-            Verbindung zu {tool.entry.name} verloren
-            <button class="small-btn" onclick={reconnect}>Neu verbinden</button>
+            {t("embed.lost", { name: tool.entry.name })}
+            <button class="small-btn" onclick={reconnect}>{t("tool.reconnect")}</button>
           {:else}
             <span class="spin"></span>
-            {wasReady ? `${tool.entry.name} wird beendet …` : `${tool.entry.name} startet …`}
+            {wasReady ? t("embed.stopping", { name: tool.entry.name }) : t("embed.starting", { name: tool.entry.name })}
           {/if}
         </div>
       </div>
@@ -225,18 +228,27 @@
   </div>
 {:else}
   <section class="card start">
-    <div class="icon">{tool.entry.icon ?? "🧩"}</div>
+    <ToolIcon icon={tool.entry.icon} category={tool.entry.category} toolId={tool.entry.id} size={52} />
     <div class="text">
       <h2>{tool.entry.name}</h2>
-      {#if tool.entry.description}<p class="muted">{tool.entry.description}</p>{/if}
+      <p class="muted">{describe(tool.entry)}</p>
       {#if missing}
-        <pre class="notice">{missing}</pre>
+        <div class="notice">
+          <p>{t("embed.missing", { dep: missing })}</p>
+          {#if missing === "xpra"}
+            <code>sudo dnf install xpra</code> (Fedora) · <code>sudo apt install xpra</code> (Debian, Ubuntu) ·
+            <code>sudo pacman -S xpra</code> (Arch)
+          {/if}
+        </div>
       {/if}
       <div class="buttons">
-        <button class="primary" disabled={!!missing || starting} onclick={start}>▶ Im Hub starten</button>
+        <button class="primary start-btn" disabled={!!missing || starting} onclick={start}>
+          <Play size={15} aria-hidden="true" />
+          {t("embed.start")}
+        </button>
       </div>
       <p class="muted small">
-        Die App läuft dann hier im Hub. Für 3D-Spiele ist „Im eigenen Fenster“ (oben rechts) besser.
+        {t("embed.hint")}
       </p>
     </div>
   </section>
@@ -259,7 +271,7 @@
     background: var(--panel);
   }
 
-  /* Skeleton: deckt den xpra-Client ab, bis ein App-Fenster da ist */
+  /* Skeleton covering the xpra client until an application window is ready */
   .skeleton {
     position: absolute;
     inset: 0;
@@ -390,8 +402,10 @@
     padding: 22px;
     align-items: flex-start;
   }
-  .icon {
-    font-size: 44px;
+  .start-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
   }
   .text {
     flex: 1;
@@ -408,8 +422,7 @@
   .small {
     font-size: 12px;
   }
-  pre.notice {
-    white-space: pre-wrap;
-    font: inherit;
+  .notice p {
+    margin: 0 0 6px;
   }
 </style>

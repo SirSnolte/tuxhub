@@ -1,11 +1,11 @@
-//! Laufzeit für native Add-ons.
+//! Runtime for tool processes (integration level 2).
 //!
-//! Jedes Add-on läuft als eigener Prozess. Der Hub schreibt JSON-RPC-Anfragen
-//! zeilenweise auf stdin (`{"id":1,"method":"…","params":…}`), das Add-on
-//! antwortet auf stdout (`{"id":1,"result":…}` bzw. `{"id":1,"error":{"message":…}}`)
-//! und kann jederzeit Benachrichtigungen ohne `id` senden
-//! (`{"method":"status","params":{…}}`). Die landen als Tauri-Event
-//! `addon-event` im Frontend.
+//! Each tool runs as a separate process. tuxly writes one JSON-RPC request
+//! per line to its stdin (`{"id":1,"method":"…","params":…}`). The tool answers
+//! on stdout (`{"id":1,"result":…}` or `{"id":1,"error":{"message":…}}`) and may
+//! send notifications without an `id` at any time
+//! (`{"method":"status","params":{…}}`). Notifications are forwarded to the
+//! user interface as the `addon-event` Tauri event.
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -43,8 +43,8 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    /// Startet das Add-on, falls es nicht schon läuft. Gibt `true` zurück, wenn
-    /// es neu gestartet wurde.
+    /// Starts the tool process unless it is already running. Returns `true`
+    /// when a new process was started.
     pub async fn ensure(
         &self,
         app: &AppHandle,
@@ -69,7 +69,7 @@ impl Runtime {
             .stderr(Stdio::inherit())
             .kill_on_drop(true)
             .spawn()
-            .map_err(|e| format!("{} konnte nicht gestartet werden: {e}", exe.display()))?;
+            .map_err(|e| format!("could not start {}: {e}", exe.display()))?;
 
         let stdin = child.stdin.take().expect("stdin piped");
         let stdout = child.stdout.take().expect("stdout piped");
@@ -115,7 +115,7 @@ impl Runtime {
                     );
                 }
             }
-            // Offene Anfragen scheitern, sobald die Sender fallen gelassen werden.
+            // Pending requests fail once their senders are dropped.
             pending2.lock().unwrap().clear();
             let _ = app2.emit(
                 "addon-event",
@@ -143,20 +143,20 @@ impl Runtime {
         let (tx, rx) = oneshot::channel();
         {
             let mut procs = self.procs.lock().await;
-            let p = procs.get_mut(id).ok_or("Add-on läuft nicht")?;
+            let p = procs.get_mut(id).ok_or("the tool process is not running")?;
             p.pending.lock().unwrap().insert(n, tx);
             let mut line = json!({ "id": n, "method": method, "params": params }).to_string();
             line.push('\n');
             p.stdin
                 .write_all(line.as_bytes())
                 .await
-                .map_err(|e| format!("Senden an Add-on fehlgeschlagen: {e}"))?;
+                .map_err(|e| format!("could not send to the tool process: {e}"))?;
             p.stdin.flush().await.map_err(|e| e.to_string())?;
         }
         tokio::time::timeout(Duration::from_secs(5), rx)
             .await
-            .map_err(|_| "Add-on antwortet nicht".to_string())?
-            .map_err(|_| "Add-on wurde beendet".to_string())?
+            .map_err(|_| "the tool process did not respond".to_string())?
+            .map_err(|_| "the tool process exited".to_string())?
     }
 
     pub async fn is_running(&self, id: &str) -> bool {
@@ -176,7 +176,7 @@ impl Runtime {
     pub async fn stop(&self, id: &str) {
         let proc = self.procs.lock().await.remove(id);
         if let Some(mut p) = proc {
-            // Erst höflich fragen, dann hart beenden.
+            // Ask the process to exit first, then terminate it.
             let _ = p.stdin.write_all(b"{\"method\":\"shutdown\"}\n").await;
             let _ = p.stdin.flush().await;
             if tokio::time::timeout(Duration::from_secs(2), p.child.wait())

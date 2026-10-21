@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimaler RPC-Prozess für tuxhub: eine JSON-Nachricht pro Zeile."""
+"""Minimal RPC process for tuxly: one JSON message per line on stdin/stdout."""
 
 import json
 import sys
@@ -13,8 +13,8 @@ def send(msg):
 
 
 def status():
-    send({"method": "status", "params": {"running": False, "count": count,
-                                         "text": f"{settings.get('greeting', 'Hallo')}! Zähler: {count}"}})
+    greeting = settings.get("greeting", "Hello")
+    send({"method": "status", "params": {"running": False, "count": count, "text": f"{greeting}. Count: {count}"}})
 
 
 for line in sys.stdin:
@@ -32,10 +32,10 @@ for line in sys.stdin:
         elif method == "echo":
             result = params
         else:
-            raise ValueError(f"unbekannte Methode {method}")
+            raise ValueError(f"unknown method {method}")
         if mid is not None:
             send({"id": mid, "result": result})
         status()
-    except Exception as e:  # Fehler an den Hub zurückgeben
+    except Exception as e:  # report errors back to tuxly
         if mid is not None:
             send({"id": mid, "error": {"message": str(e)}})

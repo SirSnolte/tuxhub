@@ -1,11 +1,14 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { api, errText, levelLabel, sourceLabel, type ShortcutStatus, type Tool } from "./api";
-  import { hub, onToolEvent, toast } from "./state.svelte";
+  import { CircleCheck } from "@lucide/svelte";
+  import { api, describe, errText, type ShortcutStatus, type Tool } from "./api";
+  import { hub, onToolEvent, progressText, toast } from "./state.svelte";
+  import { i18n, t, type Key } from "./i18n.svelte";
   import Readme from "./Readme.svelte";
   import SettingsForm from "./SettingsForm.svelte";
   import WebPanel from "./WebPanel.svelte";
   import EmbedPanel from "./EmbedPanel.svelte";
+  import ToolIcon from "./ToolIcon.svelte";
 
   let {
     tool,
@@ -15,7 +18,7 @@
   }: {
     tool: Tool;
     shortcuts: ShortcutStatus | null;
-    /** Von der automatischen Update-Prüfung gefundene Version */
+    /** Newer version found by the background update check. */
     knownUpdate?: string | null;
     onchanged: () => void;
   } = $props();
@@ -25,19 +28,18 @@
   const status = $derived(hub.status[id]);
   const progress = $derived(hub.progress[id]);
   const isLocal = $derived(tool.entry.source.type === "local");
+  const webTool = $derived(!!m.web_url && !m.ui);
+  const plainApp = $derived(tool.level === 0 && tool.can_launch);
 
   let busy = $state(false);
-  /** Läuft die App gerade „im Hub“? Dann README ausblenden und Start-Knopf oben sparen. */
+  /** Whether a standalone app is currently shown inside tuxly. */
   let embedded = $state(false);
   let embedPanel = $state<EmbedPanel>();
   let webPanel = $state<WebPanel>();
-  const webTool = $derived(!!m.web_url && !m.ui);
-  const plainApp = $derived(tool.level === 0 && tool.can_launch);
   let update = $state<string | null>(null);
   let checked = $state(false);
 
   $effect(() => {
-    // Beim Wechsel des Tools den Stand der automatischen Prüfung übernehmen.
     void id;
     update = knownUpdate;
     checked = false;
@@ -60,27 +62,34 @@
     await run(async () => {
       update = await api.checkUpdate(id);
       checked = true;
-      if (!update) toast("Schon aktuell", "info");
     });
+  }
+
+  function uninstall() {
+    const question = isLocal ? "tool.confirmUnlink" : "tool.confirmUninstall";
+    if (confirm(t(question, { name: tool.entry.name }))) {
+      run(() => api.uninstall(id), t("tool.removed", { name: tool.entry.name }));
+    }
   }
 
   function hotkeyFor(action: string) {
     return shortcuts?.bindings.find((b) => b.tool === id && b.action === action)?.trigger;
   }
 
-  // ---- Bridge für eigene Tool-Oberflächen (iframe) ----
+  // Bridge for tool-provided interfaces (iframe, see bridge.js).
   let frame = $state<HTMLIFrameElement>();
 
   function post(msg: Record<string, unknown>) {
-    frame?.contentWindow?.postMessage({ tuxhub: 1, ...msg }, "*");
+    frame?.contentWindow?.postMessage({ tuxly: 1, ...msg }, "*");
   }
 
   function onmessage(ev: MessageEvent) {
     if (!frame || ev.source !== frame.contentWindow) return;
     const msg = ev.data;
-    if (!msg || msg.tuxhub !== 1) return;
+    if (!msg || msg.tuxly !== 1) return;
     if (msg.op === "ready") {
       post({ event: "theme", params: { dark: matchMedia("(prefers-color-scheme: dark)").matches } });
+      post({ event: "locale", params: { locale: i18n.locale } });
       if (status) post({ event: "status", params: status });
       return;
     }
@@ -92,11 +101,16 @@
       launch: () => api.launch(id),
     };
     const op = ops[msg.op];
-    const p = op ? op() : Promise.reject(`Unbekannte Operation ${msg.op}`);
-    p.then((result) => post({ reply: msg.id, result: result ?? null }))
+    const result = op ? op() : Promise.reject(t("tool.unknownOp", { op: String(msg.op) }));
+    result
+      .then((value) => post({ reply: msg.id, result: value ?? null }))
       .catch((e) => post({ reply: msg.id, error: errText(e) }))
       .finally(onchanged);
   }
+
+  $effect(() => {
+    post({ event: "locale", params: { locale: i18n.locale } });
+  });
 
   const off = onToolEvent((ev) => {
     if (ev.addon === id) post({ event: ev.method, params: ev.params });
@@ -108,68 +122,85 @@
 
 <div class="page">
   <header>
-    <div class="icon">{tool.entry.icon ?? "🧩"}</div>
+    <ToolIcon icon={tool.entry.icon} category={tool.entry.category} toolId={id} size={56} />
     <div class="title">
       <h1>{tool.entry.name}</h1>
       <div class="meta">
         {#if tool.version}<span class="badge">{tool.version}</span>{/if}
-        <span class="badge">{sourceLabel(tool.entry.source)}</span>
-        <span class="badge accent">Stufe {tool.level}: {levelLabel[tool.level]}</span>
-        {#if tool.running}<span class="badge accent">● läuft</span>{/if}
+        <span class="badge">{t(`source.${tool.entry.source.type}` as Key)}</span>
+        <span class="badge">{t(`level.${tool.level}` as Key)}</span>
+        {#if tool.running}<span class="badge accent">{t("tool.running")}</span>{/if}
       </div>
     </div>
     <div class="buttons">
       {#if tool.can_launch && !plainApp}
-        <button class="primary" disabled={busy} onclick={() => run(() => api.launch(id), `${tool.entry.name} gestartet`)}>
-          Starten
+        <button
+          class="primary"
+          disabled={busy}
+          onclick={() => run(() => api.launch(id), t("tool.started", { name: tool.entry.name }))}
+        >
+          {t("tool.start")}
         </button>
       {/if}
       {#if tool.entry.source.type === "github-release"}
         {#if update}
-          <button disabled={busy} onclick={() => run(() => api.install(id), `Auf ${update} aktualisiert`)}>
-            Update auf {update}
+          <button
+            disabled={busy}
+            onclick={() => run(() => api.install(id), t("tool.updatedTo", { version: update ?? "" }))}
+          >
+            {t("tool.updateTo", { version: update })}
+          </button>
+        {:else if checked}
+          <button disabled>
+            <CircleCheck size={15} aria-hidden="true" />
+            {t("tool.upToDate")}
           </button>
         {:else}
-          <button disabled={busy} onclick={checkUpdate}>{checked ? "Aktuell ✓" : "Nach Updates suchen"}</button>
+          <button disabled={busy} onclick={checkUpdate}>{t("tool.checkUpdates")}</button>
         {/if}
       {/if}
       {#if tool.running}
-        <button disabled={busy} onclick={() => run(() => api.stop(id))}>Prozess beenden</button>
+        <button disabled={busy} onclick={() => run(() => api.stop(id))}>{t("tool.stopProcess")}</button>
       {/if}
       {#if (plainApp && embedded) || webTool}
-        <button onclick={() => (webTool ? webPanel?.reconnect() : embedPanel?.reconnect())}>Neu verbinden</button>
+        <button onclick={() => (webTool ? webPanel?.reconnect() : embedPanel?.reconnect())}>
+          {t("tool.reconnect")}
+        </button>
       {/if}
       {#if plainApp || webTool}
-        <button onclick={() => (webTool ? webPanel?.openWindow() : embedPanel?.ownWindow())}>Im eigenen Fenster</button>
+        <button onclick={() => (webTool ? webPanel?.openWindow() : embedPanel?.ownWindow())}>
+          {t("tool.ownWindow")}
+        </button>
       {/if}
-      <button
-        class="danger"
-        disabled={busy}
-        onclick={() => {
-          const what = isLocal ? "Verknüpfung entfernen" : "deinstallieren";
-          if (confirm(`${tool.entry.name} ${what}?`)) run(() => api.uninstall(id), `${tool.entry.name} entfernt`);
-        }}
-      >
-        {isLocal ? "Verknüpfung lösen" : "Deinstallieren"}
+      <button class="danger" disabled={busy} onclick={uninstall}>
+        {isLocal ? t("tool.unlink") : t("tool.uninstall")}
       </button>
     </div>
   </header>
 
   {#if progress && busy}
     <div class="progress">
-      <span>{progress.text}</span>
+      <span>{progressText(progress)}</span>
       {#if progress.fraction != null}<progress value={progress.fraction}></progress>{/if}
     </div>
   {/if}
 
   {#if m.notice}<p class="notice">{m.notice}</p>{/if}
 
-  {#if status?.text}
+  <!-- Tools with their own interface present their status themselves. -->
+  {#if status?.text && !m.ui}
     <p class="status">{String(status.text)}</p>
   {/if}
 
   {#if m.ui}
-    <iframe bind:this={frame} class="tool-ui card" title={tool.entry.name} src={`tool://${id}/${m.ui}`}></iframe>
+    <!-- Opaque origin: the page can only reach tuxly through the bridge (postMessage). -->
+    <iframe
+      bind:this={frame}
+      class="tool-ui card"
+      title={tool.entry.name}
+      src={`tool://${id}/${m.ui}`}
+      sandbox="allow-scripts allow-forms allow-modals allow-popups"
+    ></iframe>
   {:else if m.web_url}
     <WebPanel {tool} bind:this={webPanel} />
   {:else if (m.actions?.length ?? 0) > 0 || (m.settings?.length ?? 0) > 0}
@@ -192,8 +223,8 @@
     <EmbedPanel {tool} bind:running={embedded} bind:this={embedPanel} />
   {:else}
     <section class="card body">
-      <p class="muted">Für dieses Tool wurde keine Startdatei gefunden.</p>
-      {#if tool.entry.description}<p class="muted">{tool.entry.description}</p>{/if}
+      <p class="muted">{t("tool.noLauncher")}</p>
+      <p class="muted">{describe(tool.entry)}</p>
     </section>
   {/if}
 
@@ -202,7 +233,6 @@
       <Readme repo={tool.entry.repo} />
     </section>
   {/if}
-
 </div>
 
 <style>
@@ -218,16 +248,6 @@
     gap: 14px;
     flex-wrap: wrap;
   }
-  .icon {
-    font-size: 36px;
-    width: 56px;
-    height: 56px;
-    display: grid;
-    place-items: center;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-  }
   .title {
     flex: 1;
     min-width: 200px;
@@ -242,6 +262,11 @@
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
+  }
+  .buttons button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
   }
   .progress {
     display: flex;

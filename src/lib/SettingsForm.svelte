@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "./i18n.svelte";
   import { api, errText, type Setting, type Settings } from "./api";
   import { toast } from "./state.svelte";
 
@@ -18,7 +19,7 @@
       .catch((e) => toast(errText(e)));
   });
 
-  // Änderungen kurz sammeln und dann speichern.
+  // Collect changes briefly, then save them.
   function changed(key: string, value: unknown) {
     values[key] = value;
     saved = false;
@@ -81,7 +82,7 @@
       </span>
     </label>
   {/each}
-  <p class="muted saved">{saved ? "Gespeichert" : "Speichere …"}</p>
+  <p class="muted saved">{saved ? t("settings.saved") : t("settings.saving")}</p>
 </div>
 
 <style>

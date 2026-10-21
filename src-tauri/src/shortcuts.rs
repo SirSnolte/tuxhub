@@ -1,9 +1,9 @@
-//! Globale Hotkeys über das XDG-GlobalShortcuts-Portal.
+//! Global hotkeys through the XDG GlobalShortcuts portal.
 //!
-//! Funktioniert unter Wayland (KDE, neuere GNOME-Versionen), ohne dass der Hub
-//! Tastatureingaben mitlesen muss. Jede Aktion mit `shortcut` in einem
-//! `tuxhub.toml` wird als `<tool>::<aktion>` registriert. Die endgültige
-//! Taste legt der Desktop fest (der Nutzer kann sie dort ändern).
+//! This works on Wayland (KDE Plasma, recent GNOME) without reading keyboard
+//! input. Every action with a `shortcut` in a `tuxly.toml`, and every hotkey a
+//! tool reports at runtime, is registered as `<tool>::<action>`. The desktop
+//! decides the final key binding, and users can change it there.
 
 use crate::{Hub, tools};
 use ashpd::desktop::Session;
@@ -29,9 +29,9 @@ pub struct Binding {
     pub trigger: String,
 }
 
-/// Generation der aktuellen Bindung; alte Listener beenden sich daran.
+/// Generation of the current binding; listeners of older generations exit.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
-/// Aktive Portal-Sitzung (für Neu-Bindung und den Einstellungsdialog).
+/// Active portal session, kept for rebinding and the configuration dialog.
 struct Active {
     portal: GlobalShortcuts,
     session: Session<GlobalShortcuts>,
@@ -43,24 +43,24 @@ fn set_status(app: &AppHandle, status: Status) {
     let _ = app.emit("shortcuts-changed", status);
 }
 
-const APP_ID: &str = "dev.tuxhub.app";
+const APP_ID: &str = "io.github.sirsnolte.tuxly";
 
-/// Meldet den Hub beim Portal unter seiner App-ID an. Das Portal verlangt
-/// dafür eine passende `.desktop`-Datei; fehlt sie, legt der Hub eine für den
-/// aktuellen Nutzer an. Nur einmal pro Prozess möglich.
+/// Registers tuxly with the portal under its application id. The portal
+/// requires a matching `.desktop` file; if none is installed, one is created
+/// for the current user. Registration is possible once per process.
 async fn register_app_id() {
     static DONE: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
     DONE.get_or_init(|| async {
         if let Err(e) = ensure_desktop_file() {
-            eprintln!("Hotkeys: .desktop-Datei konnte nicht angelegt werden: {e}");
+            eprintln!("hotkeys: could not create the desktop entry: {e}");
         }
         match APP_ID.try_into() {
             Ok(app_id) => {
                 if let Err(e) = ashpd::register_host_app(app_id).await {
-                    eprintln!("Hotkeys: App-ID-Registrierung fehlgeschlagen: {e}");
+                    eprintln!("hotkeys: application id registration failed: {e}");
                 }
             }
-            Err(e) => eprintln!("Hotkeys: ungültige App-ID: {e}"),
+            Err(e) => eprintln!("hotkeys: invalid application id: {e}"),
         }
     })
     .await;
@@ -80,15 +80,9 @@ fn ensure_desktop_file() -> std::io::Result<()> {
         .join("applications");
     std::fs::create_dir_all(&dir)?;
     let exe = std::env::current_exe()?;
-    // Im Entwicklungsmodus nicht im Startmenü anzeigen.
-    let hidden = if cfg!(debug_assertions) {
-        "NoDisplay=true\n"
-    } else {
-        ""
-    };
+    // Only used for the portal; hidden so the menu shows the packaged entry once.
     let content = format!(
-        "[Desktop Entry]\nType=Application\nName=tuxhub\nComment=Modularer Hub für Linux-Gaming\n\
-         Exec=\"{}\"\nIcon=applications-games\nCategories=Game;Utility;\n{hidden}",
+        "[Desktop Entry]\nType=Application\nName=tuxly\nExec=\"{}\"\nIcon=tuxly\nNoDisplay=true\n",
         exe.display()
     );
     let path = dir.join(&name);
@@ -98,11 +92,11 @@ fn ensure_desktop_file() -> std::io::Result<()> {
     Ok(())
 }
 
-/// (Neu) registriert alle Hotkeys der installierten Tools.
+/// Registers (again) the hotkeys of all installed tools.
 pub fn rebind(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         if let Err(e) = bind(&app).await {
-            eprintln!("Hotkeys: {e}");
+            eprintln!("hotkeys: {e}");
             set_status(
                 &app,
                 Status {
@@ -144,7 +138,7 @@ async fn bind(app: &AppHandle) -> Result<(), String> {
             app,
             Status {
                 available: true,
-                message: "Keine installierten Tools mit Hotkeys.".into(),
+                message: String::new(),
                 bindings: vec![],
             },
         );
@@ -152,7 +146,7 @@ async fn bind(app: &AppHandle) -> Result<(), String> {
     }
 
     register_app_id().await;
-    let portal_err = |e: ashpd::Error| format!("Hotkey-Portal nicht verfügbar: {e}");
+    let portal_err = |e: ashpd::Error| format!("the global shortcuts portal is not available: {e}");
     let gs = GlobalShortcuts::new().await.map_err(portal_err)?;
     let session = gs
         .create_session(Default::default())
@@ -164,8 +158,8 @@ async fn bind(app: &AppHandle) -> Result<(), String> {
             NewShortcut::new(id.as_str(), desc.as_str()).preferred_trigger(trigger.as_str())
         })
         .collect();
-    // Bricht der Nutzer den Dialog des Desktops ab, sind die Hotkeys trotzdem
-    // registriert – nur eben nicht belegt. Dann den aktuellen Stand abfragen.
+    // If the user cancels the desktop dialog, the hotkeys are still
+    // registered, just unassigned. Query the current state in that case.
     let bound = match gs
         .bind_shortcuts(&session, &shortcuts, None, Default::default())
         .await
@@ -181,7 +175,7 @@ async fn bind(app: &AppHandle) -> Result<(), String> {
             .map_err(portal_err)?
             .shortcuts()
             .to_vec(),
-        Err(e) => return Err(format!("Hotkeys wurden nicht bestätigt: {e}")),
+        Err(e) => return Err(format!("the hotkeys were not confirmed: {e}")),
     };
 
     let bindings: Vec<Binding> = bound
@@ -196,16 +190,11 @@ async fn bind(app: &AppHandle) -> Result<(), String> {
             })
         })
         .collect();
-    let unassigned = bindings.iter().any(|b| b.trigger.is_empty());
     set_status(
         app,
         Status {
             available: true,
-            message: if unassigned {
-                "Einige Hotkeys sind noch nicht belegt.".into()
-            } else {
-                String::new()
-            },
+            message: String::new(),
             bindings,
         },
     );
@@ -234,13 +223,13 @@ async fn bind(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Öffnet den Hotkey-Dialog des Desktops (Portal-Version 2+).
+/// Opens the hotkey configuration dialog of the desktop (portal version 2 or later).
 pub async fn configure() -> Result<(), String> {
     let slot = SESSION.lock().await;
-    let active = slot.as_ref().ok_or("Keine Hotkeys registriert")?;
+    let active = slot.as_ref().ok_or("no hotkeys are registered")?;
     if active.portal.version() < 2 {
         return Err(
-            "Dein Desktop unterstützt das nicht – bitte in den Systemeinstellungen ändern".into(),
+            "the desktop does not support this; change the keys in the system settings".into(),
         );
     }
     active

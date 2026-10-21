@@ -1,10 +1,10 @@
-"""Fenster-Wächter für eine xpra-Sitzung des Hubs.
+"""Window watcher for an xpra session started by tuxly.
 
-Maximiert jedes neue Hauptfenster auf dem angegebenen X-Display, damit die
-App den Bereich im Hub komplett ausfüllt. Dialoge (transient oder Typ DIALOG)
-bleiben unangetastet. Endet, sobald das Display weg ist.
+Maximizes every new main window on the given X display so the application
+fills the area inside tuxly. Dialogs (transient windows or windows of type
+DIALOG, UTILITY or SPLASH) are left alone. Exits when the display goes away.
 
-Aufruf: python3 xpra_watch.py :DISPLAY
+Usage: python3 xpra_watch.py :DISPLAY
 """
 
 import os
@@ -63,7 +63,7 @@ while True:
             done.add(wid)
         done &= current
         core.XSync()
-    except Exception as e:  # Display weg → Sitzung beendet
-        print(f"Wächter beendet: {e}", file=sys.stderr)
+    except Exception as e:  # the display is gone, so the session has ended
+        print(f"watcher stopped: {e}", file=sys.stderr)
         break
     time.sleep(0.5)

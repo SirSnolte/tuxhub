@@ -1,17 +1,12 @@
 [package]
-name = "tuxhub"
-version = "0.1.0"
-description = "Modularer Gaming-Hub für Linux"
-authors = ["snolti"]
+name = "tuxly"
+version = "0.2.0"
+description = "Modular hub for gaming on Linux"
+authors = ["SirSnolte"]
 edition = "2024"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
-# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "tuxhub_lib"
+name = "tuxly_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -29,6 +24,8 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 ashpd = { version = "0.13", default-features = false, features = ["tokio", "global_shortcuts"] }
 futures-util = "0.3"
 url = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 
 [dev-dependencies]

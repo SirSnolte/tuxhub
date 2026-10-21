@@ -1,8 +1,9 @@
-//! Tool-Manifest (`tuxhub.toml` im Release eines Tools oder inline im
-//! Workshop-Eintrag).
+//! Tool manifest (`tuxly.toml` in a tool release, or inline in a workshop
+//! entry).
 //!
-//! Alles ist optional: Ein Tool ohne Manifest ist Stufe 0 (nur starten).
-//! `web_url` macht es zu Stufe 1, `rpc`/`ui`/`settings`/`actions` zu Stufe 2.
+//! Every field is optional. A tool without a manifest is level 0 (launch only),
+//! `web_url` makes it level 1, and `rpc`, `ui`, `settings` or `actions` make it
+//! level 2.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -10,7 +11,7 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Manifest {
-    /// Nur für lokal verknüpfte Tools nötig; sonst kommt das aus dem Workshop.
+    /// Required for locally linked tools only; otherwise the workshop provides it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -22,16 +23,16 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
 
-    /// Normal starten (eigenes Fenster / eigenständig).
+    /// Launch as a regular application (own window).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<Cmd>,
-    /// Hintergrundprozess, mit dem der Hub per JSON-RPC spricht.
+    /// Background process that tuxly talks to over JSON-RPC.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rpc: Option<Cmd>,
-    /// Eigene HTML-Seite, relativ zum Tool-Ordner. Wird im Hub als iframe gezeigt.
+    /// HTML page relative to the tool folder, shown inside tuxly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui: Option<String>,
-    /// Vorhandenes Web-Interface des Tools (Stufe 1).
+    /// Existing web interface of the tool (level 1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -44,7 +45,7 @@ pub struct Manifest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cmd {
-    /// Relativ zum Tool-Ordner.
+    /// Relative to the tool folder.
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
@@ -54,7 +55,7 @@ pub struct Cmd {
 pub struct Setting {
     pub key: String,
     pub label: String,
-    /// `number`, `select`, `toggle` oder `text`
+    /// `number`, `select`, `toggle` or `text`
     #[serde(rename = "type")]
     pub ty: String,
     #[serde(default)]
@@ -85,15 +86,15 @@ pub struct Action {
     pub label: String,
     #[serde(default)]
     pub primary: bool,
-    /// Gewünschter globaler Hotkey (XDG-Format, z. B. `F8` oder `CTRL+SHIFT+k`).
+    /// Preferred global hotkey in XDG format, for example `F8` or `CTRL+SHIFT+k`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shortcut: Option<String>,
 }
 
 impl Manifest {
-    /// Liest `tuxhub.toml` aus `dir`, falls vorhanden.
+    /// Reads `tuxly.toml` from `dir`, if present.
     pub fn load(dir: &Path) -> Result<Option<Self>, String> {
-        let path = dir.join("tuxhub.toml");
+        let path = dir.join("tuxly.toml");
         if !path.is_file() {
             return Ok(None);
         }
@@ -107,7 +108,7 @@ impl Manifest {
         for cmd in [&self.run, &self.rpc].into_iter().flatten() {
             if !safe_relative(&cmd.command) {
                 return Err(format!(
-                    "Befehl {:?} muss relativ zum Tool-Ordner sein",
+                    "command {:?} must be relative to the tool folder",
                     cmd.command
                 ));
             }
@@ -115,12 +116,12 @@ impl Manifest {
         if let Some(ui) = &self.ui
             && !safe_relative(ui)
         {
-            return Err(format!("ui {ui:?} muss relativ zum Tool-Ordner sein"));
+            return Err(format!("ui {ui:?} must be relative to the tool folder"));
         }
         Ok(())
     }
 
-    /// 0 = nur starten, 1 = Web-UI, 2 = voll integriert
+    /// 0 = launch only, 1 = web interface, 2 = fully integrated
     pub fn level(&self) -> u8 {
         if self.rpc.is_some() || self.ui.is_some() || !self.settings.is_empty() {
             2
@@ -143,7 +144,7 @@ pub fn safe_relative(p: &str) -> bool {
     !p.is_empty() && !p.starts_with('/') && !p.split('/').any(|c| c == "..")
 }
 
-/// IDs landen in Dateipfaden, deshalb nur `a-z0-9-_.` und kein `..`.
+/// Ids end up in file paths: only `a-z0-9-_.` are allowed, and no `..`.
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64

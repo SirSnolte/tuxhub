@@ -2,127 +2,122 @@
   {
     "id": "autoclicker",
     "name": "Autoclicker",
-    "description": "Klickt automatisch für dich – Wayland & X11, Einzel-/Doppelklick oder Halten, Jitter, Limit und globaler Hotkey.",
-    "icon": "🖱️",
-    "category": "Eingabe",
-    "repo": "SirSnolte/tuxhub-autoclicker",
-    "source": {
-      "type": "github-release",
-      "asset": "*x86_64-linux.tar.gz"
+    "description": "Automated clicking and keyboard and mouse macros. Works on Wayland and X11, with global hotkeys.",
+    "category": "input",
+    "repo": "SirSnolte/tuxly-autoclicker",
+    "source": { "type": "github-release", "asset": "*x86_64-linux.tar.gz" },
+    "translations": {
+      "de": { "description": "Automatisches Klicken sowie Makros für Tastatur und Maus. Funktioniert unter Wayland und X11, mit globalen Hotkeys." }
     }
   },
   {
     "id": "streamcontroller",
     "name": "StreamController",
-    "description": "Elgato Stream Deck unter Linux steuern – mit Plugins. Tipp: Davids Plugin „BetterVolumeMixer“ (Lautstärke pro App) gibt es im integrierten Store.",
-    "icon": "🎛️",
-    "category": "Eingabe",
+    "description": "Control Elgato Stream Deck devices, with plugin support. The BetterVolumeMixer plugin by Dav1d-Fn adds per-application volume control.",
+    "icon": "https://dl.flathub.org/repo/appstream/x86_64/icons/128x128/com.core447.StreamController.png",
+    "category": "input",
     "repo": "StreamController/StreamController",
     "homepage": "https://github.com/Dav1d-Fn/StreamController-BetterVolumeMixer",
-    "source": {
-      "type": "flatpak",
-      "flatpak_id": "com.core447.StreamController"
-    }
-  },
-  {
-    "id": "protonup-qt",
-    "name": "ProtonUp-Qt",
-    "description": "Installiert und verwaltet Proton-GE, Wine-GE und andere Kompatibilitäts-Tools für Steam, Lutris und Heroic.",
-    "icon": "🧪",
-    "category": "Kompatibilität",
-    "repo": "DavidoTek/ProtonUp-Qt",
-    "homepage": "https://github.com/DavidoTek/ProtonUp-Qt",
-    "source": {
-      "type": "flatpak",
-      "flatpak_id": "net.davidotek.pupgui2"
-    }
-  },
-  {
-    "id": "protonplus",
-    "name": "ProtonPlus",
-    "description": "Moderner Manager für Proton-, Wine- und DXVK-Versionen.",
-    "icon": "➕",
-    "category": "Kompatibilität",
-    "repo": "Vysp3r/ProtonPlus",
-    "homepage": "https://github.com/Vysp3r/ProtonPlus",
-    "source": {
-      "type": "flatpak",
-      "flatpak_id": "com.vysp3r.ProtonPlus"
-    }
-  },
-  {
-    "id": "mangojuice",
-    "name": "MangoJuice",
-    "description": "Grafische Oberfläche zum Konfigurieren des MangoHud-Overlays (FPS, Temperaturen, Frametimes).",
-    "icon": "🥭",
-    "category": "Overlay",
-    "repo": "radiolamp/mangojuice",
-    "homepage": "https://github.com/radiolamp/mangojuice",
-    "source": {
-      "type": "flatpak",
-      "flatpak_id": "io.github.radiolamp.mangojuice"
-    }
-  },
-  {
-    "id": "heroic",
-    "name": "Heroic Games Launcher",
-    "description": "Launcher für Epic, GOG und Amazon Prime Gaming – direkt als AppImage von GitHub.",
-    "icon": "🛡️",
-    "category": "Launcher",
-    "repo": "Heroic-Games-Launcher/HeroicGamesLauncher",
-    "homepage": "https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher",
-    "source": {
-      "type": "github-release",
-      "asset": "*x86_64.AppImage"
-    }
-  },
-  {
-    "id": "lutris",
-    "name": "Lutris",
-    "description": "Spiele aus vielen Quellen installieren und starten – mit Install-Skripten der Community.",
-    "icon": "🦦",
-    "category": "Launcher",
-    "homepage": "https://lutris.net",
-    "source": {
-      "type": "flatpak",
-      "flatpak_id": "net.lutris.Lutris"
-    }
-  },
-  {
-    "id": "bottles",
-    "name": "Bottles",
-    "description": "Windows-Programme und -Spiele in isolierten Wine-Umgebungen ausführen.",
-    "icon": "🍾",
-    "category": "Kompatibilität",
-    "homepage": "https://usebottles.com",
-    "source": {
-      "type": "flatpak",
-      "flatpak_id": "com.usebottles.bottles"
+    "source": { "type": "flatpak", "flatpak_id": "com.core447.StreamController" },
+    "translations": {
+      "de": { "description": "Steuerung von Elgato-Stream-Deck-Geräten mit Plugin-Unterstützung. Das Plugin BetterVolumeMixer von Dav1d-Fn ergänzt die Lautstärkeregelung pro Anwendung." }
     }
   },
   {
     "id": "piper",
     "name": "Piper",
-    "description": "Gaming-Mäuse konfigurieren (DPI, Tasten, LEDs) über libratbag.",
-    "icon": "🐭",
-    "category": "Eingabe",
+    "description": "Configure gaming mice: resolution, buttons and lighting, based on libratbag.",
+    "icon": "https://dl.flathub.org/repo/appstream/x86_64/icons/128x128/org.freedesktop.Piper.png",
+    "category": "input",
     "repo": "libratbag/piper",
-    "homepage": "https://github.com/libratbag/piper",
-    "source": {
-      "type": "flatpak",
-      "flatpak_id": "org.freedesktop.Piper"
+    "source": { "type": "flatpak", "flatpak_id": "org.freedesktop.Piper" },
+    "translations": {
+      "de": { "description": "Konfiguration von Gaming-Mäusen: Auflösung, Tasten und Beleuchtung, auf Basis von libratbag." }
+    }
+  },
+  {
+    "id": "protonup-qt",
+    "name": "ProtonUp-Qt",
+    "description": "Install and manage Wine- and Proton-based compatibility tools for Steam, Lutris and Heroic.",
+    "icon": "https://dl.flathub.org/repo/appstream/x86_64/icons/128x128/net.davidotek.pupgui2.png",
+    "category": "compatibility",
+    "repo": "DavidoTek/ProtonUp-Qt",
+    "source": { "type": "flatpak", "flatpak_id": "net.davidotek.pupgui2" },
+    "translations": {
+      "de": { "description": "Installation und Verwaltung von Wine- und Proton-basierten Kompatibilitätswerkzeugen für Steam, Lutris und Heroic." }
+    }
+  },
+  {
+    "id": "protonplus",
+    "name": "ProtonPlus",
+    "description": "Manage Proton, Wine, DXVK and VKD3D versions for Linux game launchers.",
+    "icon": "https://dl.flathub.org/repo/appstream/x86_64/icons/128x128/com.vysp3r.ProtonPlus.png",
+    "category": "compatibility",
+    "repo": "Vysp3r/ProtonPlus",
+    "source": { "type": "flatpak", "flatpak_id": "com.vysp3r.ProtonPlus" },
+    "translations": {
+      "de": { "description": "Verwaltung von Proton-, Wine-, DXVK- und VKD3D-Versionen für Spiele-Launcher unter Linux." }
+    }
+  },
+  {
+    "id": "bottles",
+    "name": "Bottles",
+    "description": "Run Windows software and games in isolated Wine environments.",
+    "icon": "https://dl.flathub.org/repo/appstream/x86_64/icons/128x128/com.usebottles.bottles.png",
+    "category": "compatibility",
+    "repo": "bottlesdevs/Bottles",
+    "source": { "type": "flatpak", "flatpak_id": "com.usebottles.bottles" },
+    "translations": {
+      "de": { "description": "Windows-Software und -Spiele in isolierten Wine-Umgebungen ausführen." }
+    }
+  },
+  {
+    "id": "mangojuice",
+    "name": "MangoJuice",
+    "description": "Configure the MangoHud performance overlay: frame rate, frame times, temperatures and more.",
+    "icon": "https://dl.flathub.org/repo/appstream/x86_64/icons/128x128/io.github.radiolamp.mangojuice.png",
+    "category": "overlay",
+    "repo": "radiolamp/mangojuice",
+    "source": { "type": "flatpak", "flatpak_id": "io.github.radiolamp.mangojuice" },
+    "translations": {
+      "de": { "description": "Konfiguration des MangoHud-Leistungsoverlays: Bildrate, Frametimes, Temperaturen und mehr." }
+    }
+  },
+  {
+    "id": "heroic",
+    "name": "Heroic Games Launcher",
+    "description": "Launcher for Epic Games, GOG and Amazon Games libraries. Installed as an AppImage from the official releases.",
+    "icon": "https://dl.flathub.org/repo/appstream/x86_64/icons/128x128/com.heroicgameslauncher.hgl.png",
+    "category": "launcher",
+    "repo": "Heroic-Games-Launcher/HeroicGamesLauncher",
+    "source": { "type": "github-release", "asset": "*x86_64.AppImage" },
+    "translations": {
+      "de": { "description": "Launcher für Bibliotheken von Epic Games, GOG und Amazon Games. Wird als AppImage aus den offiziellen Releases installiert." }
+    }
+  },
+  {
+    "id": "lutris",
+    "name": "Lutris",
+    "description": "Install and launch games from many sources, with community-maintained installers.",
+    "icon": "https://dl.flathub.org/repo/appstream/x86_64/icons/128x128/net.lutris.Lutris.png",
+    "category": "launcher",
+    "repo": "lutris/lutris",
+    "homepage": "https://lutris.net",
+    "source": { "type": "flatpak", "flatpak_id": "net.lutris.Lutris" },
+    "translations": {
+      "de": { "description": "Spiele aus vielen Quellen installieren und starten, mit von der Community gepflegten Installern." }
     }
   },
   {
     "id": "gif-color-changer",
     "name": "GIF Color Changer",
-    "description": "Farben in animierten GIFs ersetzen – präzise, schnell und verlustfrei, alles lokal. Von Dav1d-Fn.",
-    "icon": "🎨",
-    "category": "Kreativ",
+    "description": "Replace colors in animated GIFs precisely and losslessly. All processing happens locally. By Dav1d-Fn.",
+    "icon": "https://raw.githubusercontent.com/Dav1d-Fn/gif-color-changer/HEAD/src-tauri/icons/128x128.png",
+    "category": "creative",
     "repo": "Dav1d-Fn/gif-color-changer",
-    "source": {
-      "type": "github-release",
-      "asset": "*amd64.AppImage"
+    "source": { "type": "github-release", "asset": "*amd64.AppImage" },
+    "translations": {
+      "de": { "description": "Farben in animierten GIFs präzise und verlustfrei ersetzen. Die gesamte Verarbeitung erfolgt lokal. Von Dav1d-Fn." }
     }
   }
 ]

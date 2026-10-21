@@ -1,0 +1,25 @@
+# Example for integration level 2: a tool with its own interface, settings
+# and a global hotkey.
+#
+# To try it, link this folder in tuxly under Settings > Developer mode.
+
+id = "demo-tool"
+name = "Demo Tool"
+description = "Shows how a tool provides its own interface, settings and a hotkey."
+version = "0.1.0"
+ui = "ui/index.html"
+
+[rpc]
+command = "demo.py"
+
+[[settings]]
+key = "greeting"
+label = "Greeting"
+type = "text"
+default = "Hello"
+
+[[actions]]
+id = "count"
+label = "Count"
+primary = true
+shortcut = "CTRL+ALT+F8"

@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Mini-Webserver, der sich nicht einbetten lassen will."""
+"""Minimal web server that refuses to be embedded, used to demonstrate level 1."""
 
 import json
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-PAGE = """<!doctype html><html lang="de"><meta charset="utf-8"><title>Demo-Web</title>
+PAGE = """<!doctype html><html lang="en"><meta charset="utf-8"><title>Demo Web</title>
 <style>body{font:14px system-ui;padding:20px} code{background:#8882;padding:2px 4px}</style>
-<h2>Web-Interface eines Tools</h2>
-<p>Dieser Server sendet <code>X-Frame-Options: DENY</code> und
-<code>frame-ancestors 'none'</code> – trotzdem siehst du ihn im Hub.</p>
-<p>API-Aufruf per <code>fetch('/api/time')</code>: <b id="t">…</b></p>
+<h2>Web interface of a tool</h2>
+<p>This server sends <code>X-Frame-Options: DENY</code> and
+<code>frame-ancestors 'none'</code>, yet it is shown inside tuxly.</p>
+<p>Result of <code>fetch('/api/time')</code>: <b id="t">…</b></p>
 <script>
 fetch('/api/time').then(r => r.json()).then(d => document.getElementById('t').textContent = d.time)
-  .catch(e => document.getElementById('t').textContent = 'Fehler: ' + e);
+  .catch(e => document.getElementById('t').textContent = 'Error: ' + e);
 </script></html>"""
 
 
@@ -34,7 +34,7 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/":
             self.send(200, PAGE, "text/html; charset=utf-8")
         else:
-            self.send(404, "nicht gefunden", "text/plain")
+            self.send(404, "not found", "text/plain")
 
     def log_message(self, *args):
         pass

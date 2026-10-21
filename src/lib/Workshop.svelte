@@ -1,7 +1,10 @@
 <script lang="ts">
-  import { api, errText, sourceLabel, type Workshop, type WorkshopItem } from "./api";
-  import { hub, toast } from "./state.svelte";
+  import { X } from "@lucide/svelte";
+  import { api, describe, errText, type Workshop, type WorkshopItem } from "./api";
+  import { hub, progressText, toast } from "./state.svelte";
+  import { category as categoryLabel, t, type Key } from "./i18n.svelte";
   import Readme from "./Readme.svelte";
+  import ToolIcon from "./ToolIcon.svelte";
 
   let { onopen, onchanged }: { onopen: (id: string) => void; onchanged: () => void } = $props();
 
@@ -28,7 +31,7 @@
   const visible = $derived(
     (data?.entries ?? []).filter((e) => {
       const q = query.trim().toLowerCase();
-      const hit = !q || `${e.entry.name} ${e.entry.description}`.toLowerCase().includes(q);
+      const hit = !q || `${e.entry.name} ${describe(e.entry)}`.toLowerCase().includes(q);
       return hit && (!category || e.entry.category === category);
     }),
   );
@@ -37,7 +40,7 @@
     installing = item.entry.id;
     try {
       await api.install(item.entry.id);
-      toast(`${item.entry.name} installiert`, "info");
+      toast(t("workshop.installedToast", { name: item.entry.name }), "info");
       await load();
       onchanged();
     } catch (e) {
@@ -51,20 +54,20 @@
 <div class="workshop">
   <header>
     <div>
-      <h1>Workshop</h1>
+      <h1>{t("workshop.title")}</h1>
       <p class="muted">
-        Geprüfte Tools für Linux-Gaming.
-        {#if data && !data.live}<span class="badge">Offline-Liste</span>{/if}
+        {t("workshop.subtitle")}
+        {#if data && !data.live}<span class="badge">{t("workshop.offline")}</span>{/if}
       </p>
     </div>
-    <input type="search" placeholder="Suchen …" bind:value={query} />
+    <input type="search" placeholder={t("workshop.search")} aria-label={t("workshop.search")} bind:value={query} />
   </header>
 
   {#if categories.length > 1}
     <div class="chips">
-      <button class:active={!category} onclick={() => (category = null)}>Alle</button>
+      <button class:active={!category} onclick={() => (category = null)}>{t("workshop.all")}</button>
       {#each categories as c (c)}
-        <button class:active={category === c} onclick={() => (category = c)}>{c}</button>
+        <button class:active={category === c} onclick={() => (category = c)}>{categoryLabel(c)}</button>
       {/each}
     </div>
   {/if}
@@ -72,7 +75,7 @@
   {#if error}
     <p class="notice">{error}</p>
   {:else if !data}
-    <p class="muted">Lade Workshop …</p>
+    <p class="muted">{t("workshop.loading")}</p>
   {/if}
 
   <div class="layout" class:with-detail={selected}>
@@ -83,17 +86,17 @@
           class:selected={selected?.entry.id === item.entry.id}
           onclick={() => (selected = item)}
         >
-          <span class="icon">{item.entry.icon ?? "🧩"}</span>
+          <ToolIcon icon={item.entry.icon} category={item.entry.category} size={40} />
           <span class="name">{item.entry.name}</span>
-          <span class="desc muted">{item.entry.description}</span>
+          <span class="desc muted">{describe(item.entry)}</span>
           <span class="tags">
-            {#if item.entry.category}<span class="badge">{item.entry.category}</span>{/if}
-            {#if item.installed}<span class="badge accent">Installiert</span>{/if}
+            {#if item.entry.category}<span class="badge">{categoryLabel(item.entry.category)}</span>{/if}
+            {#if item.installed}<span class="badge accent">{t("workshop.installed")}</span>{/if}
           </span>
         </button>
       {/each}
       {#if data && visible.length === 0}
-        <p class="muted">Nichts gefunden.</p>
+        <p class="muted">{t("workshop.noResults")}</p>
       {/if}
     </div>
 
@@ -101,27 +104,29 @@
       {@const e = selected.entry}
       <aside class="card detail">
         <div class="detail-head">
-          <span class="icon big">{e.icon ?? "🧩"}</span>
+          <ToolIcon icon={e.icon} category={e.category} size={52} />
           <div>
             <h2>{e.name}</h2>
-            <span class="badge">{sourceLabel(e.source)}</span>
+            <span class="badge">{t(`source.${e.source.type}` as Key)}</span>
             {#if e.repo}<span class="badge">{e.repo}</span>{/if}
           </div>
-          <button class="close" aria-label="Schließen" onclick={() => (selected = null)}>✕</button>
+          <button class="close" aria-label={t("workshop.close")} onclick={() => (selected = null)}>
+            <X size={18} aria-hidden="true" />
+          </button>
         </div>
-        <p>{e.description}</p>
+        <p>{describe(e)}</p>
         <div class="detail-actions">
           {#if selected.installed}
-            <button class="primary" onclick={() => onopen(e.id)}>Öffnen</button>
+            <button class="primary" onclick={() => onopen(e.id)}>{t("workshop.open")}</button>
           {:else}
             <button class="primary" disabled={installing !== null} onclick={() => install(selected!)}>
-              {installing === e.id ? "Installiere …" : "Installieren"}
+              {installing === e.id ? t("workshop.installing") : t("workshop.install")}
             </button>
           {/if}
         </div>
         {#if installing === e.id && hub.progress[e.id]}
           <div class="progress">
-            <small>{hub.progress[e.id].text}</small>
+            <small>{progressText(hub.progress[e.id])}</small>
             {#if hub.progress[e.id].fraction != null}<progress value={hub.progress[e.id].fraction}></progress>{/if}
           </div>
         {/if}
@@ -190,12 +195,6 @@
   }
   .tile.selected {
     border-color: var(--accent);
-  }
-  .icon {
-    font-size: 26px;
-  }
-  .icon.big {
-    font-size: 40px;
   }
   .name {
     font-weight: 600;

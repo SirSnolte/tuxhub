@@ -1,0 +1,16 @@
+# Example for integration level 1: a tool with its own web interface.
+#
+# The server deliberately forbids embedding (X-Frame-Options and CSP
+# frame-ancestors). tuxly still shows it, because local web interfaces are
+# served through tuxly's loopback-only proxy.
+#
+# To try it, link this folder in tuxly under Settings > Developer mode.
+
+id = "demo-web"
+name = "Demo Web"
+description = "Example tool with its own web interface (integration level 1)."
+version = "0.1.0"
+web_url = "http://127.0.0.1:47811/"
+
+[run]
+command = "server.py"

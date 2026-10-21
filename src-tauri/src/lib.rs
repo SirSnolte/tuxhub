@@ -16,12 +16,12 @@ use tauri::http::{Response, StatusCode, header};
 use tauri::{AppHandle, Manager};
 use tools::{Entry, Installed, Source};
 
-/// Repo, aus dem der Workshop-Index live geladen wird.
-const WORKSHOP_REPO: &str = "SirSnolte/tuxhub";
+/// Repository the workshop index is loaded from.
+const WORKSHOP_REPO: &str = "SirSnolte/tuxly";
 const WORKSHOP_PATH: &str = "registry/index.json";
-/// Mitgelieferter Index, falls GitHub nicht erreichbar ist.
+/// Bundled index, used when GitHub is not reachable.
 const WORKSHOP_BUNDLED: &str = include_str!("../../registry/index.json");
-/// JS-Bridge, die Tool-Oberflächen per `<script src="/__tuxhub/bridge.js">` laden.
+/// JavaScript bridge that tool interfaces load with `<script src="/__tuxly/bridge.js">`.
 const BRIDGE_JS: &str = include_str!("bridge.js");
 
 pub struct Hub {
@@ -31,9 +31,9 @@ pub struct Hub {
     runtime: native::Runtime,
     shortcuts: std::sync::Mutex<shortcuts::Status>,
     settings: std::sync::Mutex<system::HubSettings>,
-    /// Tool-ID → neuere Version
+    /// Tool id -> newer version
     updates: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
-    /// Laufende „Im Hub anzeigen“-Sitzungen
+    /// Running sessions of applications shown inside tuxly
     embeds: embed::Sessions,
 }
 
@@ -56,7 +56,7 @@ impl Hub {
         self.settings_dir.join(format!("{id}.json"))
     }
 
-    /// Defaults aus dem Manifest, überschrieben mit den gespeicherten Werten.
+    /// Manifest defaults, overridden by the saved values.
     fn settings(&self, id: &str, m: &Manifest) -> Map<String, Value> {
         let mut values = m.default_settings();
         if let Ok(s) = std::fs::read_to_string(self.settings_path(id))
@@ -75,7 +75,7 @@ impl Hub {
         self.settings_dir.join(format!("{id}.shortcuts.json"))
     }
 
-    /// Hotkeys, die ein Tool zur Laufzeit gemeldet hat (z. B. eines pro Makro).
+    /// Hotkeys a tool reported at runtime (for example one per macro).
     pub(crate) fn dyn_shortcuts(&self, id: &str) -> Vec<DynShortcut> {
         std::fs::read_to_string(self.dyn_shortcuts_path(id))
             .ok()
@@ -92,20 +92,20 @@ impl Hub {
 
 fn parse_workshop(s: &str) -> Result<Vec<Entry>, String> {
     let entries: Vec<Entry> =
-        serde_json::from_str(s).map_err(|e| format!("Workshop-Index ungültig: {e}"))?;
+        serde_json::from_str(s).map_err(|e| format!("invalid workshop index: {e}"))?;
     Ok(entries
         .into_iter()
         .filter(|e| match e.validate() {
             Ok(()) => true,
             Err(err) => {
-                eprintln!("Workshop-Eintrag übersprungen: {err}");
+                eprintln!("skipping workshop entry: {err}");
                 false
             }
         })
         .collect())
 }
 
-/// Lädt den Workshop-Index aus dem Hub-Repo, sonst den mitgelieferten.
+/// Loads the workshop index from the repository, otherwise the bundled copy.
 async fn workshop_entries() -> (Vec<Entry>, bool) {
     if !cfg!(debug_assertions)
         && let Ok(s) = github::raw_file(WORKSHOP_REPO, WORKSHOP_PATH).await
@@ -116,19 +116,21 @@ async fn workshop_entries() -> (Vec<Entry>, bool) {
     (parse_workshop(WORKSHOP_BUNDLED).unwrap_or_default(), false)
 }
 
-/// Startet den RPC-Prozess eines Tools, falls nötig, und schickt ihm beim
-/// ersten Start die Einstellungen.
+/// Starts the RPC process of a tool if needed and sends it the settings on the
+/// first start.
 async fn ensure_rpc(app: &AppHandle, id: &str) -> Result<(), String> {
     let hub = app.state::<Hub>();
     let (inst, m) = hub.load(id)?;
     let rpc = m
         .rpc
         .clone()
-        .ok_or("Dieses Tool hat keinen Hintergrundprozess (`rpc`)")?;
-    let root = inst.root_dir(&hub.tools_dir).ok_or("Kein Tool-Ordner")?;
+        .ok_or("this tool has no background process (`rpc`)")?;
+    let root = inst
+        .root_dir(&hub.tools_dir)
+        .ok_or("the tool has no folder")?;
     let exe = root.join(&rpc.command);
     if !exe.is_file() {
-        return Err(format!("{} fehlt", exe.display()));
+        return Err(format!("{} is missing", exe.display()));
     }
     if hub.runtime.ensure(app, id, &exe, &rpc.args, &root).await? {
         hub.runtime
@@ -145,11 +147,12 @@ pub(crate) struct DynShortcut {
     pub shortcut: String,
 }
 
-/// Ein Tool meldet per `{"method":"shortcuts","params":[{id,label,shortcut}]}`
-/// seine aktuellen Laufzeit-Hotkeys. Bei Änderungen wird neu gebunden.
+/// A tool reports its current runtime hotkeys with
+/// `{"method":"shortcuts","params":[{id,label,shortcut}]}`. Hotkeys are
+/// registered again when the list changes.
 pub(crate) fn tool_shortcuts_changed(app: &AppHandle, id: &str, params: &Value) {
     let Ok(list) = serde_json::from_value::<Vec<DynShortcut>>(params.clone()) else {
-        eprintln!("{id}: ungültige shortcuts-Meldung");
+        eprintln!("{id}: invalid shortcuts notification");
         return;
     };
     let list: Vec<DynShortcut> = list
@@ -168,7 +171,7 @@ pub(crate) fn tool_shortcuts_changed(app: &AppHandle, id: &str, params: &Value) 
         std::fs::write(&path, serde_json::to_string_pretty(&list).unwrap())
     };
     if let Err(e) = res {
-        eprintln!("{id}: Hotkeys nicht gespeichert: {e}");
+        eprintln!("{id}: could not save hotkeys: {e}");
         return;
     }
     shortcuts::rebind(app.clone());
@@ -181,7 +184,7 @@ pub(crate) async fn run_action(app: &AppHandle, id: &str, action: &str) -> Resul
         if !m.actions.iter().any(|a| a.id == action)
             && !hub.dyn_shortcuts(id).iter().any(|s| s.id == action)
         {
-            return Err(format!("{id} kennt die Aktion {action:?} nicht"));
+            return Err(format!("{id} has no action {action:?}"));
         }
     }
     ensure_rpc(app, id).await?;
@@ -236,9 +239,9 @@ async fn tool_install(app: AppHandle, id: String) -> Result<(), String> {
     let entry = entries
         .into_iter()
         .find(|e| e.id == id)
-        .ok_or_else(|| format!("{id} ist nicht im Workshop"))?;
+        .ok_or_else(|| format!("{id} is not in the workshop"))?;
     let hub = app.state::<Hub>();
-    // Bei Updates den alten Prozess vorher beenden.
+    // Stop the running process before an update.
     hub.runtime.stop(&id).await;
     embed::stop(&app, &id).await;
     tools::install(&app, &hub.tools_dir, &entry).await?;
@@ -257,7 +260,7 @@ struct ToolView {
     level: u8,
     running: bool,
     can_launch: bool,
-    /// Ordner des Tools auf der Platte (nicht bei Flatpaks)
+    /// Folder of the tool on disk (not for Flatpaks)
     path: Option<String>,
 }
 
@@ -357,7 +360,7 @@ async fn tool_action(app: AppHandle, id: String, action: String) -> Result<Value
     run_action(&app, &id, &action).await
 }
 
-/// Freier RPC-Aufruf – für eigene Tool-Oberflächen über die JS-Bridge.
+/// Generic RPC call, used by tool interfaces through the JavaScript bridge.
 #[tauri::command]
 async fn tool_call(
     app: AppHandle,
@@ -448,7 +451,7 @@ fn shortcut_status(app: AppHandle) -> shortcuts::Status {
 
 // ------------------------------------------------------- tool://-Protokoll
 
-/// Liefert Dateien aus dem Ordner eines Tools aus: `tool://<id>/<pfad>`.
+/// Serves files from the folder of a tool: `tool://<id>/<path>`.
 fn serve_tool(app: &AppHandle, uri: &tauri::http::Uri) -> Response<Vec<u8>> {
     let reply = |status: StatusCode, mime: &str, body: Vec<u8>| {
         Response::builder()
@@ -458,17 +461,11 @@ fn serve_tool(app: &AppHandle, uri: &tauri::http::Uri) -> Response<Vec<u8>> {
             .body(body)
             .unwrap()
     };
-    let not_found = || {
-        reply(
-            StatusCode::NOT_FOUND,
-            "text/plain",
-            b"nicht gefunden".to_vec(),
-        )
-    };
+    let not_found = || reply(StatusCode::NOT_FOUND, "text/plain", b"not found".to_vec());
 
     let id = uri.host().unwrap_or_default();
     let path = percent_decode(uri.path().trim_start_matches('/'));
-    if path == "__tuxhub/bridge.js" {
+    if path == "__tuxly/bridge.js" {
         return reply(
             StatusCode::OK,
             "text/javascript",
@@ -488,7 +485,7 @@ fn serve_tool(app: &AppHandle, uri: &tauri::http::Uri) -> Response<Vec<u8>> {
     let Ok(file) = root.join(&path).canonicalize() else {
         return not_found();
     };
-    // Nichts außerhalb des Tool-Ordners ausliefern.
+    // Never serve anything outside the tool folder.
     if !file.starts_with(&root) || !file.is_file() {
         return not_found();
     }
@@ -549,11 +546,13 @@ fn percent_decode(s: &str) -> String {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        // Muss das erste Plugin sein: Ein zweiter Start holt nur das Fenster nach vorn.
+        // Must be the first plugin: a second launch only brings the window to the front.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             system::show_window(app)
         }))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .register_uri_scheme_protocol("tool", |ctx, req| serve_tool(ctx.app_handle(), req.uri()))
         .register_asynchronous_uri_scheme_protocol("toolweb", |ctx, req, responder| {
             let app = ctx.app_handle().clone();
@@ -569,6 +568,12 @@ pub fn run() {
             std::fs::create_dir_all(&settings_dir)?;
             let hub_settings_path = config_dir.join("hub.json");
             let settings = system::HubSettings::load(&hub_settings_path);
+            // Keep the autostart entry pointing to the running installation.
+            if settings.autostart
+                && let Err(e) = system::apply_autostart(&settings)
+            {
+                eprintln!("autostart: {e}");
+            }
             app.manage(Hub {
                 tools_dir,
                 settings_dir,
@@ -581,9 +586,9 @@ pub fn run() {
             });
 
             if let Err(e) = system::setup_tray(app.handle()) {
-                eprintln!("Tray-Icon nicht verfügbar: {e}");
+                eprintln!("tray icon not available: {e}");
             }
-            // Das Fenster startet versteckt; nur beim Autostart mit --minimized bleibt es so.
+            // The window starts hidden and stays hidden only when started with --minimized.
             if !std::env::args().any(|a| a == system::MINIMIZED_ARG) {
                 system::show_window(app.handle());
             }
@@ -641,7 +646,7 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // Eingebettete App-Sitzungen beim Beenden mit aufräumen.
+            // Stop the sessions of applications shown inside tuxly on exit.
             if let tauri::RunEvent::Exit = event {
                 tauri::async_runtime::block_on(embed::stop_all(app));
             }
