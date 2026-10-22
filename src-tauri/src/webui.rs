@@ -1,9 +1,9 @@
 //! Integration level 1: embed the web interface of a tool.
 //!
 //! Many web interfaces forbid embedding through `X-Frame-Options` or
-//! `Content-Security-Policy: frame-ancestors`. tuxly therefore serves local
+//! `Content-Security-Policy: frame-ancestors`. tuxhub therefore serves local
 //! web interfaces through `toolweb://<id>/<path>` and removes these headers.
-//! Only loopback addresses are proxied, so tuxly is never an open proxy.
+//! Only loopback addresses are proxied, so tuxhub is never an open proxy.
 //! WebSockets are not proxied; the separate window covers that case.
 
 use crate::{Hub, tools};
@@ -198,7 +198,7 @@ mod tests {
     fn mock_hub(web_url: &str) -> (tauri::App<tauri::test::MockRuntime>, PathBuf) {
         let app = tauri::test::mock_app();
         let base = std::env::temp_dir().join(format!(
-            "tuxly-web-{}-{}",
+            "tuxhub-web-{}-{}",
             std::process::id(),
             web_url.len()
         ));
@@ -207,7 +207,7 @@ mod tests {
         std::fs::create_dir_all(&tool_dir).unwrap();
         std::fs::create_dir_all(tools_dir.join("w")).unwrap();
         std::fs::write(
-            tool_dir.join("tuxly.toml"),
+            tool_dir.join("tuxhub.toml"),
             format!("id = \"w\"\nname = \"W\"\nweb_url = \"{web_url}\"\n"),
         )
         .unwrap();

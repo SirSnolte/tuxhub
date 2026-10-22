@@ -47,7 +47,7 @@ fn client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
-            .user_agent(concat!("tuxly/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("tuxhub/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("HTTP-Client")
     })

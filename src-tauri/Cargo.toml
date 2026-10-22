@@ -1,12 +1,12 @@
 [package]
-name = "tuxly"
+name = "tuxhub"
 version = "0.2.0"
 description = "Modular hub for gaming on Linux"
 authors = ["SirSnolte"]
 edition = "2024"
 
 [lib]
-name = "tuxly_lib"
+name = "tuxhub_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

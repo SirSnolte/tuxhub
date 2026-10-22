@@ -4,10 +4,22 @@
     "name": "Autoclicker",
     "description": "Automated clicking and keyboard and mouse macros. Works on Wayland and X11, with global hotkeys.",
     "category": "input",
-    "repo": "SirSnolte/tuxly-autoclicker",
+    "repo": "SirSnolte/tuxhub-autoclicker",
     "source": { "type": "github-release", "asset": "*x86_64-linux.tar.gz" },
     "translations": {
       "de": { "description": "Automatisches Klicken sowie Makros für Tastatur und Maus. Funktioniert unter Wayland und X11, mit globalen Hotkeys." }
+    }
+  },
+  {
+    "id": "push-to-mute",
+    "name": "Push-to-Mute",
+    "description": "Mutes Discord, TeamSpeak and other voice chats while you talk in game with push-to-talk. The key still reaches the game.",
+    "icon": "https://raw.githubusercontent.com/SirSnolte/tuxhub-push-to-mute/HEAD/assets/icon.svg",
+    "category": "input",
+    "repo": "SirSnolte/tuxhub-push-to-mute",
+    "source": { "type": "github-release", "asset": "*x86_64-linux.tar.gz" },
+    "translations": {
+      "de": { "description": "Schaltet Discord, TeamSpeak und andere Sprachchats stumm, während du im Spiel per Push-to-Talk sprichst. Die Taste erreicht das Spiel weiterhin." }
     }
   },
   {

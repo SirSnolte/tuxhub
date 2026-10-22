@@ -1,3 +1,3 @@
 fn main() {
-    tuxly_lib::run()
+    tuxhub_lib::run()
 }

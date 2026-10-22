@@ -26,6 +26,7 @@ export type Manifest = {
   version?: string;
   run?: Cmd;
   rpc?: Cmd;
+  uninstall?: Cmd;
   ui?: string;
   web_url?: string;
   notice?: string;
@@ -36,7 +37,9 @@ export type Manifest = {
 export type Source =
   | { type: "github-release"; asset: string }
   | { type: "flatpak"; flatpak_id: string; remote?: string }
-  | { type: "local"; path: string };
+  | { type: "local"; path: string }
+  /** Installed outside tuxhub; `user` marks an installation in the user's home. */
+  | { type: "external"; path: string; asset?: string; user: boolean };
 
 export type Entry = {
   id: string;

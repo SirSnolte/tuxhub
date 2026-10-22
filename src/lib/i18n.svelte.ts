@@ -23,6 +23,7 @@ const en = {
   "source.github-release": "GitHub release",
   "source.flatpak": "Flatpak",
   "source.local": "Local",
+  "source.external": "Installed separately",
 
   "level.0": "Standalone",
   "level.1": "Web interface",
@@ -46,13 +47,13 @@ const en = {
   "tool.noLauncher": "No executable was found for this tool.",
   "tool.unknownOp": "Unknown operation: {op}",
 
-  "embed.start": "Start in tuxly",
-  "embed.hint": "The application runs inside tuxly. For 3D games, use Open in window.",
+  "embed.start": "Start in tuxhub",
+  "embed.hint": "The application runs inside tuxhub. For 3D games, use Open in window.",
   "embed.starting": "Starting {name}…",
   "embed.stopping": "Closing {name}…",
   "embed.lost": "Connection to {name} lost",
   "embed.startedWindow": "{name} opened in its own window",
-  "embed.missing": "Running applications inside tuxly requires {dep}. Install it with your package manager:",
+  "embed.missing": "Running applications inside tuxhub requires {dep}. Install it with your package manager:",
 
   "web.checking": "Checking web interface…",
   "web.unreachable": "The web interface is not responding. Is {name} running?",
@@ -108,17 +109,17 @@ const en = {
   "hub.hotkeysConfigure": "Configure hotkeys…",
   "hub.dev": "Developer mode: link a local tool",
   "hub.devHint":
-    "Select a folder that contains a tuxly.toml with an id and a name. tuxly uses the folder directly, which is convenient while developing a tool.",
+    "Select a folder that contains a tuxhub.toml with an id and a name. tuxhub uses the folder directly, which is convenient while developing a tool.",
   "hub.devLink": "Link",
   "hub.devLinked": "Local tool linked",
   "hub.about": "About",
-  "hub.aboutText": "tuxly {version}. A modular hub for gaming on Linux.",
-  "hub.selfUpdate": "tuxly updates",
-  "hub.selfCheck": "Check for tuxly updates",
+  "hub.aboutText": "tuxhub {version}. A modular hub for gaming on Linux.",
+  "hub.selfUpdate": "tuxhub updates",
+  "hub.selfCheck": "Check for tuxhub updates",
   "hub.selfCurrent": "You are running the latest version.",
   "hub.selfDev": "Updates are not available in development builds.",
 
-  "selfupdate.available": "tuxly {version} is available.",
+  "selfupdate.available": "tuxhub {version} is available.",
   "selfupdate.install": "Update now",
   "selfupdate.later": "Later",
   "selfupdate.downloading": "Downloading update… {percent}%",
@@ -151,6 +152,7 @@ const de: Record<Key, string> = {
   "source.github-release": "GitHub-Release",
   "source.flatpak": "Flatpak",
   "source.local": "Lokal",
+  "source.external": "Separat installiert",
 
   "level.0": "Eigenständig",
   "level.1": "Web-Oberfläche",
@@ -174,13 +176,13 @@ const de: Record<Key, string> = {
   "tool.noLauncher": "Für dieses Tool wurde keine ausführbare Datei gefunden.",
   "tool.unknownOp": "Unbekannte Operation: {op}",
 
-  "embed.start": "In tuxly starten",
-  "embed.hint": "Die Anwendung läuft innerhalb von tuxly. Für 3D-Spiele ist „Im eigenen Fenster“ besser geeignet.",
+  "embed.start": "In tuxhub starten",
+  "embed.hint": "Die Anwendung läuft innerhalb von tuxhub. Für 3D-Spiele ist „Im eigenen Fenster“ besser geeignet.",
   "embed.starting": "{name} wird gestartet…",
   "embed.stopping": "{name} wird beendet…",
   "embed.lost": "Verbindung zu {name} verloren",
   "embed.startedWindow": "{name} im eigenen Fenster geöffnet",
-  "embed.missing": "Für die Anzeige innerhalb von tuxly wird {dep} benötigt. Installation über die Paketverwaltung:",
+  "embed.missing": "Für die Anzeige innerhalb von tuxhub wird {dep} benötigt. Installation über die Paketverwaltung:",
 
   "web.checking": "Web-Oberfläche wird geprüft…",
   "web.unreachable": "Die Web-Oberfläche antwortet nicht. Läuft {name}?",
@@ -236,17 +238,17 @@ const de: Record<Key, string> = {
   "hub.hotkeysConfigure": "Hotkeys festlegen…",
   "hub.dev": "Entwicklermodus: lokales Tool verknüpfen",
   "hub.devHint":
-    "Ordner mit einer tuxly.toml (inklusive id und name). tuxly verwendet den Ordner direkt, praktisch während der Entwicklung eines Tools.",
+    "Ordner mit einer tuxhub.toml (inklusive id und name). tuxhub verwendet den Ordner direkt, praktisch während der Entwicklung eines Tools.",
   "hub.devLink": "Verknüpfen",
   "hub.devLinked": "Lokales Tool verknüpft",
   "hub.about": "Über",
-  "hub.aboutText": "tuxly {version}. Ein modularer Hub für Gaming unter Linux.",
-  "hub.selfUpdate": "tuxly-Updates",
-  "hub.selfCheck": "Nach tuxly-Updates suchen",
+  "hub.aboutText": "tuxhub {version}. Ein modularer Hub für Gaming unter Linux.",
+  "hub.selfUpdate": "tuxhub-Updates",
+  "hub.selfCheck": "Nach tuxhub-Updates suchen",
   "hub.selfCurrent": "Du verwendest die neueste Version.",
   "hub.selfDev": "In Entwicklungsversionen sind Updates nicht verfügbar.",
 
-  "selfupdate.available": "tuxly {version} ist verfügbar.",
+  "selfupdate.available": "tuxhub {version} ist verfügbar.",
   "selfupdate.install": "Jetzt aktualisieren",
   "selfupdate.later": "Später",
   "selfupdate.downloading": "Update wird geladen… {percent} %",
@@ -262,7 +264,7 @@ export const LOCALES: { id: Locale; label: string }[] = [
 ];
 
 const dictionaries: Record<Locale, Record<Key, string>> = { en, de };
-const STORAGE_KEY = "tuxly.locale";
+const STORAGE_KEY = "tuxhub.locale";
 
 function systemLocale(): Locale {
   return navigator.language?.toLowerCase().startsWith("de") ? "de" : "en";

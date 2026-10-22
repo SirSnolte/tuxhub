@@ -1,6 +1,6 @@
 # Third-party notices
 
-tuxly includes or depends on the following third-party software. Each
+tuxhub includes or depends on the following third-party software. Each
 component is used under the terms of its own license.
 
 ## Bundled without modifications
@@ -27,11 +27,11 @@ The complete list of dependencies and their licenses can be generated from
 
 ## Runtime tools
 
-tuxly can use the following programs when they are installed on the system.
-They are not distributed with tuxly.
+tuxhub can use the following programs when they are installed on the system.
+They are not distributed with tuxhub.
 
 | Program | Purpose | License |
 |---|---|---|
-| [xpra](https://xpra.org) | Running applications inside tuxly | GPL-2.0-or-later |
+| [xpra](https://xpra.org) | Running applications inside tuxhub | GPL-2.0-or-later |
 | [Flatpak](https://flatpak.org) | Installing Flatpak applications | LGPL-2.1-or-later |
 | [xdg-desktop-portal](https://github.com/flatpak/xdg-desktop-portal) | Global hotkeys, file dialogs | LGPL-2.1-or-later |

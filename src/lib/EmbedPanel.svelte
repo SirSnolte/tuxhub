@@ -51,7 +51,7 @@
     readySince = null;
     winSince = null;
     clearInterval(watch);
-    // The xpra client is served from the same origin as tuxly, so the iframe
+    // The xpra client is served from the same origin as tuxhub, so the iframe
     // can be inspected: is a window present, or did it switch to its connect page?
     watch = setInterval(inspect, 200);
     clearInterval(timer);

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal RPC process for tuxly: one JSON message per line on stdin/stdout."""
+"""Minimal RPC process for tuxhub: one JSON message per line on stdin/stdout."""
 
 import json
 import sys
@@ -36,6 +36,6 @@ for line in sys.stdin:
         if mid is not None:
             send({"id": mid, "result": result})
         status()
-    except Exception as e:  # report errors back to tuxly
+    except Exception as e:  # report errors back to tuxhub
         if mid is not None:
             send({"id": mid, "error": {"message": str(e)}})

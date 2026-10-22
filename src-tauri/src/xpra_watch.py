@@ -1,7 +1,7 @@
-"""Window watcher for an xpra session started by tuxly.
+"""Window watcher for an xpra session started by tuxhub.
 
 Maximizes every new main window on the given X display so the application
-fills the area inside tuxly. Dialogs (transient windows or windows of type
+fills the area inside tuxhub. Dialogs (transient windows or windows of type
 DIALOG, UTILITY or SPLASH) are left alone. Exits when the display goes away.
 
 Usage: python3 xpra_watch.py :DISPLAY

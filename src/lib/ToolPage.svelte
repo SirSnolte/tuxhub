@@ -28,11 +28,18 @@
   const status = $derived(hub.status[id]);
   const progress = $derived(hub.progress[id]);
   const isLocal = $derived(tool.entry.source.type === "local");
+  const source = $derived(tool.entry.source);
+  /** Installed outside tuxhub, in the user's home: tuxhub can update and remove it. */
+  const ownedExternal = $derived(source.type === "external" && source.user);
+  const updatable = $derived(
+    source.type === "github-release" || (ownedExternal && source.type === "external" && !!source.asset && !!tool.entry.repo),
+  );
+  const removable = $derived(source.type !== "external" || (ownedExternal && !!m.uninstall));
   const webTool = $derived(!!m.web_url && !m.ui);
   const plainApp = $derived(tool.level === 0 && tool.can_launch);
 
   let busy = $state(false);
-  /** Whether a standalone app is currently shown inside tuxly. */
+  /** Whether a standalone app is currently shown inside tuxhub. */
   let embedded = $state(false);
   let embedPanel = $state<EmbedPanel>();
   let webPanel = $state<WebPanel>();
@@ -80,13 +87,13 @@
   let frame = $state<HTMLIFrameElement>();
 
   function post(msg: Record<string, unknown>) {
-    frame?.contentWindow?.postMessage({ tuxly: 1, ...msg }, "*");
+    frame?.contentWindow?.postMessage({ tuxhub: 1, ...msg }, "*");
   }
 
   function onmessage(ev: MessageEvent) {
     if (!frame || ev.source !== frame.contentWindow) return;
     const msg = ev.data;
-    if (!msg || msg.tuxly !== 1) return;
+    if (!msg || msg.tuxhub !== 1) return;
     if (msg.op === "ready") {
       post({ event: "theme", params: { dark: matchMedia("(prefers-color-scheme: dark)").matches } });
       post({ event: "locale", params: { locale: i18n.locale } });
@@ -142,7 +149,7 @@
           {t("tool.start")}
         </button>
       {/if}
-      {#if tool.entry.source.type === "github-release"}
+      {#if updatable}
         {#if update}
           <button
             disabled={busy}
@@ -172,9 +179,11 @@
           {t("tool.ownWindow")}
         </button>
       {/if}
-      <button class="danger" disabled={busy} onclick={uninstall}>
-        {isLocal ? t("tool.unlink") : t("tool.uninstall")}
-      </button>
+      {#if removable}
+        <button class="danger" disabled={busy} onclick={uninstall}>
+          {isLocal ? t("tool.unlink") : t("tool.uninstall")}
+        </button>
+      {/if}
     </div>
   </header>
 
@@ -193,7 +202,7 @@
   {/if}
 
   {#if m.ui}
-    <!-- Opaque origin: the page can only reach tuxly through the bridge (postMessage). -->
+    <!-- Opaque origin: the page can only reach tuxhub through the bridge (postMessage). -->
     <iframe
       bind:this={frame}
       class="tool-ui card"

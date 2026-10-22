@@ -72,10 +72,10 @@
 </script>
 
 <div class="app">
-  <nav aria-label="tuxly">
+  <nav aria-label="tuxhub">
     <div class="brand">
       <img src="/logo.svg" alt="" width="26" height="26" />
-      <span>tuxly</span>
+      <span>tuxhub</span>
     </div>
 
     <button class="nav" class:active={view.kind === "workshop"} onclick={() => (view = { kind: "workshop" })}>

@@ -1,6 +1,6 @@
 //! Hub settings, tray icon, autostart and window behavior.
 //!
-//! tuxly keeps running in the background so that global hotkeys work while
+//! tuxhub keeps running in the background so that global hotkeys work while
 //! the window is closed.
 
 use crate::Hub;
@@ -19,7 +19,7 @@ pub struct HubSettings {
     pub autostart: bool,
     /// When started at login, show only the tray icon.
     pub start_minimized: bool,
-    /// Closing the window keeps tuxly running in the tray.
+    /// Closing the window keeps tuxhub running in the tray.
     pub close_to_tray: bool,
     /// Check for tool updates periodically.
     pub check_updates: bool,
@@ -66,7 +66,7 @@ fn autostart_file() -> Option<PathBuf> {
     let config = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(config.join("autostart/io.github.sirsnolte.tuxly.desktop"))
+    Some(config.join("autostart/io.github.sirsnolte.tuxhub.desktop"))
 }
 
 /// Creates or removes the autostart entry. Also called at startup so the
@@ -90,8 +90,8 @@ pub fn apply_autostart(s: &HubSettings) -> Result<(), String> {
         String::new()
     };
     let content = format!(
-        "[Desktop Entry]\nType=Application\nName=tuxly\nComment={}\n\
-         Exec=\"{}\"{args}\nIcon=tuxly\nX-GNOME-Autostart-enabled=true\n",
+        "[Desktop Entry]\nType=Application\nName=tuxhub\nComment={}\n\
+         Exec=\"{}\"{args}\nIcon=tuxhub\nX-GNOME-Autostart-enabled=true\n",
         tr(
             "Modular hub for gaming on Linux",
             "Modularer Hub für Gaming unter Linux"
@@ -119,7 +119,7 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(
         app,
         "show",
-        tr("Open tuxly", "tuxly öffnen"),
+        tr("Open tuxhub", "tuxhub öffnen"),
         true,
         None::<&str>,
     )?;
@@ -142,7 +142,7 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let menu = Menu::with_items(app, &[&show, &updates, &sep, &stop, &quit])?;
 
     let mut tray = TrayIconBuilder::with_id("main")
-        .tooltip("tuxly")
+        .tooltip("tuxhub")
         .menu(&menu)
         .on_menu_event(|app, ev| match ev.id().as_ref() {
             "show" | "updates" => show_window(app),

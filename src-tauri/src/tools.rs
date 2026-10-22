@@ -3,6 +3,10 @@
 //! Layout below `<data>/tools/<id>/`:
 //! - `tool.json`: the workshop entry and the installed version
 //! - `files/`: the extracted release (GitHub releases only)
+//!
+//! Tools installed outside tuxhub announce themselves with a file
+//! `tuxhub/apps/<id>.toml` in `$XDG_DATA_HOME` or one of `$XDG_DATA_DIRS`
+//! (see [`discover`]). They appear like any other installed tool.
 
 use crate::github;
 use crate::manifest::{Manifest, safe_relative, valid_id};
@@ -32,7 +36,7 @@ pub struct Entry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
     pub source: Source,
-    /// Replaces a `tuxly.toml` shipped by the tool, so third-party tools can
+    /// Replaces a `tuxhub.toml` shipped by the tool, so third-party tools can
     /// be integrated without changes to their repository.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manifest: Option<Manifest>,
@@ -53,6 +57,18 @@ pub enum Source {
     },
     /// A local folder linked in developer mode.
     Local { path: String },
+    /// Installed outside tuxhub and announced in a `tuxhub/apps/<id>.toml`.
+    External {
+        path: String,
+        /// Release asset pattern; together with `repo` it allows updates.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        asset: Option<String>,
+        /// Announced in the user's data folder: tuxhub may update and remove
+        /// the installation. System-wide installations belong to the package
+        /// manager.
+        #[serde(default)]
+        user: bool,
+    },
 }
 
 fn default_remote() -> String {
@@ -135,7 +151,7 @@ impl Installed {
     /// Folder that contains the tool files (Flatpaks have none).
     pub fn root_dir(&self, tools_dir: &Path) -> Option<PathBuf> {
         match &self.entry.source {
-            Source::Local { path } => Some(PathBuf::from(path)),
+            Source::Local { path } | Source::External { path, .. } => Some(PathBuf::from(path)),
             Source::GithubRelease { .. } => Some(
                 tools_dir
                     .join(&self.entry.id)
@@ -145,7 +161,7 @@ impl Installed {
         }
     }
 
-    /// Manifest from the workshop entry, otherwise the tool's `tuxly.toml`.
+    /// Manifest from the workshop entry, otherwise the tool's `tuxhub.toml`.
     pub fn manifest(&self, tools_dir: &Path) -> Manifest {
         if let Some(m) = &self.entry.manifest {
             return m.clone();
@@ -181,6 +197,12 @@ pub fn load_all(tools_dir: &Path) -> Vec<Installed> {
             }
         })
         .collect();
+    // Tools installed through tuxhub take precedence over announcements.
+    for ext in discover() {
+        if !out.iter().any(|t| t.entry.id == ext.entry.id) {
+            out.push(ext);
+        }
+    }
     out.sort_by_key(|a| a.entry.name.to_lowercase());
     out
 }
@@ -189,9 +211,123 @@ pub fn load(tools_dir: &Path, id: &str) -> Result<Installed, String> {
     if !valid_id(id) {
         return Err(format!("invalid tool id {id:?}"));
     }
-    let s = std::fs::read_to_string(tools_dir.join(id).join("tool.json"))
-        .map_err(|_| format!("tool {id:?} is not installed"))?;
-    serde_json::from_str(&s).map_err(|e| e.to_string())
+    match std::fs::read_to_string(tools_dir.join(id).join("tool.json")) {
+        Ok(s) => serde_json::from_str(&s).map_err(|e| e.to_string()),
+        Err(_) => discover()
+            .into_iter()
+            .find(|t| t.entry.id == id)
+            .ok_or_else(|| format!("tool {id:?} is not installed")),
+    }
+}
+
+/// Announcement of a tool installed outside tuxhub.
+#[derive(Deserialize)]
+struct Announcement {
+    id: String,
+    /// Absolute path of the folder that contains the tool's `tuxhub.toml`.
+    path: String,
+    #[serde(default)]
+    repo: Option<String>,
+    #[serde(default)]
+    asset: Option<String>,
+    #[serde(default)]
+    category: Option<String>,
+}
+
+fn env_path(var: &str) -> Option<PathBuf> {
+    std::env::var_os(var)
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+}
+
+/// Folders with announcements, the user's first, with a flag for the user's.
+fn announcement_dirs() -> Vec<(PathBuf, bool)> {
+    let mut dirs = Vec::new();
+    let user =
+        env_path("XDG_DATA_HOME").or_else(|| env_path("HOME").map(|h| h.join(".local/share")));
+    if let Some(d) = user {
+        dirs.push((d.join("tuxhub/apps"), true));
+    }
+    let system = std::env::var("XDG_DATA_DIRS")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
+    for d in system
+        .split(':')
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+    {
+        dirs.push((d.join("tuxhub/apps"), false));
+    }
+    dirs
+}
+
+/// Tools installed outside tuxhub. An announcement is only accepted if its
+/// folder contains a `tuxhub.toml` with the same id.
+pub fn discover() -> Vec<Installed> {
+    let mut out: Vec<Installed> = Vec::new();
+    for (dir, user) in announcement_dirs() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut files: Vec<PathBuf> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "toml"))
+            .collect();
+        files.sort();
+        for file in files {
+            match announced(&file, user) {
+                Ok(inst) if !out.iter().any(|t| t.entry.id == inst.entry.id) => out.push(inst),
+                Ok(_) => {}
+                Err(e) => eprintln!("{}: {e}", file.display()),
+            }
+        }
+    }
+    out
+}
+
+fn announced(file: &Path, user: bool) -> Result<Installed, String> {
+    let s = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
+    let a: Announcement = toml::from_str(&s).map_err(|e| e.to_string())?;
+    if !valid_id(&a.id) || file.file_stem().and_then(|s| s.to_str()) != Some(a.id.as_str()) {
+        return Err(format!("the id {:?} must match the file name", a.id));
+    }
+    let path = PathBuf::from(&a.path);
+    if !path.is_absolute() {
+        return Err("`path` must be absolute".into());
+    }
+    let m = Manifest::load(&path)?
+        .ok_or_else(|| format!("{} contains no tuxhub.toml", path.display()))?;
+    if m.id.as_deref() != Some(a.id.as_str()) {
+        return Err(format!(
+            "the tuxhub.toml in {} belongs to another tool",
+            path.display()
+        ));
+    }
+    let entry = Entry {
+        name: m.name.clone().unwrap_or_else(|| a.id.clone()),
+        description: m.description.clone().unwrap_or_default(),
+        icon: m.icon.clone(),
+        category: a.category,
+        repo: a.repo,
+        homepage: None,
+        source: Source::External {
+            path: a.path,
+            asset: a.asset,
+            user,
+        },
+        manifest: None,
+        translations: BTreeMap::new(),
+        id: a.id,
+    };
+    entry.validate()?;
+    Ok(Installed {
+        version: m.version.clone(),
+        entry,
+        root: None,
+        detected_run: None,
+    })
 }
 
 fn write_record(dir: &Path, inst: &Installed) -> Result<(), String> {
@@ -267,17 +403,20 @@ pub async fn install<R: Runtime>(
             Ok(inst)
         }
         Source::Local { .. } => Err("local tools are linked, not installed".into()),
+        Source::External { .. } => Err("this tool is installed outside tuxhub".into()),
     }
 }
 
-async fn install_github<R: Runtime>(
+/// Downloads the latest release asset matching `pattern` and extracts it to
+/// `staging/files`. Returns the release tag and the tool root relative to
+/// `staging`.
+async fn fetch_release<R: Runtime>(
     app: &AppHandle<R>,
-    tools_dir: &Path,
-    entry: &Entry,
+    staging: &Path,
+    id: &str,
     repo: &str,
     pattern: &str,
-) -> Result<Installed, String> {
-    let id = entry.id.as_str();
+) -> Result<(String, String), String> {
     progress(app, stage(id, "resolving", None));
     let rel = github::latest_release(repo).await?;
     let asset = rel
@@ -289,10 +428,7 @@ async fn install_github<R: Runtime>(
         .ok_or_else(|| format!("no asset of release {} matches {pattern:?}", rel.tag_name))?
         .clone();
 
-    // Install into a staging folder and swap at the end, so an interrupted
-    // update never breaks the installed version.
-    let staging = tools_dir.join(format!(".{id}.new"));
-    let _ = std::fs::remove_dir_all(&staging);
+    let _ = std::fs::remove_dir_all(staging);
     let files = staging.join("files");
     std::fs::create_dir_all(&files).map_err(|e| e.to_string())?;
 
@@ -359,16 +495,31 @@ async fn install_github<R: Runtime>(
     if top.len() == 1 && top[0].path().is_dir() {
         root = format!("files/{}", top[0].file_name().to_string_lossy());
     }
+    Ok((rel.tag_name, root))
+}
+
+async fn install_github<R: Runtime>(
+    app: &AppHandle<R>,
+    tools_dir: &Path,
+    entry: &Entry,
+    repo: &str,
+    pattern: &str,
+) -> Result<Installed, String> {
+    let id = entry.id.as_str();
+    // Install into a staging folder and swap at the end, so an interrupted
+    // update never breaks the installed version.
+    let staging = tools_dir.join(format!(".{id}.new"));
+    let (tag, root) = fetch_release(app, &staging, id, repo, pattern).await?;
 
     let mut inst = Installed {
         entry: entry.clone(),
-        version: Some(rel.tag_name.clone()),
+        version: Some(tag),
         root: Some(root),
         detected_run: None,
     };
     let root_dir = staging.join(inst.root.as_deref().unwrap());
     // Only guess an executable when there is no manifest at all. A manifest
-    // without `run` means the tool is operated exclusively through tuxly.
+    // without `run` means the tool is operated exclusively through tuxhub.
     let has_manifest = entry.manifest.is_some() || Manifest::load(&root_dir)?.is_some();
     if !has_manifest {
         inst.detected_run = detect_executable(&root_dir);
@@ -384,6 +535,61 @@ async fn install_github<R: Runtime>(
     }
     std::fs::rename(&staging, &dir).map_err(|e| e.to_string())?;
     Ok(inst)
+}
+
+/// Updates a tool installed outside tuxhub in its own folder. The new
+/// release must contain a `tuxhub.toml` with the same id, so an announcement
+/// can never make tuxhub replace an unrelated folder.
+pub async fn update_external<R: Runtime>(
+    app: &AppHandle<R>,
+    inst: &Installed,
+) -> Result<(), String> {
+    let id = inst.id();
+    let (
+        Source::External {
+            path,
+            asset: Some(pattern),
+            user: true,
+        },
+        Some(repo),
+    ) = (&inst.entry.source, &inst.entry.repo)
+    else {
+        return Err(format!(
+            "{id} is installed outside tuxhub and cannot be updated here"
+        ));
+    };
+    let dest = PathBuf::from(path);
+    let current = Manifest::load(&dest)?;
+    if current.and_then(|m| m.id).as_deref() != Some(id) {
+        return Err(format!("{} does not contain {id}", dest.display()));
+    }
+    let parent = dest.parent().ok_or("invalid installation folder")?;
+    let name = dest
+        .file_name()
+        .ok_or("invalid installation folder")?
+        .to_string_lossy();
+    // Stage next to the installation, so the final rename stays on one file system.
+    let staging = parent.join(format!(".{name}.tuxhub-update"));
+    let result = async {
+        let (_, root) = fetch_release(app, &staging, id, repo, pattern).await?;
+        let new_root = staging.join(root);
+        let m = Manifest::load(&new_root)?.ok_or("the release contains no tuxhub.toml")?;
+        if m.id.as_deref() != Some(id) {
+            return Err(format!("the release does not contain {id}"));
+        }
+        let old = parent.join(format!(".{name}.tuxhub-old"));
+        let _ = std::fs::remove_dir_all(&old);
+        std::fs::rename(&dest, &old).map_err(|e| e.to_string())?;
+        if let Err(e) = std::fs::rename(&new_root, &dest) {
+            let _ = std::fs::rename(&old, &dest);
+            return Err(e.to_string());
+        }
+        let _ = std::fs::remove_dir_all(&old);
+        Ok(())
+    }
+    .await;
+    let _ = std::fs::remove_dir_all(&staging);
+    result
 }
 
 /// Looks for something to launch: an AppImage first, otherwise the only
@@ -410,15 +616,15 @@ fn detect_executable(dir: &Path) -> Option<String> {
     (exec.len() == 1).then(|| exec[0].0.clone())
 }
 
-/// Links a local folder with a `tuxly.toml` as a tool (developer mode).
+/// Links a local folder with a `tuxhub.toml` as a tool (developer mode).
 pub fn link_local(tools_dir: &Path, path: &Path) -> Result<Installed, String> {
     let path = path
         .canonicalize()
         .map_err(|e| format!("{}: {e}", path.display()))?;
-    let m = Manifest::load(&path)?.ok_or("the folder does not contain a tuxly.toml")?;
+    let m = Manifest::load(&path)?.ok_or("the folder does not contain a tuxhub.toml")?;
     let id =
         m.id.clone()
-            .ok_or("tuxly.toml needs an `id` for local tools")?;
+            .ok_or("tuxhub.toml needs an `id` for local tools")?;
     let entry = Entry {
         name: m.name.clone().unwrap_or_else(|| id.clone()),
         description: m.description.clone().unwrap_or_default(),
@@ -452,7 +658,41 @@ pub fn link_local(tools_dir: &Path, path: &Path) -> Result<Installed, String> {
     Ok(inst)
 }
 
+/// Removes a tool. The tool's own `uninstall` command runs first, so it can
+/// remove what it set up itself. Tools installed outside tuxhub are removed
+/// by that command alone.
 pub async fn uninstall(tools_dir: &Path, inst: &Installed) -> Result<(), String> {
+    let hook = inst.manifest(tools_dir).uninstall;
+    if let Source::External { user, .. } = &inst.entry.source
+        && (!user || hook.is_none())
+    {
+        return Err(format!(
+            "{} is installed outside tuxhub; remove it with its own uninstaller or the package manager",
+            inst.entry.name
+        ));
+    }
+    if let (Some(cmd), Some(root)) = (&hook, inst.root_dir(tools_dir)) {
+        let out = Command::new(root.join(&cmd.command))
+            .args(&cmd.args)
+            .current_dir(&root)
+            .stdin(std::process::Stdio::null())
+            .output();
+        match tokio::time::timeout(std::time::Duration::from_secs(30), out).await {
+            Ok(Ok(o)) if o.status.success() => {}
+            Ok(Ok(o)) => {
+                let err = String::from_utf8_lossy(&o.stderr).trim().to_string();
+                if matches!(inst.entry.source, Source::External { .. }) {
+                    return Err(err);
+                }
+                eprintln!("{}: uninstall command failed: {err}", inst.id());
+            }
+            Ok(Err(e)) => eprintln!("{}: could not run the uninstall command: {e}", inst.id()),
+            Err(_) => eprintln!("{}: the uninstall command timed out", inst.id()),
+        }
+    }
+    if matches!(inst.entry.source, Source::External { .. }) {
+        return Ok(());
+    }
     if let Source::Flatpak { flatpak_id, .. } = &inst.entry.source {
         run(
             "flatpak",
@@ -522,16 +762,70 @@ pub fn launch(tools_dir: &Path, inst: &Installed) -> Result<(), String> {
 
 /// Returns the latest release tag if it differs from the installed one.
 pub async fn check_update(inst: &Installed) -> Result<Option<String>, String> {
-    let (Source::GithubRelease { .. }, Some(repo)) = (&inst.entry.source, &inst.entry.repo) else {
+    let updatable = match &inst.entry.source {
+        Source::GithubRelease { .. } => true,
+        Source::External { asset, user, .. } => *user && asset.is_some(),
+        _ => false,
+    };
+    let (true, Some(repo)) = (updatable, &inst.entry.repo) else {
         return Ok(None);
     };
     let rel = github::latest_release(repo).await?;
-    Ok((inst.version.as_deref() != Some(rel.tag_name.as_str())).then_some(rel.tag_name))
+    // External tools report their manifest version, usually without the "v".
+    let norm = |v: &str| v.trim_start_matches('v').to_string();
+    let newer = inst.version.as_deref().map(norm) != Some(norm(&rel.tag_name));
+    Ok(newer.then_some(rel.tag_name))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_announcements_of_external_tools() {
+        let tmp = std::env::temp_dir().join(format!("tuxhub-announce-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let apps = tmp.join("apps");
+        let tool = tmp.join("tool");
+        std::fs::create_dir_all(&apps).unwrap();
+        std::fs::create_dir_all(&tool).unwrap();
+        std::fs::write(
+            tool.join("tuxhub.toml"),
+            "id = \"demo\"\nname = \"Demo\"\nversion = \"1.2.0\"\n[uninstall]\ncommand = \"demo\"\n",
+        )
+        .unwrap();
+        let announce = |file: &str, id: &str| {
+            let p = apps.join(file);
+            std::fs::write(
+                &p,
+                format!(
+                    "id = \"{id}\"\npath = {:?}\nrepo = \"owner/demo\"\nasset = \"*.tar.gz\"\n",
+                    tool.to_string_lossy()
+                ),
+            )
+            .unwrap();
+            p
+        };
+
+        let inst = announced(&announce("demo.toml", "demo"), true).unwrap();
+        assert_eq!(inst.entry.name, "Demo");
+        assert_eq!(inst.version.as_deref(), Some("1.2.0"));
+        assert_eq!(inst.root_dir(&tmp), Some(tool.clone()));
+        assert!(matches!(
+            inst.entry.source,
+            Source::External {
+                user: true,
+                asset: Some(_),
+                ..
+            }
+        ));
+        assert!(inst.manifest(&tmp).uninstall.is_some());
+
+        // The id must match the file name and the tool's own manifest.
+        assert!(announced(&announce("other.toml", "demo"), true).is_err());
+        assert!(announced(&announce("other.toml", "other"), true).is_err());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     /// Downloads the autoclicker release from GitHub (requires network
     /// access): `cargo test -- --ignored`
@@ -542,7 +836,7 @@ mod tests {
             serde_json::from_str(include_str!("../../registry/index.json")).unwrap();
         let entry = entries.into_iter().find(|e| e.id == "autoclicker").unwrap();
         let app = tauri::test::mock_app();
-        let tmp = std::env::temp_dir().join(format!("tuxly-test-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("tuxhub-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 

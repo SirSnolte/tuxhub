@@ -17,11 +17,11 @@ use tauri::{AppHandle, Manager};
 use tools::{Entry, Installed, Source};
 
 /// Repository the workshop index is loaded from.
-const WORKSHOP_REPO: &str = "SirSnolte/tuxly";
+const WORKSHOP_REPO: &str = "SirSnolte/tuxhub";
 const WORKSHOP_PATH: &str = "registry/index.json";
 /// Bundled index, used when GitHub is not reachable.
 const WORKSHOP_BUNDLED: &str = include_str!("../../registry/index.json");
-/// JavaScript bridge that tool interfaces load with `<script src="/__tuxly/bridge.js">`.
+/// JavaScript bridge that tool interfaces load with `<script src="/__tuxhub/bridge.js">`.
 const BRIDGE_JS: &str = include_str!("bridge.js");
 
 pub struct Hub {
@@ -33,7 +33,7 @@ pub struct Hub {
     settings: std::sync::Mutex<system::HubSettings>,
     /// Tool id -> newer version
     updates: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
-    /// Running sessions of applications shown inside tuxly
+    /// Running sessions of applications shown inside tuxhub
     embeds: embed::Sessions,
 }
 
@@ -140,6 +140,23 @@ async fn ensure_rpc(app: &AppHandle, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Starts the RPC processes of all installed tools that request `autostart`.
+async fn start_background_tools(app: AppHandle) {
+    let ids: Vec<String> = {
+        let hub = app.state::<Hub>();
+        tools::load_all(&hub.tools_dir)
+            .into_iter()
+            .filter(|t| t.manifest(&hub.tools_dir).rpc.is_some_and(|r| r.autostart))
+            .map(|t| t.entry.id)
+            .collect()
+    };
+    for id in ids {
+        if let Err(e) = ensure_rpc(&app, &id).await {
+            eprintln!("{id}: could not start in the background: {e}");
+        }
+    }
+}
+
 #[derive(Clone, Serialize, serde::Deserialize, PartialEq)]
 pub(crate) struct DynShortcut {
     pub id: String,
@@ -235,6 +252,18 @@ async fn workshop_readme(repo: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn tool_install(app: AppHandle, id: String) -> Result<(), String> {
+    // A tool installed outside tuxhub is updated where it is.
+    let existing = tools::load(&app.state::<Hub>().tools_dir, &id).ok();
+    if let Some(inst) = existing.filter(|i| matches!(i.entry.source, Source::External { .. })) {
+        let hub = app.state::<Hub>();
+        hub.runtime.stop(&id).await;
+        embed::stop(&app, &id).await;
+        tools::update_external(&app, &inst).await?;
+        updates::forget(&app, &id);
+        shortcuts::rebind(app.clone());
+        start_background_tools(app).await;
+        return Ok(());
+    }
     let (entries, _) = workshop_entries().await;
     let entry = entries
         .into_iter()
@@ -247,6 +276,7 @@ async fn tool_install(app: AppHandle, id: String) -> Result<(), String> {
     tools::install(&app, &hub.tools_dir, &entry).await?;
     updates::forget(&app, &id);
     shortcuts::rebind(app.clone());
+    start_background_tools(app).await;
     Ok(())
 }
 
@@ -318,6 +348,7 @@ fn tool_link_local(app: AppHandle, path: String) -> Result<String, String> {
     let hub = app.state::<Hub>();
     let inst = tools::link_local(&hub.tools_dir, Path::new(&path))?;
     shortcuts::rebind(app.clone());
+    tauri::async_runtime::spawn(start_background_tools(app));
     Ok(inst.entry.id)
 }
 
@@ -465,7 +496,7 @@ fn serve_tool(app: &AppHandle, uri: &tauri::http::Uri) -> Response<Vec<u8>> {
 
     let id = uri.host().unwrap_or_default();
     let path = percent_decode(uri.path().trim_start_matches('/'));
-    if path == "__tuxly/bridge.js" {
+    if path == "__tuxhub/bridge.js" {
         return reply(
             StatusCode::OK,
             "text/javascript",
@@ -594,6 +625,7 @@ pub fn run() {
             }
             shortcuts::rebind(app.handle().clone());
             updates::spawn_checker(app.handle().clone());
+            tauri::async_runtime::spawn(start_background_tools(app.handle().clone()));
             let embed_dir = app
                 .state::<Hub>()
                 .tools_dir
@@ -646,7 +678,7 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // Stop the sessions of applications shown inside tuxly on exit.
+            // Stop the sessions of applications shown inside tuxhub on exit.
             if let tauri::RunEvent::Exit = event {
                 tauri::async_runtime::block_on(embed::stop_all(app));
             }

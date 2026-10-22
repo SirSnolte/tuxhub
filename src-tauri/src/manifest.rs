@@ -1,4 +1,4 @@
-//! Tool manifest (`tuxly.toml` in a tool release, or inline in a workshop
+//! Tool manifest (`tuxhub.toml` in a tool release, or inline in a workshop
 //! entry).
 //!
 //! Every field is optional. A tool without a manifest is level 0 (launch only),
@@ -26,10 +26,15 @@ pub struct Manifest {
     /// Launch as a regular application (own window).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<Cmd>,
-    /// Background process that tuxly talks to over JSON-RPC.
+    /// Background process that tuxhub talks to over JSON-RPC.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rpc: Option<Cmd>,
-    /// HTML page relative to the tool folder, shown inside tuxly.
+    /// Runs before tuxhub removes the tool. It removes what the tool set up
+    /// itself (login entries, launchers), and for tools installed outside
+    /// tuxhub the installation itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uninstall: Option<Cmd>,
+    /// HTML page relative to the tool folder, shown inside tuxhub.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui: Option<String>,
     /// Existing web interface of the tool (level 1).
@@ -49,6 +54,10 @@ pub struct Cmd {
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
+    /// `rpc` only: start the process together with tuxhub instead of on first
+    /// use, for tools that work in the background.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub autostart: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,9 +101,9 @@ pub struct Action {
 }
 
 impl Manifest {
-    /// Reads `tuxly.toml` from `dir`, if present.
+    /// Reads `tuxhub.toml` from `dir`, if present.
     pub fn load(dir: &Path) -> Result<Option<Self>, String> {
-        let path = dir.join("tuxly.toml");
+        let path = dir.join("tuxhub.toml");
         if !path.is_file() {
             return Ok(None);
         }
@@ -105,7 +114,10 @@ impl Manifest {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        for cmd in [&self.run, &self.rpc].into_iter().flatten() {
+        for cmd in [&self.run, &self.rpc, &self.uninstall]
+            .into_iter()
+            .flatten()
+        {
             if !safe_relative(&cmd.command) {
                 return Err(format!(
                     "command {:?} must be relative to the tool folder",

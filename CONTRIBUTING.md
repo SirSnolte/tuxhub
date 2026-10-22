@@ -1,12 +1,12 @@
 # Contributing
 
-Thank you for your interest in tuxly.
+Thank you for your interest in tuxhub.
 
 ## Reporting problems
 
 Open an issue and include:
 
-- the tuxly version (Settings, About),
+- the tuxhub version (Settings, About),
 - the distribution and desktop environment,
 - the steps to reproduce the problem and what you expected instead.
 

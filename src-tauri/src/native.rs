@@ -1,6 +1,6 @@
 //! Runtime for tool processes (integration level 2).
 //!
-//! Each tool runs as a separate process. tuxly writes one JSON-RPC request
+//! Each tool runs as a separate process. tuxhub writes one JSON-RPC request
 //! per line to its stdin (`{"id":1,"method":"…","params":…}`). The tool answers
 //! on stdout (`{"id":1,"result":…}` or `{"id":1,"error":{"message":…}}`) and may
 //! send notifications without an `id` at any time

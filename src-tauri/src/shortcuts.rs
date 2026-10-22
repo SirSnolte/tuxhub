@@ -1,7 +1,7 @@
 //! Global hotkeys through the XDG GlobalShortcuts portal.
 //!
 //! This works on Wayland (KDE Plasma, recent GNOME) without reading keyboard
-//! input. Every action with a `shortcut` in a `tuxly.toml`, and every hotkey a
+//! input. Every action with a `shortcut` in a `tuxhub.toml`, and every hotkey a
 //! tool reports at runtime, is registered as `<tool>::<action>`. The desktop
 //! decides the final key binding, and users can change it there.
 
@@ -43,9 +43,9 @@ fn set_status(app: &AppHandle, status: Status) {
     let _ = app.emit("shortcuts-changed", status);
 }
 
-const APP_ID: &str = "io.github.sirsnolte.tuxly";
+const APP_ID: &str = "io.github.sirsnolte.tuxhub";
 
-/// Registers tuxly with the portal under its application id. The portal
+/// Registers tuxhub with the portal under its application id. The portal
 /// requires a matching `.desktop` file; if none is installed, one is created
 /// for the current user. Registration is possible once per process.
 async fn register_app_id() {
@@ -82,7 +82,7 @@ fn ensure_desktop_file() -> std::io::Result<()> {
     let exe = std::env::current_exe()?;
     // Only used for the portal; hidden so the menu shows the packaged entry once.
     let content = format!(
-        "[Desktop Entry]\nType=Application\nName=tuxly\nExec=\"{}\"\nIcon=tuxly\nNoDisplay=true\n",
+        "[Desktop Entry]\nType=Application\nName=tuxhub\nExec=\"{}\"\nIcon=tuxhub\nNoDisplay=true\n",
         exe.display()
     );
     let path = dir.join(&name);

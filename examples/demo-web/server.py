@@ -9,7 +9,7 @@ PAGE = """<!doctype html><html lang="en"><meta charset="utf-8"><title>Demo Web</
 <style>body{font:14px system-ui;padding:20px} code{background:#8882;padding:2px 4px}</style>
 <h2>Web interface of a tool</h2>
 <p>This server sends <code>X-Frame-Options: DENY</code> and
-<code>frame-ancestors 'none'</code>, yet it is shown inside tuxly.</p>
+<code>frame-ancestors 'none'</code>, yet it is shown inside tuxhub.</p>
 <p>Result of <code>fetch('/api/time')</code>: <b id="t">…</b></p>
 <script>
 fetch('/api/time').then(r => r.json()).then(d => document.getElementById('t').textContent = d.time)

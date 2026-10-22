@@ -27,7 +27,7 @@
       .finally(() => (loading = false));
   });
 
-  // Open links in the browser instead of the tuxly window.
+  // Open links in the browser instead of the tuxhub window.
   function onclick(e: MouseEvent) {
     const a = (e.target as HTMLElement).closest("a");
     if (!a) return;

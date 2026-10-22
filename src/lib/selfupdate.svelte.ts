@@ -3,7 +3,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { errText } from "./api";
 import { t } from "./i18n.svelte";
 
-/** Interval between automatic checks for a new tuxly release. */
+/** Interval between automatic checks for a new tuxhub release. */
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 /** Delay before the first automatic check, to keep startup fast. */
 const FIRST_CHECK_MS = 20 * 1000;
@@ -40,7 +40,7 @@ class SelfUpdate {
     }
   }
 
-  /** Downloads, verifies and installs the update, then restarts tuxly. */
+  /** Downloads, verifies and installs the update, then restarts tuxhub. */
   async install() {
     const update = this.available;
     if (!update) return;
