@@ -165,11 +165,11 @@ tuxhub.on("theme", ({ dark }) => {});           // light or dark appearance
 tuxhub.on("locale", ({ locale }) => {});        // interface language, "en" or "de"
 ```
 
-The page runs in a sandboxed frame with an opaque origin and has no direct
-access to tuxhub. Every request goes through the bridge and is limited to the
-tool's own process and settings. Because of the opaque origin, web storage
-(`localStorage`, cookies) is not available; store state in the tool process
-or in the tool's settings instead.
+The page runs in a sandboxed frame with its own origin (`tool://<id>`),
+separate from tuxhub and from other tools, and has no direct access to
+tuxhub. Every request goes through the bridge and is limited to the tool's
+own process and settings. Do not rely on web storage (`localStorage`,
+cookies); store state in the tool process or in the tool's settings instead.
 
 ## Installing outside tuxhub
 

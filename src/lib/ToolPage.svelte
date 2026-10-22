@@ -202,13 +202,18 @@
   {/if}
 
   {#if m.ui}
-    <!-- Opaque origin: the page can only reach tuxhub through the bridge (postMessage). -->
+    <!--
+      The page has its own origin (tool://<id>), separate from tuxhub and from
+      other tools, so it can only reach tuxhub through the bridge (postMessage).
+      allow-same-origin keeps that origin: with an opaque origin WebKitGTK does
+      not load the page's scripts and stylesheets from the tool: scheme.
+    -->
     <iframe
       bind:this={frame}
       class="tool-ui card"
       title={tool.entry.name}
       src={`tool://${id}/${m.ui}`}
-      sandbox="allow-scripts allow-forms allow-modals allow-popups"
+      sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
     ></iframe>
   {:else if m.web_url}
     <WebPanel {tool} bind:this={webPanel} />
