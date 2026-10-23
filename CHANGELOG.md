@@ -6,6 +6,11 @@ All notable changes to tuxhub are documented in this file. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The warning a tool declares in its manifest (`notice`) can be closed and
+  stays hidden until the tool changes its text.
+
 ## [0.3.0] - 2026-10-23
 
 ### Added

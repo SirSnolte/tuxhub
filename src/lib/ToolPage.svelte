@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { CircleCheck, Play } from "@lucide/svelte";
+  import { CircleCheck, Play, X } from "@lucide/svelte";
   import { api, describe, errText, type ShortcutStatus, type Tool } from "./api";
   import { hub, onToolEvent, progressText, toast } from "./state.svelte";
   import { i18n, t, type Key } from "./i18n.svelte";
@@ -40,6 +40,25 @@
 
   let busy = $state(false);
   let confirming = $state(false);
+
+  // A dismissed notice stays hidden until the tool changes its text.
+  const noticeKey = $derived(`notice-dismissed.${id}`);
+  let dismissedNotice = $state<string | null>(null);
+  $effect(() => {
+    try {
+      dismissedNotice = localStorage.getItem(noticeKey);
+    } catch {
+      dismissedNotice = null;
+    }
+  });
+  function dismissNotice() {
+    dismissedNotice = m.notice ?? null;
+    try {
+      if (m.notice) localStorage.setItem(noticeKey, m.notice);
+    } catch {
+      // Without storage the notice only hides until the page is shown again.
+    }
+  }
   /** Whether a standalone app is currently shown inside tuxhub. */
   let embedded = $state(false);
   let embedPanel = $state<EmbedPanel>();
@@ -202,7 +221,17 @@
     </div>
   {/if}
 
-  {#if m.notice}<wa-callout variant="warning">{m.notice}</wa-callout>{/if}
+  {#if m.notice && dismissedNotice !== m.notice}
+    <wa-callout variant="warning">
+      <div class="notice">
+        <span>{m.notice}</span>
+        <wa-button appearance="plain" size="s" onclick={dismissNotice}>
+          <X size={16} aria-hidden="true" />
+          <span class="wa-visually-hidden">{t("common.dismiss")}</span>
+        </wa-button>
+      </div>
+    </wa-callout>
+  {/if}
 
   <!-- Tools with their own interface present their status themselves. -->
   {#if status?.text && !m.ui}
@@ -279,6 +308,14 @@
 </wa-dialog>
 
 <style>
+  .notice {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--wa-space-s);
+  }
+  .notice span {
+    flex: 1;
+  }
   .page {
     flex: 1;
     display: flex;
