@@ -26,6 +26,13 @@ All notable changes to tuxhub are documented in this file. The format follows
 - Notifications can be dismissed.
 - Tool interfaces sit directly on the tuxhub page instead of inside a frame.
 
+### Fixed
+
+- Quitting or restarting tuxhub stops the tool processes: they receive
+  `shutdown` and are terminated after two seconds, all at the same time.
+  Before, a tool process that did not exit when its standard input closed kept
+  running after tuxhub had quit.
+
 ## [0.2.0] - 2026-10-21
 
 First public release.

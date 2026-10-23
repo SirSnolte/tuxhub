@@ -166,25 +166,51 @@ impl Runtime {
             .is_some_and(|p| matches!(p.child.try_wait(), Ok(None)))
     }
 
+    /// Stops all tool processes at the same time.
     pub async fn stop_all(&self) {
-        let ids: Vec<String> = self.procs.lock().await.keys().cloned().collect();
-        for id in ids {
-            self.stop(&id).await;
-        }
+        let all: Vec<Proc> = self.procs.lock().await.drain().map(|(_, p)| p).collect();
+        futures_util::future::join_all(all.into_iter().map(stop_proc)).await;
     }
 
     pub async fn stop(&self, id: &str) {
         let proc = self.procs.lock().await.remove(id);
-        if let Some(mut p) = proc {
-            // Ask the process to exit first, then terminate it.
-            let _ = p.stdin.write_all(b"{\"method\":\"shutdown\"}\n").await;
-            let _ = p.stdin.flush().await;
-            if tokio::time::timeout(Duration::from_secs(2), p.child.wait())
-                .await
-                .is_err()
-            {
-                let _ = p.child.kill().await;
-            }
+        if let Some(p) = proc {
+            stop_proc(p).await;
         }
+    }
+
+    /// Registers a process as tool `id` without reading its output. Returns its pid.
+    #[cfg(test)]
+    pub(crate) async fn spawn_for_test(&self, id: &str, program: &str, args: &[&str]) -> u32 {
+        let mut child = Command::new(program)
+            .args(args)
+            .stdin(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("test process starts");
+        let pid = child.id().expect("pid");
+        let stdin = child.stdin.take().expect("stdin piped");
+        let proc = Proc {
+            child,
+            stdin,
+            pending: Default::default(),
+        };
+        self.procs.lock().await.insert(id.to_string(), proc);
+        pid
+    }
+}
+
+/// Asks the process to exit and terminates it if it is still running after two
+/// seconds, also when it does not read its standard input.
+async fn stop_proc(mut p: Proc) {
+    let exited = tokio::time::timeout(Duration::from_secs(2), async {
+        let _ = p.stdin.write_all(b"{\"method\":\"shutdown\"}\n").await;
+        let _ = p.stdin.flush().await;
+        let _ = p.child.wait().await;
+    })
+    .await
+    .is_ok();
+    if !exited {
+        let _ = p.child.kill().await;
     }
 }

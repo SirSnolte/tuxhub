@@ -681,21 +681,55 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // Stop the sessions of applications shown inside tuxhub on exit.
             if let tauri::RunEvent::Exit = event {
-                tauri::async_runtime::block_on(embed::stop_all(app));
+                tauri::async_runtime::block_on(stop_children(app));
             }
         });
 }
 
+/// On exit: stops the tool processes and the sessions of applications shown
+/// inside tuxhub.
+async fn stop_children<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let hub = app.state::<Hub>();
+    futures_util::join!(embed::stop_all(app), hub.runtime.stop_all());
+}
+
 #[cfg(test)]
 mod tests {
-    use super::percent_decode;
+    use super::*;
 
     #[test]
     fn decodes() {
         assert_eq!(percent_decode("a%20b.html"), "a b.html");
         assert_eq!(percent_decode("100%"), "100%");
         assert_eq!(percent_decode("%2"), "%2");
+    }
+
+    /// Tool processes that ignore `shutdown` and the closed standard input are
+    /// killed on exit, all within the same two seconds.
+    #[tokio::test]
+    async fn exit_stops_tool_processes() {
+        let app = tauri::test::mock_app();
+        let base = std::env::temp_dir().join(format!("tuxhub-exit-{}", std::process::id()));
+        app.manage(Hub::for_test(base.join("tools"), base.join("settings")));
+        let runtime = &app.state::<Hub>().runtime;
+        // `sleep` never reads its standard input.
+        let pids = [
+            runtime.spawn_for_test("a", "sleep", &["30"]).await,
+            runtime.spawn_for_test("b", "sleep", &["30"]).await,
+        ];
+
+        let started = std::time::Instant::now();
+        stop_children(app.handle()).await;
+        let alive: Vec<u32> = pids
+            .into_iter()
+            .filter(|pid| Path::new(&format!("/proc/{pid}")).exists())
+            .collect();
+        assert!(alive.is_empty(), "still running: {alive:?}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(3),
+            "took {:?}",
+            started.elapsed()
+        );
     }
 }
