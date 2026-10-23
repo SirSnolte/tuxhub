@@ -10,65 +10,63 @@
 </script>
 
 {#if visible && selfUpdate.available}
-  <aside class="banner card" aria-live="polite">
-    <ArrowUp size={18} aria-hidden="true" />
-    <div class="text">
-      <strong>{t("selfupdate.available", { version: selfUpdate.available.version })}</strong>
-      {#if selfUpdate.installing}
-        <span class="muted">{t("selfupdate.installing")}</span>
-      {:else if selfUpdate.percent !== null}
-        <span class="muted">{t("selfupdate.downloading", { percent: selfUpdate.percent })}</span>
-        <progress value={selfUpdate.percent} max="100"></progress>
-      {:else if selfUpdate.available.body}
-        <details>
-          <summary class="muted">{t("selfupdate.notes")}</summary>
-          <p class="notes">{selfUpdate.available.body}</p>
-        </details>
-      {/if}
-      {#if selfUpdate.error}<span class="error">{selfUpdate.error}</span>{/if}
+  <wa-callout class="banner" variant="brand" aria-live="polite">
+    <span slot="icon"><ArrowUp size={18} aria-hidden="true" /></span>
+    <div class="row">
+      <div class="text">
+        <strong>{t("selfupdate.available", { version: selfUpdate.available.version })}</strong>
+        {#if selfUpdate.installing}
+          <span class="small">{t("selfupdate.installing")}</span>
+        {:else if selfUpdate.percent !== null}
+          <span class="small">{t("selfupdate.downloading", { percent: selfUpdate.percent })}</span>
+          <wa-progress-bar value={selfUpdate.percent} label={t("selfupdate.downloading", { percent: selfUpdate.percent })}
+          ></wa-progress-bar>
+        {:else if selfUpdate.available.body}
+          <wa-details class="notes" appearance="plain" summary={t("selfupdate.notes")}>
+            <p>{selfUpdate.available.body}</p>
+          </wa-details>
+        {/if}
+        {#if selfUpdate.error}<span class="error small">{selfUpdate.error}</span>{/if}
+      </div>
+      <div class="actions">
+        <wa-button variant="brand" size="s" loading={selfUpdate.busy} onclick={() => selfUpdate.install()}>
+          {t("selfupdate.install")}
+        </wa-button>
+        <wa-button appearance="outlined" size="s" disabled={selfUpdate.busy} onclick={() => (selfUpdate.dismissed = true)}>
+          {t("selfupdate.later")}
+        </wa-button>
+      </div>
     </div>
-    <div class="actions">
-      <button class="primary" disabled={selfUpdate.busy} onclick={() => selfUpdate.install()}>
-        {t("selfupdate.install")}
-      </button>
-      <button disabled={selfUpdate.busy} onclick={() => (selfUpdate.dismissed = true)}>
-        {t("selfupdate.later")}
-      </button>
-    </div>
-  </aside>
+  </wa-callout>
 {/if}
 
 <style>
   .banner {
+    margin-bottom: var(--wa-space-l);
+  }
+  .row {
     display: flex;
     align-items: flex-start;
-    gap: 12px;
-    padding: 12px 16px;
-    margin-bottom: 18px;
-    border-color: var(--accent);
-    color: var(--text);
-  }
-  .banner > :global(svg) {
-    color: var(--accent);
-    margin-top: 2px;
+    gap: var(--wa-space-m);
+    flex-wrap: wrap;
   }
   .text {
     flex: 1;
+    min-width: 240px;
     display: grid;
-    gap: 4px;
+    gap: var(--wa-space-2xs);
   }
   .actions {
     display: flex;
-    gap: 8px;
-  }
-  progress {
-    width: 100%;
+    gap: var(--wa-space-xs);
   }
   .notes {
+    --spacing: var(--wa-space-2xs);
+  }
+  .notes p {
     white-space: pre-wrap;
-    margin: 6px 0 0;
   }
   .error {
-    color: var(--danger);
+    color: var(--wa-color-danger-on-quiet);
   }
 </style>

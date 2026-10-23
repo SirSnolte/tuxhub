@@ -8,6 +8,17 @@ import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
   preprocess: vitePreprocess(),
+  compilerOptions: {
+    // Web Awesome elements such as <wa-button> wrap a native, keyboard
+    // accessible control in their shadow root. Svelte cannot see that and
+    // asks for a role and key handlers, which would duplicate the control for
+    // assistive technology. All other accessibility warnings stay active.
+    warningFilter: (w) =>
+      !(
+        (w.code === "a11y_click_events_have_key_events" || w.code === "a11y_no_static_element_interactions") &&
+        /`<wa-[a-z-]+>`/.test(w.message)
+      ),
+  },
   kit: {
     adapter: adapter({
       fallback: "index.html",

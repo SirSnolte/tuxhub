@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { CircleCheck } from "@lucide/svelte";
+  import { CircleCheck, Play } from "@lucide/svelte";
   import { api, describe, errText, type ShortcutStatus, type Tool } from "./api";
   import { hub, onToolEvent, progressText, toast } from "./state.svelte";
   import { i18n, t, type Key } from "./i18n.svelte";
@@ -39,6 +39,7 @@
   const plainApp = $derived(tool.level === 0 && tool.can_launch);
 
   let busy = $state(false);
+  let confirming = $state(false);
   /** Whether a standalone app is currently shown inside tuxhub. */
   let embedded = $state(false);
   let embedPanel = $state<EmbedPanel>();
@@ -73,10 +74,8 @@
   }
 
   function uninstall() {
-    const question = isLocal ? "tool.confirmUnlink" : "tool.confirmUninstall";
-    if (confirm(t(question, { name: tool.entry.name }))) {
-      run(() => api.uninstall(id), t("tool.removed", { name: tool.entry.name }));
-    }
+    confirming = false;
+    run(() => api.uninstall(id), t("tool.removed", { name: tool.entry.name }));
   }
 
   function hotkeyFor(action: string) {
@@ -133,68 +132,77 @@
     <div class="title">
       <h1>{tool.entry.name}</h1>
       <div class="meta">
-        {#if tool.version}<span class="badge">{tool.version}</span>{/if}
-        <span class="badge">{t(`source.${tool.entry.source.type}` as Key)}</span>
-        <span class="badge">{t(`level.${tool.level}` as Key)}</span>
-        {#if tool.running}<span class="badge accent">{t("tool.running")}</span>{/if}
+        {#if tool.version}<wa-tag size="s" appearance="filled">{tool.version}</wa-tag>{/if}
+        <wa-tag size="s" appearance="filled">{t(`source.${tool.entry.source.type}` as Key)}</wa-tag>
+        <wa-tag size="s" appearance="filled">{t(`level.${tool.level}` as Key)}</wa-tag>
+        {#if tool.running}<wa-tag size="s" appearance="filled" variant="success">{t("tool.running")}</wa-tag>{/if}
       </div>
     </div>
     <div class="buttons">
       {#if tool.can_launch && !plainApp}
-        <button
-          class="primary"
+        <wa-button
+          variant="brand"
           disabled={busy}
           onclick={() => run(() => api.launch(id), t("tool.started", { name: tool.entry.name }))}
         >
+          <span slot="start"><Play size={15} aria-hidden="true" /></span>
           {t("tool.start")}
-        </button>
+        </wa-button>
       {/if}
       {#if updatable}
         {#if update}
-          <button
-            disabled={busy}
+          <wa-button
+            variant="brand"
+            appearance="outlined"
+            loading={busy}
             onclick={() => run(() => api.install(id), t("tool.updatedTo", { version: update ?? "" }))}
           >
             {t("tool.updateTo", { version: update })}
-          </button>
+          </wa-button>
         {:else if checked}
-          <button disabled>
-            <CircleCheck size={15} aria-hidden="true" />
+          <wa-button appearance="outlined" disabled>
+            <span slot="start"><CircleCheck size={15} aria-hidden="true" /></span>
             {t("tool.upToDate")}
-          </button>
+          </wa-button>
         {:else}
-          <button disabled={busy} onclick={checkUpdate}>{t("tool.checkUpdates")}</button>
+          <wa-button appearance="outlined" loading={busy} onclick={checkUpdate}>{t("tool.checkUpdates")}</wa-button>
         {/if}
       {/if}
       {#if tool.running}
-        <button disabled={busy} onclick={() => run(() => api.stop(id))}>{t("tool.stopProcess")}</button>
+        <wa-button appearance="outlined" disabled={busy} onclick={() => run(() => api.stop(id))}>
+          {t("tool.stopProcess")}
+        </wa-button>
       {/if}
       {#if (plainApp && embedded) || webTool}
-        <button onclick={() => (webTool ? webPanel?.reconnect() : embedPanel?.reconnect())}>
+        <wa-button appearance="outlined" onclick={() => (webTool ? webPanel?.reconnect() : embedPanel?.reconnect())}>
           {t("tool.reconnect")}
-        </button>
+        </wa-button>
       {/if}
       {#if plainApp || webTool}
-        <button onclick={() => (webTool ? webPanel?.openWindow() : embedPanel?.ownWindow())}>
+        <wa-button appearance="outlined" onclick={() => (webTool ? webPanel?.openWindow() : embedPanel?.ownWindow())}>
           {t("tool.ownWindow")}
-        </button>
+        </wa-button>
       {/if}
       {#if removable}
-        <button class="danger" disabled={busy} onclick={uninstall}>
+        <wa-button variant="danger" appearance="outlined" disabled={busy} onclick={() => (confirming = true)}>
           {isLocal ? t("tool.unlink") : t("tool.uninstall")}
-        </button>
+        </wa-button>
       {/if}
     </div>
   </header>
 
   {#if progress && busy}
     <div class="progress">
-      <span>{progressText(progress)}</span>
-      {#if progress.fraction != null}<progress value={progress.fraction}></progress>{/if}
+      <span class="small muted">{progressText(progress)}</span>
+      <wa-progress-bar
+        value={progress.fraction != null ? Math.round(progress.fraction * 100) : 0}
+        indeterminate={progress.fraction == null}
+        label={progressText(progress)}
+      ></wa-progress-bar>
     </div>
   {/if}
 
-  {#if m.notice}<p class="notice">{m.notice}</p>{/if}
+  {#if m.notice}<wa-callout variant="warning">{m.notice}</wa-callout>{/if}
 
   <!-- Tools with their own interface present their status themselves. -->
   {#if status?.text && !m.ui}
@@ -207,10 +215,11 @@
       other tools, so it can only reach tuxhub through the bridge (postMessage).
       allow-same-origin keeps that origin: with an opaque origin WebKitGTK does
       not load the page's scripts and stylesheets from the tool: scheme.
+      The page background is transparent, so its cards sit on the tuxhub page.
     -->
     <iframe
       bind:this={frame}
-      class="tool-ui card"
+      class="tool-ui"
       title={tool.entry.name}
       src={`tool://${id}/${m.ui}`}
       sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
@@ -218,48 +227,69 @@
   {:else if m.web_url}
     <WebPanel {tool} bind:this={webPanel} />
   {:else if (m.actions?.length ?? 0) > 0 || (m.settings?.length ?? 0) > 0}
-    <section class="card body">
+    <wa-card>
       {#if m.actions?.length}
         <div class="actions">
           {#each m.actions as a (a.id)}
-            <button class:primary={a.primary} onclick={() => run(() => api.action(id, a.id))}>
+            <wa-button
+              variant={a.primary ? "brand" : "neutral"}
+              appearance={a.primary ? "accent" : "outlined"}
+              onclick={() => run(() => api.action(id, a.id))}
+            >
               {a.label}
-              {#if hotkeyFor(a.id)}<kbd>{hotkeyFor(a.id)}</kbd>{/if}
-            </button>
+              {#if hotkeyFor(a.id)}<kbd slot="end">{hotkeyFor(a.id)}</kbd>{/if}
+            </wa-button>
           {/each}
         </div>
       {/if}
       {#if m.settings?.length}
         <SettingsForm toolId={id} settings={m.settings} />
       {/if}
-    </section>
+    </wa-card>
   {:else if plainApp}
     <EmbedPanel {tool} bind:running={embedded} bind:this={embedPanel} />
   {:else}
-    <section class="card body">
-      <p class="muted">{t("tool.noLauncher")}</p>
+    <wa-card>
+      <p>{t("tool.noLauncher")}</p>
       <p class="muted">{describe(tool.entry)}</p>
-    </section>
+    </wa-card>
   {/if}
 
   {#if tool.entry.repo && !m.ui && !m.web_url && !embedded}
-    <section class="card body">
+    <wa-card>
       <Readme repo={tool.entry.repo} />
-    </section>
+    </wa-card>
   {/if}
 </div>
 
+<wa-dialog
+  label={t(isLocal ? "tool.confirmUnlink" : "tool.confirmUninstall", { name: tool.entry.name })}
+  open={confirming}
+  onwa-after-hide={(e: Event) => {
+    if (e.target === e.currentTarget) confirming = false;
+  }}
+>
+  <p>{t(isLocal ? "tool.unlinkHint" : "tool.uninstallHint")}</p>
+  <div slot="footer" class="dialog-buttons">
+    <wa-button appearance="outlined" onclick={() => (confirming = false)}>{t("common.cancel")}</wa-button>
+    <wa-button variant="danger" onclick={uninstall}>
+      {isLocal ? t("tool.unlink") : t("tool.uninstall")}
+    </wa-button>
+  </div>
+</wa-dialog>
+
 <style>
   .page {
+    flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 14px;
-    min-height: 100%;
+    gap: var(--wa-space-l);
+    min-height: 0;
   }
   header {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: var(--wa-space-m);
     flex-wrap: wrap;
   }
   .title {
@@ -268,53 +298,41 @@
   }
   .meta {
     display: flex;
-    gap: 6px;
+    gap: var(--wa-space-2xs);
     flex-wrap: wrap;
-    margin-top: 4px;
+    margin-top: var(--wa-space-xs);
   }
   .buttons {
     display: flex;
-    gap: 8px;
+    gap: var(--wa-space-xs);
     flex-wrap: wrap;
   }
-  .buttons button {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
   .progress {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .progress progress {
-    flex: 1;
+    display: grid;
+    gap: var(--wa-space-2xs);
   }
   .status {
-    margin: 0;
-    font-weight: 600;
-  }
-  .body {
-    padding: 16px 18px;
+    font-weight: var(--wa-font-weight-semibold);
   }
   .actions {
     display: flex;
-    gap: 8px;
+    gap: var(--wa-space-xs);
     flex-wrap: wrap;
-    margin-bottom: 8px;
+    margin-bottom: var(--wa-space-s);
   }
-  kbd {
-    font: 12px ui-monospace, monospace;
-    border: 1px solid currentColor;
-    border-radius: 4px;
-    padding: 0 4px;
-    margin-left: 6px;
-    opacity: 0.8;
+  .actions kbd {
+    margin-inline-start: var(--wa-space-2xs);
   }
   .tool-ui {
     flex: 1;
-    min-height: 480px;
+    min-height: 420px;
     width: 100%;
-    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+  .dialog-buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--wa-space-xs);
   }
 </style>

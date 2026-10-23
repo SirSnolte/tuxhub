@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { X } from "@lucide/svelte";
+  import { Search, SearchX, X } from "@lucide/svelte";
   import { api, describe, errText, type Workshop, type WorkshopItem } from "./api";
   import { hub, progressText, toast } from "./state.svelte";
   import { category as categoryLabel, t, type Key } from "./i18n.svelte";
   import Readme from "./Readme.svelte";
   import ToolIcon from "./ToolIcon.svelte";
+  import { valueOf } from "./wa";
 
   let { onopen, onchanged }: { onopen: (id: string) => void; onchanged: () => void } = $props();
 
@@ -16,6 +17,7 @@
   let installing = $state<string | null>(null);
 
   async function load() {
+    error = "";
     try {
       data = await api.workshop();
       if (selected) selected = data.entries.find((e) => e.entry.id === selected!.entry.id) ?? null;
@@ -28,6 +30,7 @@
   const categories = $derived(
     [...new Set((data?.entries ?? []).map((e) => e.entry.category).filter(Boolean))] as string[],
   );
+  const filtered = $derived(query.trim() !== "" || category !== null);
   const visible = $derived(
     (data?.entries ?? []).filter((e) => {
       const q = query.trim().toLowerCase();
@@ -35,6 +38,11 @@
       return hit && (!category || e.entry.category === category);
     }),
   );
+
+  function showAll() {
+    query = "";
+    category = null;
+  }
 
   async function install(item: WorkshopItem) {
     installing = item.entry.id;
@@ -52,51 +60,96 @@
 </script>
 
 <div class="workshop">
-  <header>
+  <header class="page-head">
     <div>
       <h1>{t("workshop.title")}</h1>
       <p class="muted">
         {t("workshop.subtitle")}
-        {#if data && !data.live}<span class="badge">{t("workshop.offline")}</span>{/if}
+        {#if data && !data.live}<wa-tag size="s" appearance="filled" variant="warning">{t("workshop.offline")}</wa-tag>{/if}
       </p>
     </div>
-    <input type="search" placeholder={t("workshop.search")} aria-label={t("workshop.search")} bind:value={query} />
+    <wa-input
+      class="search"
+      type="search"
+      with-clear
+      placeholder={t("workshop.search")}
+      aria-label={t("workshop.search")}
+      value={query}
+      oninput={(e: Event) => (query = valueOf(e))}
+      onwa-clear={() => (query = "")}
+    >
+      <span slot="start"><Search size={16} aria-hidden="true" /></span>
+    </wa-input>
   </header>
 
   {#if categories.length > 1}
-    <div class="chips">
-      <button class:active={!category} onclick={() => (category = null)}>{t("workshop.all")}</button>
+    <wa-radio-group
+      class="categories"
+      orientation="horizontal"
+      label={t("workshop.categories")}
+      value={category ?? ""}
+      onchange={(e: Event) => (category = valueOf(e) || null)}
+    >
+      <wa-radio appearance="button" size="s" value="">{t("workshop.all")}</wa-radio>
       {#each categories as c (c)}
-        <button class:active={category === c} onclick={() => (category = c)}>{categoryLabel(c)}</button>
+        <wa-radio appearance="button" size="s" value={c}>{categoryLabel(c)}</wa-radio>
       {/each}
-    </div>
+    </wa-radio-group>
   {/if}
 
   {#if error}
-    <p class="notice">{error}</p>
-  {:else if !data}
-    <p class="muted">{t("workshop.loading")}</p>
+    <wa-callout variant="danger">
+      <div class="callout-row">
+        <div>
+          <strong>{t("workshop.loadFailed")}</strong>
+          <p class="small">{error}</p>
+        </div>
+        <wa-button size="s" appearance="outlined" onclick={load}>{t("common.retry")}</wa-button>
+      </div>
+    </wa-callout>
   {/if}
 
   <div class="layout" class:with-detail={selected}>
-    <div class="grid">
+    <div class="grid" aria-busy={!data && !error}>
+      {#if !data && !error}
+        {#each { length: 6 }, i (i)}
+          <div class="card tile skeleton" aria-hidden="true">
+            <wa-skeleton effect="sheen" class="sk-icon"></wa-skeleton>
+            <wa-skeleton effect="sheen" class="sk-name"></wa-skeleton>
+            <wa-skeleton effect="sheen"></wa-skeleton>
+            <wa-skeleton effect="sheen" class="sk-short"></wa-skeleton>
+          </div>
+        {/each}
+        <span class="wa-visually-hidden">{t("workshop.loading")}</span>
+      {/if}
       {#each visible as item (item.entry.id)}
         <button
-          class="card tile"
+          class="bare card tile"
           class:selected={selected?.entry.id === item.entry.id}
+          aria-pressed={selected?.entry.id === item.entry.id}
           onclick={() => (selected = item)}
         >
-          <ToolIcon icon={item.entry.icon} category={item.entry.category} size={40} />
+          <ToolIcon icon={item.entry.icon} category={item.entry.category} size={44} />
           <span class="name">{item.entry.name}</span>
-          <span class="desc muted">{describe(item.entry)}</span>
+          <span class="desc">{describe(item.entry)}</span>
           <span class="tags">
-            {#if item.entry.category}<span class="badge">{categoryLabel(item.entry.category)}</span>{/if}
-            {#if item.installed}<span class="badge accent">{t("workshop.installed")}</span>{/if}
+            {#if item.entry.category}
+              <wa-tag size="s" appearance="filled">{categoryLabel(item.entry.category)}</wa-tag>
+            {/if}
+            {#if item.installed}
+              <wa-tag size="s" appearance="filled" variant="success">{t("workshop.installed")}</wa-tag>
+            {/if}
           </span>
         </button>
       {/each}
       {#if data && visible.length === 0}
-        <p class="muted">{t("workshop.noResults")}</p>
+        <div class="empty">
+          <SearchX size={32} strokeWidth={1.5} aria-hidden="true" />
+          <p>{t("workshop.noResults")}</p>
+          {#if filtered}
+            <wa-button size="s" appearance="outlined" onclick={showAll}>{t("workshop.showAll")}</wa-button>
+          {/if}
+        </div>
       {/if}
     </div>
 
@@ -104,34 +157,47 @@
       {@const e = selected.entry}
       <aside class="card detail">
         <div class="detail-head">
-          <ToolIcon icon={e.icon} category={e.category} size={52} />
-          <div>
+          <ToolIcon icon={e.icon} category={e.category} size={56} />
+          <div class="detail-title">
             <h2>{e.name}</h2>
-            <span class="badge">{t(`source.${e.source.type}` as Key)}</span>
-            {#if e.repo}<span class="badge">{e.repo}</span>{/if}
+            <div class="tags">
+              <wa-tag size="s" appearance="filled">{t(`source.${e.source.type}` as Key)}</wa-tag>
+              {#if e.repo}<wa-tag size="s" appearance="filled">{e.repo}</wa-tag>{/if}
+            </div>
           </div>
-          <button class="close" aria-label={t("workshop.close")} onclick={() => (selected = null)}>
+          <wa-button appearance="plain" size="s" onclick={() => (selected = null)}>
             <X size={18} aria-hidden="true" />
-          </button>
+            <span class="wa-visually-hidden">{t("workshop.close")}</span>
+          </wa-button>
         </div>
         <p>{describe(e)}</p>
         <div class="detail-actions">
           {#if selected.installed}
-            <button class="primary" onclick={() => onopen(e.id)}>{t("workshop.open")}</button>
+            <wa-button variant="brand" onclick={() => onopen(e.id)}>{t("workshop.open")}</wa-button>
           {:else}
-            <button class="primary" disabled={installing !== null} onclick={() => install(selected!)}>
+            <wa-button
+              variant="brand"
+              loading={installing === e.id}
+              disabled={installing !== null && installing !== e.id}
+              onclick={() => install(selected!)}
+            >
               {installing === e.id ? t("workshop.installing") : t("workshop.install")}
-            </button>
+            </wa-button>
           {/if}
         </div>
         {#if installing === e.id && hub.progress[e.id]}
+          {@const p = hub.progress[e.id]}
           <div class="progress">
-            <small>{progressText(hub.progress[e.id])}</small>
-            {#if hub.progress[e.id].fraction != null}<progress value={hub.progress[e.id].fraction}></progress>{/if}
+            <span class="small muted">{progressText(p)}</span>
+            <wa-progress-bar
+              value={p.fraction != null ? Math.round(p.fraction * 100) : 0}
+              indeterminate={p.fraction == null}
+              label={progressText(p)}
+            ></wa-progress-bar>
           </div>
         {/if}
         {#if e.repo}
-          <hr />
+          <wa-divider></wa-divider>
           <Readme repo={e.repo} />
         {/if}
       </aside>
@@ -143,64 +209,74 @@
   .workshop {
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: var(--wa-space-l);
   }
-  header {
+  .page-head .muted {
     display: flex;
-    justify-content: space-between;
-    align-items: end;
-    gap: 16px;
-    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--wa-space-xs);
   }
-  header p {
-    margin: 4px 0 0;
-  }
-  input[type="search"] {
-    width: 260px;
+  .search {
+    width: 280px;
     max-width: 100%;
   }
-  .chips {
+  .categories::part(form-control-label) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .callout-row {
     display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
-  }
-  .chips button {
-    border-radius: 999px;
-    padding: 3px 12px;
-  }
-  .chips button.active {
-    background: var(--accent-soft);
-    border-color: var(--accent);
-    color: var(--accent);
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--wa-space-m);
   }
   .layout {
     display: grid;
-    gap: 14px;
+    gap: var(--wa-space-l);
   }
   .layout.with-detail {
     grid-template-columns: minmax(0, 1fr) minmax(320px, 440px);
   }
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: var(--wa-space-m);
     align-content: start;
   }
   .tile {
     display: grid;
-    gap: 6px;
-    text-align: left;
-    padding: 14px;
+    gap: var(--wa-space-xs);
+    padding: var(--wa-space-m);
     align-content: start;
+    transition:
+      border-color var(--wa-transition-fast),
+      box-shadow var(--wa-transition-fast),
+      transform var(--wa-transition-fast);
+  }
+  .tile:not(.skeleton):hover {
+    border-color: var(--wa-color-neutral-border-normal);
+    box-shadow: var(--wa-shadow-m);
+  }
+  .tile:not(.skeleton):active {
+    transform: translateY(1px);
   }
   .tile.selected {
-    border-color: var(--accent);
+    border-color: var(--wa-color-brand-border-loud);
+    box-shadow: 0 0 0 1px var(--wa-color-brand-border-loud);
+  }
+  .tile :global(.tool-icon) {
+    margin-bottom: var(--wa-space-2xs);
   }
   .name {
-    font-weight: 600;
+    font-weight: var(--wa-font-weight-semibold);
   }
   .desc {
-    font-size: 13px;
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text-quiet);
     display: -webkit-box;
     -webkit-line-clamp: 3;
     line-clamp: 3;
@@ -209,52 +285,64 @@
   }
   .tags {
     display: flex;
-    gap: 6px;
+    gap: var(--wa-space-2xs);
     flex-wrap: wrap;
   }
+  .skeleton wa-skeleton {
+    height: 0.8em;
+    min-height: 0;
+  }
+  .skeleton .sk-icon {
+    width: 44px;
+    height: 44px;
+    margin-bottom: var(--wa-space-2xs);
+  }
+  .skeleton .sk-icon::part(indicator) {
+    border-radius: 22%;
+  }
+  .skeleton .sk-name {
+    width: 55%;
+    height: 1em;
+  }
+  .skeleton .sk-short {
+    width: 70%;
+  }
+  .empty {
+    grid-column: 1 / -1;
+    display: grid;
+    justify-items: center;
+    gap: var(--wa-space-s);
+    padding: var(--wa-space-3xl) var(--wa-space-l);
+    color: var(--wa-color-text-quiet);
+    text-align: center;
+  }
   .detail {
-    padding: 16px 18px;
+    display: grid;
+    gap: var(--wa-space-m);
+    align-content: start;
+    padding: var(--wa-space-l);
     position: sticky;
     top: 0;
-    max-height: calc(100vh - 48px);
+    max-height: calc(100vh - 2 * var(--wa-space-xl));
     overflow: auto;
   }
   .detail-head {
     display: flex;
-    gap: 12px;
-    align-items: start;
+    gap: var(--wa-space-m);
+    align-items: flex-start;
   }
-  .detail-head > div {
+  .detail-title {
     flex: 1;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    align-items: center;
-  }
-  .detail-head h2 {
-    width: 100%;
-  }
-  .close {
-    border: none;
-    background: none;
-    padding: 4px 8px;
+    display: grid;
+    gap: var(--wa-space-xs);
   }
   .detail-actions {
     display: flex;
-    gap: 8px;
+    gap: var(--wa-space-xs);
   }
   .progress {
     display: grid;
-    gap: 4px;
-    margin-top: 10px;
-  }
-  progress {
-    width: 100%;
-  }
-  hr {
-    border: none;
-    border-top: 1px solid var(--border);
-    margin: 16px 0;
+    gap: var(--wa-space-2xs);
   }
   @media (max-width: 900px) {
     .layout.with-detail {

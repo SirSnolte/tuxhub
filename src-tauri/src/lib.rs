@@ -489,6 +489,9 @@ fn serve_tool(app: &AppHandle, uri: &tauri::http::Uri) -> Response<Vec<u8>> {
             .status(status)
             .header(header::CONTENT_TYPE, mime)
             .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            // Revalidate on every load, so an updated tool shows its new
+            // interface without restarting tuxhub.
+            .header(header::CACHE_CONTROL, "no-cache")
             .body(body)
             .unwrap()
     };

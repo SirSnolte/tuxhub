@@ -28,7 +28,7 @@
    *  (for applications that cannot be maximized). */
   let winSince: number | null = null;
   const FALLBACK_MS = 3000;
-  /** Zeitpunkte stiller Neuverbindungen – gegen Endlosschleifen. */
+  /** Times of silent reconnects, to avoid reconnecting endlessly. */
   let retries: number[] = [];
   /** Too many disconnects in a row: stop reconnecting automatically. */
   let lost = $state(false);
@@ -217,9 +217,9 @@
         <div class="sk-label">
           {#if lost}
             {t("embed.lost", { name: tool.entry.name })}
-            <button class="small-btn" onclick={reconnect}>{t("tool.reconnect")}</button>
+            <wa-button size="s" appearance="outlined" onclick={reconnect}>{t("tool.reconnect")}</wa-button>
           {:else}
-            <span class="spin"></span>
+            <wa-spinner></wa-spinner>
             {wasReady ? t("embed.stopping", { name: tool.entry.name }) : t("embed.starting", { name: tool.entry.name })}
           {/if}
         </div>
@@ -227,31 +227,35 @@
     {/if}
   </div>
 {:else}
-  <section class="card start">
-    <ToolIcon icon={tool.entry.icon} category={tool.entry.category} toolId={tool.entry.id} size={52} />
-    <div class="text">
-      <h2>{tool.entry.name}</h2>
-      <p class="muted">{describe(tool.entry)}</p>
-      {#if missing}
-        <div class="notice">
-          <p>{t("embed.missing", { dep: missing })}</p>
-          {#if missing === "xpra"}
-            <code>sudo dnf install xpra</code> (Fedora) · <code>sudo apt install xpra</code> (Debian, Ubuntu) ·
-            <code>sudo pacman -S xpra</code> (Arch)
-          {/if}
+  <wa-card>
+    <div class="start">
+      <ToolIcon icon={tool.entry.icon} category={tool.entry.category} toolId={tool.entry.id} size={56} />
+      <div class="text">
+        <h2>{tool.entry.name}</h2>
+        <p class="muted">{describe(tool.entry)}</p>
+        {#if missing}
+          <wa-callout variant="warning">
+            <p>{t("embed.missing", { dep: missing })}</p>
+            {#if missing === "xpra"}
+              <p class="commands">
+                <code>sudo dnf install xpra</code> (Fedora) · <code>sudo apt install xpra</code> (Debian, Ubuntu) ·
+                <code>sudo pacman -S xpra</code> (Arch)
+              </p>
+            {/if}
+          </wa-callout>
+        {/if}
+        <div class="buttons">
+          <wa-button variant="brand" disabled={!!missing} loading={starting} onclick={start}>
+            <span slot="start"><Play size={15} aria-hidden="true" /></span>
+            {t("embed.start")}
+          </wa-button>
         </div>
-      {/if}
-      <div class="buttons">
-        <button class="primary start-btn" disabled={!!missing || starting} onclick={start}>
-          <Play size={15} aria-hidden="true" />
-          {t("embed.start")}
-        </button>
+        <p class="muted small">
+          {t("embed.hint")}
+        </p>
       </div>
-      <p class="muted small">
-        {t("embed.hint")}
-      </p>
     </div>
-  </section>
+  </wa-card>
 {/if}
 
 <style>
@@ -268,7 +272,7 @@
     flex: 1;
     width: 100%;
     border: 0;
-    background: var(--panel);
+    background: var(--wa-color-surface-default);
   }
 
   /* Skeleton covering the xpra client until an application window is ready */
@@ -276,44 +280,48 @@
     position: absolute;
     inset: 0;
     display: flex;
-    gap: 22px;
-    padding: 18px;
-    background: var(--panel);
+    gap: var(--wa-space-l);
+    padding: var(--wa-space-l);
+    background: var(--wa-color-surface-default);
   }
   .sk-side {
     display: flex;
     flex-direction: column;
-    gap: 16px;
-    padding-right: 18px;
-    border-right: 1px solid var(--border);
+    gap: var(--wa-space-m);
+    padding-right: var(--wa-space-l);
+    border-right: var(--wa-border-width-s) solid var(--wa-color-surface-border);
   }
   .sk-main {
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: var(--wa-space-m);
     min-width: 0;
   }
   .sk-row {
     display: flex;
-    gap: 14px;
+    gap: var(--wa-space-m);
   }
   .sk {
     display: block;
-    border-radius: 8px;
-    background: linear-gradient(90deg, var(--panel-2) 0%, var(--border) 45%, var(--panel-2) 90%);
+    border-radius: var(--wa-border-radius-m);
+    background: linear-gradient(
+      90deg,
+      var(--wa-color-neutral-fill-quiet) 0%,
+      var(--wa-color-neutral-fill-normal) 45%,
+      var(--wa-color-neutral-fill-quiet) 90%
+    );
     background-size: 300% 100%;
     animation: shimmer 1.4s ease-in-out infinite;
   }
   .sk-logo {
     width: 36px;
     height: 36px;
-    border-radius: 10px;
+    border-radius: var(--wa-border-radius-l);
   }
   .sk-dot {
     width: 28px;
     height: 28px;
-    border-radius: 8px;
     margin-left: 4px;
   }
   .sk-title {
@@ -328,50 +336,39 @@
   .sk-block {
     flex: 1;
     height: 170px;
-    border-radius: 12px;
+    border-radius: var(--wa-border-radius-l);
   }
   .sk-bar {
     height: 44px;
-    border-radius: 12px;
+    border-radius: var(--wa-border-radius-l);
   }
   .sk-btn {
     flex: 1;
     height: 58px;
-    border-radius: 12px;
+    border-radius: var(--wa-border-radius-l);
   }
   .sk-line {
     flex: 1;
     height: 58px;
-    border-radius: 12px;
+    border-radius: var(--wa-border-radius-l);
     opacity: 0.6;
   }
   .sk-label {
     position: absolute;
     left: 50%;
-    bottom: 22px;
+    bottom: var(--wa-space-l);
     transform: translateX(-50%);
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 8px 14px;
-    border-radius: 999px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    color: var(--muted);
-    font-size: 13px;
+    gap: var(--wa-space-s);
+    padding: var(--wa-space-xs) var(--wa-space-m);
+    border-radius: var(--wa-border-radius-pill);
+    background: var(--wa-color-surface-raised);
+    border: var(--wa-border-width-s) solid var(--wa-color-surface-border);
+    box-shadow: var(--wa-shadow-m);
+    color: var(--wa-color-text-quiet);
+    font-size: var(--wa-font-size-s);
     white-space: nowrap;
-  }
-  .small-btn {
-    padding: 2px 10px;
-    font-size: 12px;
-  }
-  .spin {
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    border: 2px solid var(--border);
-    border-top-color: var(--accent);
-    animation: spin 0.8s linear infinite;
   }
   @keyframes shimmer {
     from {
@@ -381,48 +378,28 @@
       background-position: -100% 0;
     }
   }
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
   @media (prefers-reduced-motion: reduce) {
-    .sk,
-    .small-btn {
-    padding: 2px 10px;
-    font-size: 12px;
-  }
-  .spin {
+    .sk {
       animation: none;
     }
   }
   .start {
     display: flex;
-    gap: 18px;
-    padding: 22px;
+    gap: var(--wa-space-l);
     align-items: flex-start;
-  }
-  .start-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
   }
   .text {
     flex: 1;
-  }
-  .text h2 {
-    margin-bottom: 4px;
+    display: grid;
+    gap: var(--wa-space-s);
   }
   .buttons {
     display: flex;
-    gap: 8px;
+    gap: var(--wa-space-xs);
     flex-wrap: wrap;
-    margin: 12px 0 6px;
+    margin-top: var(--wa-space-2xs);
   }
-  .small {
-    font-size: 12px;
-  }
-  .notice p {
-    margin: 0 0 6px;
+  .commands {
+    margin-top: var(--wa-space-xs);
   }
 </style>

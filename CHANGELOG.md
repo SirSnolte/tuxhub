@@ -14,6 +14,17 @@ All notable changes to tuxhub are documented in this file. The format follows
 - Manifest: `rpc.autostart` starts a tool's background process together with
   tuxhub; `uninstall` lets a tool clean up before it is removed.
 - Workshop: Push-to-Mute.
+- `ui-kit/`: the tuxhub theme and a bundling script, so tool interfaces look
+  the same as tuxhub.
+
+### Changed
+
+- New interface built on Web Awesome components with the shared tuxhub
+  theme: clearer navigation, settings rows, loading placeholders, and
+  error and empty states with a next step.
+- Removing a tool asks in an in-app dialog instead of a browser dialog.
+- Notifications can be dismissed.
+- Tool interfaces sit directly on the tuxhub page instead of inside a frame.
 
 ## [0.2.0] - 2026-10-21
 

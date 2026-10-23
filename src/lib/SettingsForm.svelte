@@ -2,6 +2,7 @@
   import { t } from "./i18n.svelte";
   import { api, errText, type Setting, type Settings } from "./api";
   import { toast } from "./state.svelte";
+  import { checkedOf, valueOf } from "./wa";
 
   let { toolId, settings }: { toolId: string; settings: Setting[] } = $props();
 
@@ -44,78 +45,58 @@
 
 <div class="form">
   {#each settings as s (s.key)}
-    <label class="row">
-      <span class="label">
+    {#if s.type === "number"}
+      <wa-input
+        class="setting"
+        type="number"
+        without-spin-buttons
+        min={s.min}
+        max={s.max}
+        step={s.step ?? "any"}
+        value={values[s.key] as number}
+        onchange={(e: Event) => {
+          const n = clamp(s, valueOf(e));
+          (e.currentTarget as unknown as { value: string }).value = String(n);
+          changed(s.key, n);
+        }}
+      >
+        <span slot="label">{s.label}</span>
+        {#if s.help}<span slot="hint">{s.help}</span>{/if}
+        {#if s.unit}<span slot="end" class="muted">{s.unit}</span>{/if}
+      </wa-input>
+    {:else if s.type === "select"}
+      <wa-select class="setting" value={values[s.key] as string} onchange={(e: Event) => changed(s.key, valueOf(e))}>
+        <span slot="label">{s.label}</span>
+        {#if s.help}<span slot="hint">{s.help}</span>{/if}
+        {#each s.options ?? [] as o (o.value)}
+          <wa-option value={o.value}>{o.label}</wa-option>
+        {/each}
+      </wa-select>
+    {:else if s.type === "toggle"}
+      <wa-switch class="setting" checked={Boolean(values[s.key])} onchange={(e: Event) => changed(s.key, checkedOf(e))}>
         {s.label}
-        {#if s.help}<small class="muted">{s.help}</small>{/if}
-      </span>
-      <span class="control">
-        {#if s.type === "number"}
-          <input
-            type="number"
-            min={s.min}
-            max={s.max}
-            step={s.step ?? "any"}
-            value={values[s.key] as number}
-            onchange={(e) => {
-              const n = clamp(s, e.currentTarget.value);
-              e.currentTarget.value = String(n);
-              changed(s.key, n);
-            }}
-          />
-          {#if s.unit}<span class="muted unit">{s.unit}</span>{/if}
-        {:else if s.type === "select"}
-          <select value={values[s.key] as string} onchange={(e) => changed(s.key, e.currentTarget.value)}>
-            {#each s.options ?? [] as o (o.value)}
-              <option value={o.value}>{o.label}</option>
-            {/each}
-          </select>
-        {:else if s.type === "toggle"}
-          <input
-            type="checkbox"
-            checked={Boolean(values[s.key])}
-            onchange={(e) => changed(s.key, e.currentTarget.checked)}
-          />
-        {:else}
-          <input type="text" value={(values[s.key] as string) ?? ""} onchange={(e) => changed(s.key, e.currentTarget.value)} />
-        {/if}
-      </span>
-    </label>
+        {#if s.help}<span slot="hint">{s.help}</span>{/if}
+      </wa-switch>
+    {:else}
+      <wa-input
+        class="setting"
+        value={(values[s.key] as string) ?? ""}
+        onchange={(e: Event) => changed(s.key, valueOf(e))}
+      >
+        <span slot="label">{s.label}</span>
+        {#if s.help}<span slot="hint">{s.help}</span>{/if}
+      </wa-input>
+    {/if}
   {/each}
-  <p class="muted saved">{saved ? t("settings.saved") : t("settings.saving")}</p>
+  <p class="saved small muted" aria-live="polite">{saved ? t("settings.saved") : t("settings.saving")}</p>
 </div>
 
 <style>
   .form {
     display: grid;
-    gap: 2px;
-  }
-  .row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 10px 0;
-    border-bottom: 1px solid var(--border);
-  }
-  .label {
-    display: grid;
-  }
-  .control {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  input[type="number"] {
-    width: 110px;
-    text-align: right;
-  }
-  .unit {
-    min-width: 2ch;
   }
   .saved {
-    font-size: 12px;
-    margin: 6px 0 0;
+    margin-top: var(--wa-space-xs);
     text-align: right;
   }
 </style>

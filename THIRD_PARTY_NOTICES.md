@@ -15,6 +15,7 @@ component is used under the terms of its own license.
 |---|---|
 | [Tauri](https://tauri.app) and its official plugins | MIT or Apache-2.0 |
 | [Svelte](https://svelte.dev) and SvelteKit | MIT |
+| [Web Awesome](https://webawesome.com) components, including icons from [Font Awesome Free](https://fontawesome.com/license/free) | MIT; icons CC BY 4.0 |
 | [Lucide](https://lucide.dev) icons | ISC |
 | [DOMPurify](https://github.com/cure53/DOMPurify) | MPL-2.0 or Apache-2.0 |
 | [marked](https://marked.js.org) | MIT |

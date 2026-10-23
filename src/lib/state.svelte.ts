@@ -39,12 +39,11 @@ let toastId = 0;
 export function toast(text: string, kind: "error" | "info" = "error") {
   const id = ++toastId;
   hub.toasts.push({ id, text, kind });
-  setTimeout(
-    () => {
-      hub.toasts = hub.toasts.filter((x) => x.id !== id);
-    },
-    kind === "error" ? 7000 : 3500,
-  );
+  setTimeout(() => dismissToast(id), kind === "error" ? 7000 : 3500);
+}
+
+export function dismissToast(id: number) {
+  hub.toasts = hub.toasts.filter((x) => x.id !== id);
 }
 
 /** Subscribers to all tool events (for example the iframe bridge). */

@@ -56,7 +56,7 @@
 
   export const openWindow = () => api.webWindow(id).catch((e) => toast(errText(e)));
 
-  /** Eingebettete Seite neu laden. */
+  /** Reloads the embedded page. */
   export function reconnect() {
     if (frame) frame.src = src;
     else poll();
@@ -65,15 +65,17 @@
 
 <div class="web">
   {#if reachable === null}
-    <p class="muted">{t("web.checking")}</p>
+    <p class="checking muted"><wa-spinner></wa-spinner>{t("web.checking")}</p>
   {:else if !reachable}
-    <div class="card empty">
-      <p>{t("web.unreachable", { name: tool.entry.name })}</p>
-      {#if tool.can_launch}
-        <button class="primary" onclick={start}>{t("web.start", { name: tool.entry.name })}</button>
-      {/if}
-      <p class="muted small">{t("web.autoAppear")}</p>
-    </div>
+    <wa-card class="empty">
+      <div class="empty-body">
+        <p>{t("web.unreachable", { name: tool.entry.name })}</p>
+        {#if tool.can_launch}
+          <wa-button variant="brand" onclick={start}>{t("web.start", { name: tool.entry.name })}</wa-button>
+        {/if}
+        <p class="muted small">{t("web.autoAppear")}</p>
+      </div>
+    </wa-card>
   {:else if local}
     <iframe bind:this={frame} class="card" title={tool.entry.name} {src}></iframe>
     <p class="muted small">
@@ -88,7 +90,7 @@
   .web {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: var(--wa-space-xs);
     flex: 1;
     min-height: 0;
   }
@@ -97,13 +99,18 @@
     min-height: 480px;
     width: 100%;
     padding: 0;
+    overflow: hidden;
   }
-  .empty {
-    padding: 24px;
+  .checking {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
+  }
+  .empty-body {
+    display: grid;
+    justify-items: center;
+    gap: var(--wa-space-s);
+    padding: var(--wa-space-xl) var(--wa-space-l);
     text-align: center;
-  }
-  .small {
-    font-size: 12px;
-    margin: 0;
   }
 </style>

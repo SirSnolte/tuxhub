@@ -60,8 +60,8 @@
     place-items: center;
     flex: none;
     border-radius: 22%;
-    background: var(--panel-2);
-    color: var(--muted);
+    background: var(--wa-color-neutral-fill-quiet);
+    color: var(--wa-color-text-quiet);
     overflow: hidden;
   }
   img {

@@ -171,6 +171,9 @@ tuxhub. Every request goes through the bridge and is limited to the tool's
 own process and settings. Do not rely on web storage (`localStorage`,
 cookies); store state in the tool process or in the tool's settings instead.
 
+To match the look of tuxhub, build the interface with the components and the
+theme from [`ui-kit/`](../ui-kit/README.md).
+
 ## Installing outside tuxhub
 
 A tool can also be installed without tuxhub, for example with its own
