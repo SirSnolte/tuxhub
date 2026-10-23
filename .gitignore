@@ -4,21 +4,37 @@ node_modules/
 /.svelte-kit/
 /target/
 /src-tauri/gen/
+__pycache__/
+*.py[cod]
+
+# Release bundles built locally
+*.AppImage
+*.deb
+*.rpm
+*.tar.gz
 
 # Local environment
 .env
 .env.*
 !.env.example
 
+# Logs and local test output
+*.log
+/screenshots/
+
 # Editors and operating systems
 .DS_Store
 .idea/
 .vscode/
 *.swp
+*~
 
 # Tooling artifacts
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
-# Never commit signing keys
+# Never commit signing keys or certificates (public keys stay allowed)
 *.key
+*.pem
+*.p12
+*.pfx
