@@ -6,6 +6,8 @@ All notable changes to tuxhub are documented in this file. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-23
+
 ### Added
 
 - Tools installed outside tuxhub are detected through announcement files in
@@ -48,4 +50,5 @@ First public release.
 - System tray, autostart and single-instance behavior.
 - English and German user interface.
 
+[0.3.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.3.0
 [0.2.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.2.0
