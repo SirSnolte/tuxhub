@@ -2,11 +2,12 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { fly } from "svelte/transition";
-  import { ArrowUp, CircleAlert, CircleCheck, Settings, Store, X } from "@lucide/svelte";
+  import { ArrowUp, CircleAlert, CircleCheck, Settings, X } from "@lucide/svelte";
   import { api, errText, type ShortcutStatus, type Tool, type Updates } from "$lib/api";
   import { dismissToast, hub, startListening, toast } from "$lib/state.svelte";
   import { t } from "$lib/i18n.svelte";
   import ToolPage from "$lib/ToolPage.svelte";
+  import ToolMenu from "$lib/ToolMenu.svelte";
   import ToolIcon from "$lib/ToolIcon.svelte";
   import Workshop from "$lib/Workshop.svelte";
   import HubSettings from "$lib/HubSettings.svelte";
@@ -23,6 +24,7 @@
 
   const currentId = $derived(view.kind === "tool" ? view.id : null);
   const current = $derived(tools.find((tool) => tool.entry.id === currentId));
+  let page = $state<ToolPage>();
 
   async function refresh() {
     try {
@@ -74,18 +76,15 @@
 
 <div class="app">
   <nav aria-label="tuxhub">
-    <div class="brand">
-      <img src="/logo.svg" alt="" width="28" height="28" />
-      <span>tuxhub</span>
-    </div>
-
+    <!-- The logo leads to the workshop, the overview of all tools. -->
     <button
-      class="bare nav"
+      class="bare brand"
+      title={t("nav.workshop")}
       aria-current={view.kind === "workshop" ? "page" : undefined}
       onclick={() => (view = { kind: "workshop" })}
     >
-      <Store size={18} strokeWidth={1.75} aria-hidden="true" />
-      <span class="label">{t("nav.workshop")}</span>
+      <img src="/logo.svg" alt="" width="28" height="28" />
+      <span>tuxhub</span>
     </button>
 
     <div class="section">{t("nav.myTools")}</div>
@@ -100,22 +99,30 @@
       </wa-button>
     {/if}
     {#each tools as tool (tool.entry.id)}
-      <button
-        class="bare nav"
-        aria-current={currentId === tool.entry.id ? "page" : undefined}
-        onclick={() => open(tool.entry.id)}
-      >
-        <ToolIcon icon={tool.entry.icon} category={tool.entry.category} toolId={tool.entry.id} size={24} />
-        <span class="label">{tool.entry.name}</span>
-        {#if updates[tool.entry.id]}
-          <span class="upd" title={t("nav.updateTo", { version: updates[tool.entry.id] })}>
-            <ArrowUp size={14} aria-label={t("nav.updateTo", { version: updates[tool.entry.id] })} />
-          </span>
+      <!-- The menu sits next to the entry rather than inside it: a button
+           inside a button is invalid and cannot be reached by keyboard. -->
+      <div class="row" class:current={currentId === tool.entry.id}>
+        <button
+          class="bare nav"
+          aria-current={currentId === tool.entry.id ? "page" : undefined}
+          onclick={() => open(tool.entry.id)}
+        >
+          <ToolIcon icon={tool.entry.icon} category={tool.entry.category} toolId={tool.entry.id} size={24} />
+          <span class="label">{tool.entry.name}</span>
+          {#if updates[tool.entry.id]}
+            <span class="upd" title={t("nav.updateTo", { version: updates[tool.entry.id] })}>
+              <ArrowUp size={14} aria-label={t("nav.updateTo", { version: updates[tool.entry.id] })} />
+            </span>
+          {/if}
+          {#if hub.status[tool.entry.id]?.running}
+            <span class="dot" title={t("nav.active")}><span class="wa-visually-hidden">{t("nav.active")}</span></span>
+          {/if}
+        </button>
+        {#if currentId === tool.entry.id && page}
+          {@const toolMenu = page.menu()}
+          <ToolMenu title={toolMenu.title} items={toolMenu.items} onselect={page.select} />
         {/if}
-        {#if hub.status[tool.entry.id]?.running}
-          <span class="dot" title={t("nav.active")}><span class="wa-visually-hidden">{t("nav.active")}</span></span>
-        {/if}
-      </button>
+      </div>
     {:else}
       <p class="empty">{t("nav.empty")}</p>
     {/each}
@@ -131,7 +138,7 @@
     </button>
   </nav>
 
-  <main>
+  <main class:tool={view.kind === "tool"}>
     <SelfUpdate />
     {#if view.kind === "workshop"}
       <Workshop onopen={open} onchanged={refresh} />
@@ -139,7 +146,13 @@
       <HubSettings {shortcuts} onopen={open} onchanged={refresh} />
     {:else if current}
       {#key current.entry.id}
-        <ToolPage tool={current} {shortcuts} knownUpdate={updates[current.entry.id] ?? null} onchanged={refresh} />
+        <ToolPage
+          bind:this={page}
+          tool={current}
+          {shortcuts}
+          knownUpdate={updates[current.entry.id] ?? null}
+          onchanged={refresh}
+        />
       {/key}
     {/if}
   </main>
@@ -181,10 +194,21 @@
     display: flex;
     align-items: center;
     gap: var(--wa-space-s);
-    padding: var(--wa-space-2xs) var(--wa-space-s) var(--wa-space-l);
+    min-height: 44px;
+    margin-bottom: var(--wa-space-s);
+    padding: var(--wa-space-2xs) var(--wa-space-s);
+    border-radius: var(--wa-border-radius-m);
     font-size: var(--wa-font-size-l);
     font-weight: var(--wa-font-weight-bold);
     letter-spacing: -0.02em;
+    transition: background-color var(--wa-transition-fast);
+  }
+  .brand:hover {
+    background: var(--wa-color-neutral-fill-quiet);
+  }
+  .brand[aria-current="page"] {
+    background: var(--wa-color-brand-fill-quiet);
+    color: var(--wa-color-brand-on-quiet);
   }
   .section {
     margin: var(--wa-space-l) var(--wa-space-s) var(--wa-space-xs);
@@ -213,6 +237,36 @@
     background: var(--wa-color-brand-fill-quiet);
     color: var(--wa-color-brand-on-quiet);
     font-weight: var(--wa-font-weight-semibold);
+  }
+  /* A tool entry with its menu: the row carries the highlight, so the menu
+     button sits on it, centred on the same line as the name. */
+  .row {
+    display: flex;
+    align-items: center;
+    padding-inline-end: var(--wa-space-3xs);
+    border-radius: var(--wa-border-radius-m);
+    color: var(--wa-color-text-normal);
+    transition:
+      background-color var(--wa-transition-fast),
+      color var(--wa-transition-fast);
+  }
+  .row:hover {
+    background: var(--wa-color-neutral-fill-quiet);
+  }
+  .row.current {
+    background: var(--wa-color-brand-fill-quiet);
+    color: var(--wa-color-brand-on-quiet);
+  }
+  .row .nav {
+    flex: 1;
+    min-width: 0;
+    /* The menu button brings its own padding. */
+    padding-inline-end: var(--wa-space-3xs);
+    color: inherit;
+  }
+  .row .nav:hover,
+  .row .nav[aria-current="page"] {
+    background: none;
   }
   .nav .label {
     flex: 1;
@@ -248,12 +302,19 @@
     padding: var(--wa-space-xl) var(--wa-space-2xl);
     overflow-y: auto;
   }
+  /* Tool pages leave as much room as possible to the tool's own interface. */
+  main.tool {
+    padding: var(--wa-space-m) var(--wa-space-l) var(--wa-space-l);
+  }
   @media (max-width: 900px) {
     .app {
       grid-template-columns: 220px minmax(0, 1fr);
     }
     main {
       padding: var(--wa-space-l);
+    }
+    main.tool {
+      padding: var(--wa-space-s) var(--wa-space-m) var(--wa-space-m);
     }
   }
   .toasts {

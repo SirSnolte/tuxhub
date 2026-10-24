@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { CircleCheck, Play, X } from "@lucide/svelte";
+  import { AppWindow, CircleStop, ExternalLink, RefreshCw, RotateCw, Trash, Unlink, X } from "@lucide/svelte";
   import { api, describe, errText, type ShortcutStatus, type Tool } from "./api";
   import { hub, onToolEvent, progressText, toast } from "./state.svelte";
   import { i18n, t, type Key } from "./i18n.svelte";
@@ -8,7 +8,7 @@
   import SettingsForm from "./SettingsForm.svelte";
   import WebPanel from "./WebPanel.svelte";
   import EmbedPanel from "./EmbedPanel.svelte";
-  import ToolIcon from "./ToolIcon.svelte";
+  import type { MenuItem } from "./ToolMenu.svelte";
 
   let {
     tool,
@@ -64,13 +64,14 @@
   let embedPanel = $state<EmbedPanel>();
   let webPanel = $state<WebPanel>();
   let update = $state<string | null>(null);
-  let checked = $state(false);
 
   $effect(() => {
     void id;
     update = knownUpdate;
-    checked = false;
   });
+
+  const canCheck = $derived(updatable && !update);
+  const canReconnect = $derived((plainApp && embedded) || webTool);
 
   async function run(fn: () => Promise<unknown>, ok?: string) {
     busy = true;
@@ -88,8 +89,41 @@
   async function checkUpdate() {
     await run(async () => {
       update = await api.checkUpdate(id);
-      checked = true;
+      if (!update) toast(t("tool.isUpToDate", { name: tool.entry.name }), "info");
     });
+  }
+
+  /** The tool's menu, which the sidebar shows next to the tool's name. */
+  export function menu(): { title: string[]; items: MenuItem[] } {
+    const items: MenuItem[] = [];
+    if (tool.can_launch && !plainApp) {
+      items.push({ value: "launch", label: t("tool.openWindow"), icon: AppWindow, disabled: busy });
+    }
+    if (canCheck) items.push({ value: "check", label: t("tool.checkUpdates"), icon: RefreshCw, disabled: busy });
+    if (canReconnect) items.push({ value: "reconnect", label: t("tool.reconnect"), icon: RotateCw });
+    if (tool.running) items.push({ value: "stop", label: t("tool.stopProcess"), icon: CircleStop, disabled: busy });
+    if (removable) {
+      items.push({
+        value: "remove",
+        label: isLocal ? t("tool.unlink") : t("tool.uninstall"),
+        icon: isLocal ? Unlink : Trash,
+        danger: true,
+        disabled: busy,
+        separated: items.length > 0,
+      });
+    }
+    // The header shows the state and version first, then where the tool comes from.
+    const state = [tool.running ? t("tool.running") : "", tool.version ?? ""].filter(Boolean).join(" · ");
+    const kind = `${t(`source.${source.type}` as Key)} · ${t(`level.${tool.level}` as Key)}`;
+    return { title: state ? [state, kind] : [kind], items };
+  }
+
+  export function select(value: string) {
+    if (value === "launch") run(() => api.launch(id), t("tool.started", { name: tool.entry.name }));
+    else if (value === "check") checkUpdate();
+    else if (value === "reconnect") (webTool ? webPanel?.reconnect() : embedPanel?.reconnect());
+    else if (value === "stop") run(() => api.stop(id));
+    else if (value === "remove") confirming = true;
   }
 
   function uninstall() {
@@ -146,69 +180,36 @@
 <svelte:window {onmessage} />
 
 <div class="page">
-  <header>
-    <ToolIcon icon={tool.entry.icon} category={tool.entry.category} toolId={id} size={56} />
-    <div class="title">
-      <h1>{tool.entry.name}</h1>
-      <div class="meta">
-        {#if tool.version}<wa-tag size="s" appearance="filled">{tool.version}</wa-tag>{/if}
-        <wa-tag size="s" appearance="filled">{t(`source.${tool.entry.source.type}` as Key)}</wa-tag>
-        <wa-tag size="s" appearance="filled">{t(`level.${tool.level}` as Key)}</wa-tag>
-        {#if tool.running}<wa-tag size="s" appearance="filled" variant="success">{t("tool.running")}</wa-tag>{/if}
-      </div>
-    </div>
+  <!-- The sidebar already shows the tool's name, icon, state and version and
+       holds its menu, so the page leaves the room to the tool. Only buttons
+       that need to be at hand get a slim bar. The heading stays for screen
+       readers. -->
+  <h1 class="wa-visually-hidden">{tool.entry.name}</h1>
+  {#if (updatable && update) || plainApp || webTool}
     <div class="buttons">
-      {#if tool.can_launch && !plainApp}
+      {#if updatable && update}
         <wa-button
+          size="s"
           variant="brand"
-          disabled={busy}
-          onclick={() => run(() => api.launch(id), t("tool.started", { name: tool.entry.name }))}
+          appearance="outlined"
+          loading={busy}
+          onclick={() => run(() => api.install(id), t("tool.updatedTo", { version: update ?? "" }))}
         >
-          <span slot="start"><Play size={15} aria-hidden="true" /></span>
-          {t("tool.start")}
-        </wa-button>
-      {/if}
-      {#if updatable}
-        {#if update}
-          <wa-button
-            variant="brand"
-            appearance="outlined"
-            loading={busy}
-            onclick={() => run(() => api.install(id), t("tool.updatedTo", { version: update ?? "" }))}
-          >
-            {t("tool.updateTo", { version: update })}
-          </wa-button>
-        {:else if checked}
-          <wa-button appearance="outlined" disabled>
-            <span slot="start"><CircleCheck size={15} aria-hidden="true" /></span>
-            {t("tool.upToDate")}
-          </wa-button>
-        {:else}
-          <wa-button appearance="outlined" loading={busy} onclick={checkUpdate}>{t("tool.checkUpdates")}</wa-button>
-        {/if}
-      {/if}
-      {#if tool.running}
-        <wa-button appearance="outlined" disabled={busy} onclick={() => run(() => api.stop(id))}>
-          {t("tool.stopProcess")}
-        </wa-button>
-      {/if}
-      {#if (plainApp && embedded) || webTool}
-        <wa-button appearance="outlined" onclick={() => (webTool ? webPanel?.reconnect() : embedPanel?.reconnect())}>
-          {t("tool.reconnect")}
+          {t("tool.updateTo", { version: update })}
         </wa-button>
       {/if}
       {#if plainApp || webTool}
-        <wa-button appearance="outlined" onclick={() => (webTool ? webPanel?.openWindow() : embedPanel?.ownWindow())}>
+        <wa-button
+          size="s"
+          appearance="outlined"
+          onclick={() => (webTool ? webPanel?.openWindow() : embedPanel?.ownWindow())}
+        >
+          <span slot="start"><ExternalLink size={14} aria-hidden="true" /></span>
           {t("tool.ownWindow")}
         </wa-button>
       {/if}
-      {#if removable}
-        <wa-button variant="danger" appearance="outlined" disabled={busy} onclick={() => (confirming = true)}>
-          {isLocal ? t("tool.unlink") : t("tool.uninstall")}
-        </wa-button>
-      {/if}
     </div>
-  </header>
+  {/if}
 
   {#if progress && busy}
     <div class="progress">
@@ -320,29 +321,15 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: var(--wa-space-l);
-    min-height: 0;
-  }
-  header {
-    display: flex;
-    align-items: center;
     gap: var(--wa-space-m);
-    flex-wrap: wrap;
-  }
-  .title {
-    flex: 1;
-    min-width: 200px;
-  }
-  .meta {
-    display: flex;
-    gap: var(--wa-space-2xs);
-    flex-wrap: wrap;
-    margin-top: var(--wa-space-xs);
+    min-height: 0;
   }
   .buttons {
     display: flex;
-    gap: var(--wa-space-xs);
+    align-items: center;
+    gap: var(--wa-space-2xs);
     flex-wrap: wrap;
+    margin-inline-start: auto;
   }
   .progress {
     display: grid;
@@ -362,7 +349,7 @@
   }
   .tool-ui {
     flex: 1;
-    min-height: 420px;
+    min-height: 320px;
     width: 100%;
     border: 0;
     background: transparent;

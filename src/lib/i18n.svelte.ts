@@ -34,10 +34,10 @@ const en = {
   "level.2": "Integrated",
 
   "tool.running": "Running",
-  "tool.start": "Start",
+  "tool.openWindow": "Open own window",
   "tool.started": "{name} started",
   "tool.checkUpdates": "Check for updates",
-  "tool.upToDate": "Up to date",
+  "tool.isUpToDate": "{name} is up to date",
   "tool.updateTo": "Update to {version}",
   "tool.updatedTo": "Updated to {version}",
   "tool.stopProcess": "Stop process",
@@ -52,6 +52,7 @@ const en = {
   "tool.removed": "{name} removed",
   "tool.noLauncher": "No executable was found for this tool.",
   "tool.unknownOp": "Unknown operation: {op}",
+  "tool.more": "More actions",
 
   "embed.start": "Start in tuxhub",
   "embed.hint": "The application runs inside tuxhub. For 3D games, use Open in window.",
@@ -172,10 +173,10 @@ const de: Record<Key, string> = {
   "level.2": "Integriert",
 
   "tool.running": "Läuft",
-  "tool.start": "Starten",
+  "tool.openWindow": "Eigenes Fenster öffnen",
   "tool.started": "{name} gestartet",
   "tool.checkUpdates": "Nach Updates suchen",
-  "tool.upToDate": "Aktuell",
+  "tool.isUpToDate": "{name} ist aktuell",
   "tool.updateTo": "Auf {version} aktualisieren",
   "tool.updatedTo": "Auf {version} aktualisiert",
   "tool.stopProcess": "Prozess beenden",
@@ -190,6 +191,7 @@ const de: Record<Key, string> = {
   "tool.removed": "{name} entfernt",
   "tool.noLauncher": "Für dieses Tool wurde keine ausführbare Datei gefunden.",
   "tool.unknownOp": "Unbekannte Operation: {op}",
+  "tool.more": "Weitere Aktionen",
 
   "embed.start": "In tuxhub starten",
   "embed.hint": "Die Anwendung läuft innerhalb von tuxhub. Für 3D-Spiele ist „Im eigenen Fenster“ besser geeignet.",
