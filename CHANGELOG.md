@@ -4,10 +4,16 @@ All notable changes to tuxhub are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.1] - 2026-10-24
 
 ### Changed
 
+- Tool pages leave the room to the tool: the header with name, icon and tags
+  is gone, and the margins are smaller.
+- Each tool's menu sits next to its name in the sidebar. Its header shows the
+  state, version and source; it opens the tool's own window, checks for
+  updates, stops the process and uninstalls.
+- The tuxhub logo opens the workshop; the separate workshop entry is gone.
 - The warning a tool declares in its manifest (`notice`) can be closed and
   stays hidden until the tool changes its text.
 
@@ -55,5 +61,6 @@ First public release.
 - System tray, autostart and single-instance behavior.
 - English and German user interface.
 
+[0.3.1]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.3.1
 [0.3.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.3.0
 [0.2.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.2.0

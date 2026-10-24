@@ -1,6 +1,6 @@
 {
   "name": "tuxhub",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Modular hub for gaming on Linux",
   "type": "module",
   "scripts": {
