@@ -10,6 +10,7 @@ without any changes to its repository.
 | 0 | A release (AppImage, binary, archive or distribution package) or a Flatpak | Installation, updates, launching in its own window or inside tuxhub |
 | 1 | A local web interface (`web_url`) | Embedding of the web interface |
 | 2 | A `tuxhub.toml` manifest and optionally a JSON-RPC process | Settings, actions, global hotkeys, status display and a custom interface |
+| 3 | A running application that offers the live interface on a socket | A native settings page generated from the application's own description, changes applied live |
 
 ## Releases
 
@@ -45,6 +46,8 @@ version = "1.0.0"            # shown for locally linked tools
 icon = "icon.png"            # HTTPS URL or image path relative to the tool root
 
 notice = "Text shown above the tool's interface, for example a usage notice."
+
+live = true                  # level 3: the running application offers the live interface
 
 [run]                        # launches the tool in its own window
 command = "example-tool"     # relative to the tool root
@@ -187,6 +190,162 @@ cookies); store state in the tool process or in the tool's settings instead.
 
 To match the look of tuxhub, build the interface with the components and the
 theme from [`ui-kit/`](../ui-kit/README.md).
+
+## Live interface (level 3)
+
+Available from tuxhub 0.5.0.
+
+The live interface is for applications that run on their own, started from
+the desktop, at login or by tuxhub, and keep their settings themselves. The
+running application describes its settings and actions; tuxhub renders them
+with its own components and sends every change back immediately. Because
+the description comes from the installed version of the application at
+runtime, the page always matches that version.
+
+Enable it in the manifest or the workshop entry:
+
+```toml
+live = true
+embed = false   # optional: the application belongs on the desktop
+```
+
+### Connection
+
+- The application listens on the Unix socket
+  `$XDG_RUNTIME_DIR/tuxhub/<id>.sock`, where `<id>` is the workshop id.
+- It creates the folder with mode `0700` and the socket with mode `0600`,
+  and replaces a socket file that nobody listens on.
+- tuxhub connects while the application runs. Several connections at the
+  same time must be possible. No socket means the application is not
+  running; tuxhub then offers to start it.
+- Before it connects, tuxhub checks that the file is a socket (not a
+  symbolic link) and belongs to the user running tuxhub.
+- Messages are UTF-8 JSON, one object per line, at most 1 MiB per line.
+  They use the same form as the RPC protocol of level 2: requests carry an
+  `id`, responses repeat it, notifications have none.
+- The application answers every request within five seconds. A request
+  without an answer fails with a timeout; the connection stays open.
+- A line over 1 MiB, or one that is not a JSON object, closes the
+  connection, and tuxhub shows that the answer was invalid.
+
+### Methods
+
+| Method | Params | Result |
+|---|---|---|
+| `hello` | `{"protocol": 1, "client": "tuxhub", "version": "0.5.0", "locale": "en"}` | `{"protocol": 1, "name": "Example", "version": "1.4.0"}` |
+| `schema` | `{"locale": "de"}` | The description, see below |
+| `get` | `{}` | `{"values": {"<key>": <value>, …}}` |
+| `set` | `{"key": "<key>", "value": <value>}` | `{"value": <value as applied>}` |
+| `action` | `{"id": "<action id>"}` | Any value, usually `true` |
+| `quit` | `{}` | `true`; the application exits afterwards |
+
+`hello` is always the first request. tuxhub only continues when the
+application answers with a protocol it supports.
+
+A refused value is answered with an error that names the field:
+
+```json
+{"id": 7, "error": {"message": "The location was not found.", "field": "weatherLocation"}}
+```
+
+Notifications from the application:
+
+| Name | Params | Meaning |
+|---|---|---|
+| `changed` | `{"values": {"<key>": <value>, …}}` | Values changed in the application itself, for example in its own window |
+| `schema-changed` | `{}` | The fields changed; tuxhub requests `schema` again |
+
+### Schema
+
+```json
+{
+  "sections": [
+    {
+      "id": "clock",
+      "label": "Clock",
+      "fields": [
+        { "key": "size", "type": "number", "label": "Size",
+          "min": 8, "max": 120, "step": 1, "unit": "px", "slider": true, "default": 26 },
+        { "key": "color", "type": "color", "label": "Text color", "alpha": true },
+        { "key": "font", "type": "select", "label": "Font",
+          "options": [{ "value": "sans", "label": "Sans" }, { "value": "mono", "label": "Monospace" }] },
+        { "key": "format", "type": "text", "label": "Format", "help": "Day.js format, for example HH:mm" },
+        { "key": "autostart", "type": "toggle", "label": "Start with the desktop" }
+      ]
+    }
+  ],
+  "actions": [
+    { "id": "open-window", "label": "Open settings window" },
+    { "id": "reset", "label": "Reset", "danger": true, "confirm": "Reset all settings?" }
+  ]
+}
+```
+
+| Type | Value | Options |
+|---|---|---|
+| `toggle` | boolean | – |
+| `number` | number | `min`, `max`, `step`, `unit`, `slider` |
+| `select` | string | `options`: 1 to 200 entries of `value` and `label` |
+| `text` | string | `placeholder`, `max_length`, `multiline` |
+| `color` | `#rrggbb` or `#rrggbbaa` | `alpha` |
+
+Every field has a `key` (letters, digits, `_`, `.` and `-`, at most 64
+characters), a `type` and a `label` (at most 120 characters), and may have
+`help` (at most 500 characters), `default` and `disabled`. Keys are unique
+across all sections. Sections and actions have an `id` with the same rules
+and a `label`; an action may have `danger` and a `confirm` text (at most
+500 characters), which tuxhub asks before it runs the action.
+
+tuxhub checks the schema and leaves out what does not fit: a field with an
+invalid key or label, a second field with the same key, a `select` without
+options. The page then names the number of left-out entries and the
+reasons, so you see them while developing. Limits: 32 sections, 200 fields
+per section, 32 actions, 200 options; text values without `max_length` up
+to 65,536 characters.
+
+The application provides the labels in the language requested with
+`locale` (`en` or `de`) and falls back to English. tuxhub shows all texts as
+plain text. Fields of a type that the running tuxhub does not know are shown
+as a notice; all other fields keep working, so new types can be added
+without breaking older versions of tuxhub.
+
+### Behavior in tuxhub
+
+- Switches, selections and colors are sent immediately; sliders, numbers
+  and text after a short pause and when the field loses focus.
+- tuxhub checks values against the schema before it sends them. The
+  application checks them again and may refuse them with an error.
+- A `changed` notification updates the page, except for a field the user is
+  editing at that moment. Values for unknown keys, or of the wrong type,
+  are ignored, from `get` as well.
+- Send `changed` to every other connection when a value changes, including
+  after an action such as "Reset", and also to the connection that ran the
+  action if the action changes values.
+- The message of an error is shown at the field, at most 500 characters.
+- Quit sends `quit` and waits until the application stops listening: close
+  the socket and remove the file when the application exits. After three
+  seconds tuxhub ends the process with SIGTERM.
+- Unknown notifications are ignored, so newer versions of the protocol can
+  add some.
+
+### Checklist for publishers
+
+- [ ] Socket at `$XDG_RUNTIME_DIR/tuxhub/<id>.sock`, modes `0700`/`0600`
+- [ ] `hello`, `schema`, `get`, `set`, `action`, `quit` answered within 5 s
+- [ ] Labels in English and German
+- [ ] `changed` sent when a value changes outside tuxhub
+- [ ] Values validated by the application; errors name the field
+- [ ] The application works exactly as before when tuxhub is not installed
+
+The reference application in [`examples/live-demo`](../examples/live-demo)
+implements protocol 1 with every field type, using only the Python
+standard library. Link its folder in tuxhub under Settings > Developer
+mode and start it from its page, or run it yourself:
+
+```sh
+python3 examples/live-demo/live_demo.py            # window and socket
+python3 examples/live-demo/live_demo.py --headless # socket only
+```
 
 ## Installing outside tuxhub
 

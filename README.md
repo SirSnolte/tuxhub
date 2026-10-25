@@ -98,6 +98,37 @@ does not modify them.
 Proposals for new entries are welcome as issues. Please include the repository,
 the source (GitHub release or Flathub) and a short description.
 
+## For app developers
+
+tuxhub is meant to be the place where Linux gaming software feels at home.
+Any application can appear in the workshop, and with a few lines of code it
+can do much more than start and stop:
+
+- **Live settings:** a running application describes its settings and
+  actions over a local socket. tuxhub shows them as a native settings page,
+  in its own design, in English and German, and every change takes effect
+  immediately in the application.
+- **Update-proof:** the application describes its settings itself, at
+  runtime. When you add, rename or remove a setting in a new release, the
+  page in tuxhub follows without any change on our side.
+- **No dependencies:** the protocol is one JSON object per line on a Unix
+  socket. Any language can implement it; the
+  [developer documentation](docs/tool-development.md#live-interface-level-3)
+  contains the full protocol and a reference application.
+
+How an application gets into tuxhub:
+
+1. You implement the live interface (protocol 1) in your application, or we
+   propose it to you as a pull request.
+2. You or we open a pull request for this repository that adds the workshop
+   entry: source (GitHub release, distribution package or Flathub), icon,
+   description and `"live": true`.
+3. We review the entry and test it with the current release of your
+   application. From then on, every release of your application is picked
+   up by tuxhub automatically.
+
+The live interface is available from tuxhub 0.5.0.
+
 ## Security
 
 Tools installed through tuxhub run with the permissions of your user account,

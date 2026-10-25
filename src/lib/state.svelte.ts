@@ -1,5 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { t } from "./i18n.svelte";
+import type { LiveEvent } from "./api";
 
 export type ToolEvent = { addon: string; method: string; params: unknown };
 
@@ -53,6 +54,13 @@ export function onToolEvent(cb: (ev: ToolEvent) => void) {
   return () => eventListeners.delete(cb);
 }
 
+/** Subscribers to notifications of live applications. */
+const liveListeners = new Set<(ev: LiveEvent) => void>();
+export function onLiveEvent(cb: (ev: LiveEvent) => void) {
+  liveListeners.add(cb);
+  return () => liveListeners.delete(cb);
+}
+
 export async function startListening() {
   await listen<ToolEvent>("addon-event", ({ payload }) => {
     if (payload.method === "status" && payload.params && typeof payload.params === "object") {
@@ -66,4 +74,7 @@ export async function startListening() {
     hub.progress[payload.id] = payload;
   });
   await listen<string>("toast", ({ payload }) => toast(payload));
+  await listen<LiveEvent>("live-event", ({ payload }) => {
+    for (const cb of liveListeners) cb(payload);
+  });
 }

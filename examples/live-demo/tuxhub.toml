@@ -1,0 +1,16 @@
+# Example for integration level 3: an application with its own window that
+# offers its settings to tuxhub over the live interface.
+#
+# To try it, link this folder in tuxhub under Settings > Developer mode, or
+# start live_demo.py yourself: tuxhub finds the running application by its
+# socket.
+
+id = "live-demo"
+name = "Live Demo"
+description = "Shows how a running application offers its settings to tuxhub."
+version = "0.1.0"
+live = true
+embed = false
+
+[run]
+command = "live_demo.py"
