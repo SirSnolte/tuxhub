@@ -473,7 +473,35 @@ pub fn filter_values(schema: &Schema, values: &Value) -> Map<String, Value> {
 
 // ---------------------------------------------------------------- Connection
 
-/// Notification for the interface: `changed`, `schema-changed` or `closed`.
+/// Method names of generic calls and passed-on notifications.
+fn valid_method(m: &str) -> bool {
+    !m.is_empty()
+        && m.len() <= MAX_KEY
+        && m.bytes().all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'.' | b'_' | b'-')
+        })
+}
+
+/// Methods tuxhub sends itself; a tool page may not send them through the
+/// bridge.
+const RESERVED: [&str; 5] = ["hello", "quit", "schema", "get", "set"];
+
+/// Checks a method the interface of a tool sends through the bridge.
+pub fn bridge_method(m: &str) -> Result<(), LiveError> {
+    if !valid_method(m) || RESERVED.contains(&m) {
+        return Err(LiveError::new(
+            "refused",
+            format!(
+                "method {:?} is not allowed",
+                m.chars().take(MAX_KEY).collect::<String>()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Notification for the interface: `changed`, `schema-changed`, `closed`, or
+/// one of the application's own (for its interface, and `shortcuts`).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct LiveEvent {
     pub tool: String,
@@ -693,7 +721,15 @@ async fn read_loop(
                 *conn.schema.lock().unwrap() = None;
                 notify(event("schema-changed", json!({})));
             }
-            // Unknown notifications are left for newer versions of tuxhub.
+            // Everything else is for the tool's own interface and for
+            // `shortcuts`; names outside the allowed form are dropped.
+            // `closed` is reported by tuxhub itself.
+            Some(method) if valid_method(method) && method != "closed" => {
+                notify(event(
+                    method,
+                    msg.get("params").cloned().unwrap_or(Value::Null),
+                ));
+            }
             Some(_) => {}
             None => break Some(invalid("a line is neither an answer nor a notification")),
         }
@@ -935,6 +971,23 @@ impl Live {
         }
         conn.request("action", json!({ "id": action }), self.timeout)
             .await
+    }
+
+    /// Sends any request and returns the answer as it is; for the tool's own
+    /// interface and for actions that are not in the schema.
+    pub async fn call(&self, id: &str, method: &str, params: Value) -> Result<Value, LiveError> {
+        // The line must fit into what the application has to read.
+        let size = json!({ "id": u64::MAX, "method": method, "params": &params })
+            .to_string()
+            .len();
+        if size > MAX_LINE {
+            return Err(LiveError::new(
+                "too-large",
+                "the request is larger than 1 MiB",
+            ));
+        }
+        let conn = self.speaking(id, None).await?;
+        conn.request(method, params, self.timeout).await
     }
 
     /// Asks the application to quit. `true` when it closed the connection and
@@ -1759,7 +1812,8 @@ mod conn_tests {
         let (live, events) = app.live();
         live.schema("demo", "en").await.unwrap();
         app.notify(json!({ "method": "changed", "params": { "values": { "size": 50, "x": 1, "on": "no" } } }));
-        app.notify(json!({ "method": "unknown-note", "params": {} }));
+        // Not a valid method name: never reaches the interface.
+        app.notify(json!({ "method": "Unknown Note!", "params": {} }));
         wait_until("changed event", || !events.lock().unwrap().is_empty()).await;
         tokio::time::sleep(Duration::from_millis(50)).await;
         let evs = events.lock().unwrap().clone();
@@ -1868,5 +1922,133 @@ mod conn_tests {
                 json!({ "values": { "on": false } })
             );
         }
+    }
+
+    /// Notifications the hub does not handle itself are passed on to the
+    /// tool's own interface.
+    #[tokio::test]
+    async fn other_notifications_are_passed_on() {
+        let app = TestApp::start(standard).await;
+        let (live, events) = app.live();
+        live.status("demo", "en").await;
+        app.notify(json!({ "method": "macro-status", "params": { "phase": "idle" } }));
+        app.notify(json!({ "method": "config" }));
+        wait_until("two events", || events.lock().unwrap().len() == 2).await;
+        let evs = events.lock().unwrap().clone();
+        assert_eq!(evs[0].method, "macro-status");
+        assert_eq!(evs[0].params, json!({ "phase": "idle" }));
+        assert_eq!(evs[1].method, "config");
+        assert_eq!(evs[1].params, Value::Null);
+    }
+
+    /// Edge case 18: invalid method names are not passed on, and the
+    /// connection stays open.
+    #[tokio::test]
+    async fn notifications_with_invalid_names_are_dropped() {
+        let app = TestApp::start(standard).await;
+        let (live, events) = app.live();
+        live.status("demo", "en").await;
+        let long = "a".repeat(65);
+        for bad in [
+            "",
+            "Config",
+            "a b",
+            "x/y",
+            "<script>",
+            "closed",
+            long.as_str(),
+        ] {
+            app.notify(json!({ "method": bad, "params": {} }));
+        }
+        app.notify(json!({ "method": "ok-1.x_y", "params": {} }));
+        wait_until("valid event", || !events.lock().unwrap().is_empty()).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let methods: Vec<String> = events
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|e| e.method.clone())
+            .collect();
+        assert_eq!(methods, ["ok-1.x_y"]);
+        assert!(live.running("demo").await);
+    }
+
+    #[tokio::test]
+    async fn call_sends_any_method_and_returns_the_answer() {
+        let app = TestApp::start(|method, params| match method {
+            "macros.list" => Do::Result(json!([{ "id": "m1", "n": params["n"] }])),
+            "boom" => Do::Error(json!({ "message": "no macro" })),
+            m => standard(m, params),
+        })
+        .await;
+        let (live, _) = app.live();
+        let v = live
+            .call("demo", "macros.list", json!({ "n": 2 }))
+            .await
+            .unwrap();
+        assert_eq!(v, json!([{ "id": "m1", "n": 2 }]));
+        let e = live.call("demo", "boom", json!({})).await.unwrap_err();
+        assert_eq!((e.code, e.message.as_str()), ("rejected", "no macro"));
+        assert_eq!(app.methods(), ["hello", "macros.list", "boom"]);
+    }
+
+    #[tokio::test]
+    async fn call_without_application_is_not_running() {
+        let app = TestApp::start(standard).await;
+        let (live, _) = app.live();
+        app.exit.send(true).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let _ = std::fs::remove_file(app.dir.join("tuxhub/demo.sock"));
+        let e = live.call("demo", "status", json!({})).await.unwrap_err();
+        assert_eq!(e.code, "not-running");
+    }
+
+    #[tokio::test]
+    async fn call_refuses_lines_over_one_mib() {
+        let app = TestApp::start(standard).await;
+        let (live, _) = app.live();
+        let big = "x".repeat(MAX_LINE);
+        let e = live
+            .call("demo", "macros.save", json!({ "data": big }))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, "too-large");
+        assert!(!app.methods().contains(&"macros.save".to_string()));
+    }
+
+    /// Edge case 17: the bridge of a tool page may not reach the methods
+    /// tuxhub uses itself, nor send names outside the allowed form.
+    #[test]
+    fn bridge_methods_are_checked() {
+        for ok in [
+            "status",
+            "macros.list",
+            "config.set",
+            "learn.start",
+            "a-b_c.9",
+        ] {
+            assert!(bridge_method(ok).is_ok(), "{ok} refused");
+        }
+        let long = "a".repeat(65);
+        for bad in [
+            "hello",
+            "quit",
+            "schema",
+            "get",
+            "set",
+            "",
+            "Status",
+            "a b",
+            "a/b",
+            "ä",
+            long.as_str(),
+        ] {
+            assert_eq!(
+                bridge_method(bad).unwrap_err().code,
+                "refused",
+                "{bad:?} accepted"
+            );
+        }
+        assert!(bridge_method(&"a".repeat(64)).is_ok());
     }
 }
