@@ -109,7 +109,7 @@
       "deb": "*_amd64.deb",
       "command": "/usr/bin/desktop-flipclock"
     },
-    "manifest": { "embed": false },
+    "manifest": { "embed": false, "live": true },
     "translations": {
       "de": { "description": "Klappuhr für den Desktop. Unter KDE Plasma und wlroots-Compositors bleibt sie auch über Spielen im Vollbild sichtbar. Wird als Systempaket installiert. Von Dav1d-Fn." }
     }
