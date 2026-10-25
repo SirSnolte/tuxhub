@@ -4,6 +4,25 @@ All notable changes to tuxhub are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Live interface 1.1: optional additions to protocol 1 for section icons
+  and descriptions, `advanced` fields, `visible_if` conditions, and options
+  with descriptions and color swatches. `hello` lists them in `features`.
+  Applications without them keep working unchanged.
+- Live settings pages: a one-line header with the state and Start or Quit,
+  one tab per section (the last tab is remembered), a folded "Advanced"
+  part, a reset button for fields that differ from their default, and an
+  empty state with a Start button while the application is not running.
+
+### Changed
+
+- The actions of a live application and its README ("About") are in the
+  tool menu of the sidebar instead of on the page.
+- `examples/live-demo` 0.2.0 uses every addition of protocol 1.1.
+
 ## [0.5.0] - 2026-10-25
 
 ### Added

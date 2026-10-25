@@ -232,7 +232,7 @@ embed = false   # optional: the application belongs on the desktop
 
 | Method | Params | Result |
 |---|---|---|
-| `hello` | `{"protocol": 1, "client": "tuxhub", "version": "0.5.0", "locale": "en"}` | `{"protocol": 1, "name": "Example", "version": "1.4.0"}` |
+| `hello` | `{"protocol": 1, "client": "tuxhub", "version": "0.6.0", "locale": "en", "features": […]}` | `{"protocol": 1, "name": "Example", "version": "1.4.0"}` |
 | `schema` | `{"locale": "de"}` | The description, see below |
 | `get` | `{}` | `{"values": {"<key>": <value>, …}}` |
 | `set` | `{"key": "<key>", "value": <value>}` | `{"value": <value as applied>}` |
@@ -240,7 +240,11 @@ embed = false   # optional: the application belongs on the desktop
 | `quit` | `{}` | `true`; the application exits afterwards |
 
 `hello` is always the first request. tuxhub only continues when the
-application answers with a protocol it supports.
+application answers with a protocol it supports. From tuxhub 0.6.0, `hello`
+also lists in `features` which optional additions of
+[protocol 1.1](#optional-additions-protocol-11) it shows. An application may
+use the list, but does not have to: older versions of tuxhub ignore the
+additions and show every field as before.
 
 A refused value is answered with an error that names the field:
 
@@ -335,11 +339,72 @@ without breaking older versions of tuxhub.
 - [ ] Labels in English and German
 - [ ] `changed` sent when a value changes outside tuxhub
 - [ ] Values validated by the application; errors name the field
+- [ ] Optional (1.1): `default` for every field, icons and descriptions for
+      sections, rarely used fields `advanced`
 - [ ] The application works exactly as before when tuxhub is not installed
 
+### Optional additions (protocol 1.1)
+
+Available from tuxhub 0.6.0. They stay protocol 1: every addition is
+optional, older versions of tuxhub ignore them, and an application without
+them looks as before (with one tab per section). `hello` lists them as
+`"features": ["tabs", "visible_if", "advanced", "reset", "option_colors",
+"confirm"]`.
+
+```json
+{
+  "sections": [
+    {
+      "id": "look", "label": "Look", "icon": "palette",
+      "description": "How the clock looks on the desktop.",
+      "fields": [
+        { "key": "theme", "type": "select", "label": "Theme", "default": "dark",
+          "options": [
+            { "value": "dark", "label": "Dark", "description": "The default colors",
+              "colors": ["#1e1e1e", "#ffffff"] },
+            { "value": "custom", "label": "Own colors" }
+          ] },
+        { "key": "textColor", "type": "color", "label": "Text color", "default": "#ffffff",
+          "visible_if": { "key": "theme", "equals": "custom" } },
+        { "key": "padding", "type": "number", "label": "Padding", "default": 16,
+          "advanced": true }
+      ]
+    }
+  ]
+}
+```
+
+| Where | Addition | In tuxhub |
+|---|---|---|
+| Section | `description` (at most 300 characters) | Short text at the top of the tab |
+| Section | `icon` (a name from the list below) | Icon in the tab; an unknown name shows no icon |
+| Field | `advanced: true` | The field sits in the folded part "Advanced" at the end of its tab |
+| Field | `visible_if: {"key": "<key>", "equals": <value>}` or `{"key": "<key>", "in": [<value>, …]}` | The field is shown only while the other field has this value (or one of these, at most 50); checked again on every change. Values are strings, numbers or booleans, compared exactly. A key that is not a field shows the field |
+| Field | `default` (protocol 1) | When the value differs, a reset button next to the field sends `set` with the default. Colors `#rrggbb` and `#rrggbbff` count as equal |
+| Option | `description` (at most 200 characters) | Second line in the list |
+| Option | `colors: ["#rrggbb[aa]", …]` (at most 6) | Color swatches next to the option, for example for themes |
+| Action | `confirm`, `danger` (protocol 1) | Actions are in the tool menu of the sidebar; `danger` ones in red below a divider, `confirm` asks in a dialog first |
+
+An invalid addition is left out and listed among the left-out entries; the
+field, section or option itself stays usable. A hidden field keeps its
+value: tuxhub sends nothing when it hides a field. If every field of a tab
+is `advanced`, the tab shows "Advanced" unfolded. tuxhub remembers the last
+tab per tool.
+
+Section icons: `bell`, `calendar`, `clock`, `cloud-sun`, `cpu`, `eye`,
+`gamepad`, `globe`, `image`, `info`, `keyboard`, `layers`, `layout`, `mic`,
+`monitor`, `moon`, `mouse`, `palette`, `settings`, `shield`, `sliders`,
+`sun`, `timer`, `type`, `volume`, `wifi`, `wrench`, `zap`.
+
+Presets work well with these additions: a select such as `theme` whose
+options set several other values, with a last option "custom" that shows
+the single fields through `visible_if`. The application keeps both in step
+and reports what follows from a change with `changed`, also to the
+connection that sent the `set`.
+
 The reference application in [`examples/live-demo`](../examples/live-demo)
-implements protocol 1 with every field type, using only the Python
-standard library. Link its folder in tuxhub under Settings > Developer
+implements protocol 1 with every field type and every addition of 1.1,
+using only the Python standard library. Link its folder in tuxhub under Settings > Developer
 mode and start it from its page, or run it yourself:
 
 ```sh
