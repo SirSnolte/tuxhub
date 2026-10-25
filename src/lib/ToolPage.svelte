@@ -3,7 +3,6 @@
   import {
     AppWindow,
     CircleStop,
-    ExternalLink,
     Play,
     RefreshCw,
     RotateCw,
@@ -129,32 +128,35 @@
     });
   }
 
-  /** The tool's menu, which the sidebar shows next to the tool's name. */
+  /** Whether the tool can open a window of its own. */
+  const canOpenWindow = $derived(tool.can_launch || webTool);
+  /** Whether something of the tool is running that "Quit" can end. */
+  const canQuit = $derived((liveApp && liveRunning) || tool.running || (launchOnly && tool.app_running));
+
+  /**
+   * The tool's menu, which the sidebar shows next to the tool's name. Every
+   * tool gets the same entries in the same order; what does not apply to a
+   * tool is greyed out rather than left out, so the menus look alike.
+   */
   export function menu(): { title: string[]; items: MenuItem[] } {
-    const items: MenuItem[] = [];
     const appActions = livePage && liveRunning ? liveActions : [];
+    const items: MenuItem[] = [
+      { value: "window", label: t("tool.openWindow"), icon: AppWindow, disabled: busy || liveBusy || !canOpenWindow },
+      { value: "quit", label: t("app.quit"), icon: CircleStop, disabled: busy || liveBusy || !canQuit },
+    ];
     for (const a of appActions.filter((a) => !a.danger)) {
-      items.push({ value: `live:${a.id}`, label: a.label, icon: Zap, disabled: liveActing });
-    }
-    if (livePage && liveRunning) {
       items.push({
-        value: "quit",
-        label: t("app.quit"),
-        icon: CircleStop,
-        disabled: liveBusy,
-        separated: items.length > 0,
+        value: `live:${a.id}`,
+        label: a.label,
+        icon: Zap,
+        disabled: liveActing,
+        separated: a === appActions.find((x) => !x.danger),
       });
     }
-    const ownStart = items.length;
-    // A live application is started from the bar above its README.
-    if (tool.can_launch && !plainApp && !livePage) {
-      items.push({ value: "launch", label: t("tool.openWindow"), icon: AppWindow, disabled: busy });
-    }
-    if (canCheck) items.push({ value: "check", label: t("tool.checkUpdates"), icon: RefreshCw, disabled: busy });
-    if (canReconnect) items.push({ value: "reconnect", label: t("tool.reconnect"), icon: RotateCw });
-    if (tool.running) items.push({ value: "stop", label: t("tool.stopProcess"), icon: CircleStop, disabled: busy });
-    // The divider sits above the first entry of tuxhub's own, if any follows the app's.
-    if (ownStart > 0 && items.length > ownStart) items[ownStart].separated = true;
+    items.push(
+      { value: "check", label: t("tool.checkUpdates"), icon: RefreshCw, disabled: busy || !canCheck, separated: true },
+      { value: "reconnect", label: t("tool.reconnect"), icon: RotateCw, disabled: !canReconnect },
+    );
     appActions
       .filter((a) => a.danger)
       .forEach((a, i) =>
@@ -164,19 +166,17 @@
           icon: TriangleAlert,
           danger: true,
           disabled: liveActing,
-          separated: i === 0 && items.length > 0,
+          separated: i === 0,
         }),
       );
-    if (removable) {
-      items.push({
-        value: "remove",
-        label: isLocal ? t("tool.unlink") : t("tool.uninstall"),
-        icon: isLocal ? Unlink : Trash,
-        danger: true,
-        disabled: busy,
-        separated: items.length > 0 && !items.at(-1)?.danger,
-      });
-    }
+    items.push({
+      value: "remove",
+      label: isLocal ? t("tool.unlink") : t("tool.uninstall"),
+      icon: isLocal ? Unlink : Trash,
+      danger: true,
+      disabled: busy || !removable,
+      separated: !items.at(-1)?.danger,
+    });
     // The header shows the state and version first, then where the tool comes from.
     const state = [tool.running || tool.app_running ? t("tool.running") : "", tool.version ?? ""]
       .filter(Boolean)
@@ -187,12 +187,18 @@
 
   export function select(value: string) {
     if (value.startsWith("live:")) livePanel?.runAction(value.slice(5));
-    else if (value === "quit") launcher?.quit();
-    else if (value === "launch") run(() => api.launch(id), t("tool.started", { name: tool.entry.name }));
+    else if (value === "window") openWindow();
+    else if (value === "quit") (livePage ? launcher?.quit() : run(() => (liveApp ? api.quit(id) : api.stop(id))));
     else if (value === "check") checkUpdate();
     else if (value === "reconnect") (webTool ? webPanel?.reconnect() : embedPanel?.reconnect());
-    else if (value === "stop") run(() => api.stop(id));
     else if (value === "remove") confirming = true;
+  }
+
+  function openWindow() {
+    if (webTool) webPanel?.openWindow();
+    else if (plainApp && !launchOnly) embedPanel?.ownWindow();
+    else if (livePage) launcher?.start();
+    else run(() => api.launch(id), t("tool.started", { name: tool.entry.name }));
   }
 
   function uninstall() {
@@ -262,7 +268,7 @@
        that need to be at hand get a slim bar. The heading stays for screen
        readers. -->
   <h1 class="wa-visually-hidden">{tool.entry.name}</h1>
-  {#if (updatable && update) || (plainApp && !launchOnly) || webTool || (livePage && !liveRunning)}
+  {#if (updatable && update) || (livePage && !liveRunning)}
     <div class="buttons">
       {#if livePage && !liveRunning}
         <wa-button size="s" variant="brand" loading={liveBusy} onclick={() => launcher?.start()}>
@@ -279,16 +285,6 @@
           onclick={() => run(() => api.install(id), t("tool.updatedTo", { version: update ?? "" }))}
         >
           {t("tool.updateTo", { version: update })}
-        </wa-button>
-      {/if}
-      {#if (plainApp && !launchOnly) || webTool}
-        <wa-button
-          size="s"
-          appearance="outlined"
-          onclick={() => (webTool ? webPanel?.openWindow() : embedPanel?.ownWindow())}
-        >
-          <span slot="start"><ExternalLink size={14} aria-hidden="true" /></span>
-          {t("tool.ownWindow")}
         </wa-button>
       {/if}
     </div>
