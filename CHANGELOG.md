@@ -4,7 +4,7 @@ All notable changes to tuxhub are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.5.0] - 2026-10-25
 
 ### Added
 
@@ -17,6 +17,11 @@ All notable changes to tuxhub are documented in this file. The format follows
   Python, standard library only.
 - Quitting a live application sends `quit` first and ends the process only
   when it is still running after three seconds.
+
+### Changed
+
+- Fliq uses the live interface from version 1.4.0: its page shows the clock's
+  settings and actions while it runs.
 
 ## [0.4.1] - 2026-10-25
 
@@ -98,6 +103,7 @@ First public release.
 - System tray, autostart and single-instance behavior.
 - English and German user interface.
 
+[0.5.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.5.0
 [0.4.1]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.4.1
 [0.4.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.4.0
 [0.3.1]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.3.1
