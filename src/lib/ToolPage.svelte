@@ -42,7 +42,7 @@
   const webTool = $derived(!!m.web_url && !m.ui);
   const plainApp = $derived(tool.level === 0 && tool.can_launch);
   /** Runs on its own and offers its settings over the live interface. */
-  const liveApp = $derived(m.live === true);
+  const liveApp = $derived(m.live === true || (typeof m.live === "object" && m.live !== null));
   let liveRunning = $state(false);
   // Before rendering, so the page of another tool never starts with the
   // state of the previous one.

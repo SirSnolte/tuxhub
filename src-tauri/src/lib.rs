@@ -338,7 +338,7 @@ async fn tool_list(app: AppHandle) -> Vec<ToolView> {
 /// tuxhub.
 async fn app_is_running(hub: &Hub, inst: &tools::Installed) -> bool {
     tools::app_running(&hub.tools_dir, inst)
-        || (inst.manifest(&hub.tools_dir).live == Some(true) && hub.live.running(inst.id()).await)
+        || (inst.manifest(&hub.tools_dir).is_live() && hub.live.running(inst.id()).await)
 }
 
 /// Quits the application: a live application with `quit` first, and with
@@ -351,7 +351,7 @@ async fn quit_app(
     let id = inst.id();
     let program = tools::app_program(&hub.tools_dir, inst);
     let deadline = tokio::time::Instant::now() + wait;
-    let asked = inst.manifest(&hub.tools_dir).live == Some(true) && hub.live.running(id).await;
+    let asked = inst.manifest(&hub.tools_dir).is_live() && hub.live.running(id).await;
     let quitting = asked && hub.live.quit(id, wait).await;
     let Some(program) = program else {
         return if asked && !quitting {
@@ -395,7 +395,7 @@ async fn tool_app_running(app: AppHandle, id: String) -> Result<bool, String> {
 async fn tool_quit(app: AppHandle, id: String) -> Result<(), String> {
     let hub = app.state::<Hub>();
     let inst = tools::load(&hub.tools_dir, &id)?;
-    if inst.manifest(&hub.tools_dir).live != Some(true)
+    if !inst.manifest(&hub.tools_dir).is_live()
         && tools::app_program(&hub.tools_dir, &inst).is_none()
     {
         return Err(format!("{id} is not started and stopped by tuxhub"));
@@ -494,7 +494,7 @@ async fn tool_stop(app: AppHandle, id: String) {
 /// The live interface is only used for installed tools with `live = true`.
 fn live_tool(hub: &Hub, id: &str) -> Result<(), live::LiveError> {
     match hub.load(id) {
-        Ok((_, m)) if m.live == Some(true) => Ok(()),
+        Ok((_, m)) if m.is_live() => Ok(()),
         _ => Err(live::LiveError::new(
             "not-live",
             format!("{id} has no live interface"),

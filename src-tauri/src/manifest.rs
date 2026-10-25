@@ -32,9 +32,10 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embed: Option<bool>,
     /// The running application offers the live interface (level 3) on
-    /// `$XDG_RUNTIME_DIR/tuxhub/<id>.sock`.
+    /// `$XDG_RUNTIME_DIR/tuxhub/<id>.sock`: `live = true`, or a `[live]`
+    /// section with the command that starts its service.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub live: Option<bool>,
+    pub live: Option<Live>,
     /// Background process that tuxhub talks to over JSON-RPC.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rpc: Option<Cmd>,
@@ -55,6 +56,14 @@ pub struct Manifest {
     pub settings: Vec<Setting>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<Action>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Live {
+    On(bool),
+    /// tuxhub starts the service in the background when it is needed.
+    Start(Cmd),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,9 +132,14 @@ impl Manifest {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        for cmd in [&self.run, &self.rpc, &self.uninstall]
-            .into_iter()
-            .flatten()
+        for cmd in [
+            self.run.as_ref(),
+            self.rpc.as_ref(),
+            self.uninstall.as_ref(),
+            self.live_start(),
+        ]
+        .into_iter()
+        .flatten()
         {
             if !safe_relative(&cmd.command) {
                 return Err(format!(
@@ -145,7 +159,7 @@ impl Manifest {
     /// 0 = launch only, 1 = web interface, 2 = fully integrated, 3 = live
     /// interface of the running application
     pub fn level(&self) -> u8 {
-        if self.live == Some(true) {
+        if self.is_live() {
             3
         } else if self.rpc.is_some() || self.ui.is_some() || !self.settings.is_empty() {
             2
@@ -153,6 +167,18 @@ impl Manifest {
             1
         } else {
             0
+        }
+    }
+
+    pub fn is_live(&self) -> bool {
+        matches!(self.live, Some(Live::On(true) | Live::Start(_)))
+    }
+
+    /// Command that starts the live service, from the `[live]` section.
+    pub fn live_start(&self) -> Option<&Cmd> {
+        match &self.live {
+            Some(Live::Start(cmd)) => Some(cmd),
+            _ => None,
         }
     }
 
@@ -196,14 +222,44 @@ mod tests {
 
     #[test]
     fn live_interface_is_level_3() {
-        assert_eq!(Manifest::default().live, None);
+        assert!(Manifest::default().live.is_none());
         let m: Manifest = toml::from_str("embed = false\nlive = true").unwrap();
-        assert_eq!(m.live, Some(true));
+        assert!(m.is_live());
         assert_eq!(m.level(), 3);
         // Also above a web interface or an own process.
         let m: Manifest = toml::from_str("live = true\nweb_url = \"http://127.0.0.1:1\"").unwrap();
         assert_eq!(m.level(), 3);
         let m: Manifest = toml::from_str("live = false").unwrap();
         assert_eq!(m.level(), 0);
+    }
+
+    #[test]
+    fn live_section_makes_a_startable_live_tool() {
+        let m: Manifest =
+            toml::from_str("[live]\ncommand = \"bin/tool\"\nargs = [\"daemon\"]").unwrap();
+        assert!(m.is_live());
+        assert_eq!(m.level(), 3);
+        let start = m.live_start().unwrap();
+        assert_eq!(start.command, "bin/tool");
+        assert_eq!(start.args, ["daemon"]);
+        m.validate().unwrap();
+        // `live = true` alone: live, but tuxhub cannot start it.
+        let m: Manifest = toml::from_str("live = true").unwrap();
+        assert!(m.is_live());
+        assert!(m.live_start().is_none());
+        assert!(
+            !toml::from_str::<Manifest>("live = false")
+                .unwrap()
+                .is_live()
+        );
+    }
+
+    /// Edge case 14: the start command stays inside the tool folder.
+    #[test]
+    fn live_command_outside_the_tool_folder_is_refused() {
+        for cmd in ["../evil", "bin/../../evil", "/usr/bin/evil", ""] {
+            let m: Manifest = toml::from_str(&format!("[live]\ncommand = {cmd:?}")).unwrap();
+            assert!(m.validate().is_err(), "{cmd:?} was accepted");
+        }
     }
 }

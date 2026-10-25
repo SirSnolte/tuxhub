@@ -27,8 +27,9 @@ export type Manifest = {
   run?: Cmd;
   /** `false`: tuxhub only starts and stops the application, never shows it inside. */
   embed?: boolean;
-  /** The running application offers the live interface (level 3). */
-  live?: boolean;
+  /** The running application offers the live interface (level 3); a
+   * `[live]` section also tells tuxhub how to start its service. */
+  live?: boolean | { command: string; args?: string[] };
   rpc?: Cmd;
   uninstall?: Cmd;
   ui?: string;
