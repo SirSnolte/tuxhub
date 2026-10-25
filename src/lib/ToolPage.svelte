@@ -1,7 +1,19 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { AppWindow, CircleStop, ExternalLink, RefreshCw, RotateCw, Trash, Unlink, X } from "@lucide/svelte";
-  import { api, describe, errText, type ShortcutStatus, type Tool } from "./api";
+  import {
+    AppWindow,
+    CircleStop,
+    ExternalLink,
+    Info,
+    RefreshCw,
+    RotateCw,
+    Trash,
+    TriangleAlert,
+    Unlink,
+    X,
+    Zap,
+  } from "@lucide/svelte";
+  import { api, describe, errText, type LiveSchema, type ShortcutStatus, type Tool } from "./api";
   import { hub, onToolEvent, progressText, toast } from "./state.svelte";
   import { i18n, t, type Key } from "./i18n.svelte";
   import Readme from "./Readme.svelte";
@@ -44,11 +56,17 @@
   /** Runs on its own and offers its settings over the live interface. */
   const liveApp = $derived(m.live === true);
   let liveRunning = $state(false);
+  /** Actions the running live application offers, shown in the tool menu. */
+  let liveActions = $state<LiveSchema["actions"]>([]);
+  let livePanel = $state<LivePanel>();
   // Before rendering, so the page of another tool never starts with the
   // state of the previous one.
   $effect.pre(() => {
     liveRunning = tool.app_running;
   });
+  /** The README of a live application opens from the menu, not below its settings. */
+  let aboutOpen = $state(false);
+  let aboutLoaded = $state(false);
   /** Belongs on the desktop: tuxhub only starts and stops it. */
   const launchOnly = $derived(plainApp && m.embed === false);
 
@@ -110,12 +128,38 @@
   /** The tool's menu, which the sidebar shows next to the tool's name. */
   export function menu(): { title: string[]; items: MenuItem[] } {
     const items: MenuItem[] = [];
+    const appActions = liveApp && liveRunning ? liveActions : [];
+    for (const a of appActions.filter((a) => !a.danger)) {
+      items.push({ value: `live:${a.id}`, label: a.label, icon: Zap });
+    }
+    if (liveApp && tool.entry.repo) {
+      items.push({
+        value: "about",
+        label: t("live.about", { name: tool.entry.name }),
+        icon: Info,
+        separated: items.length > 0,
+      });
+    }
+    const ownStart = items.length;
     if (tool.can_launch && !plainApp) {
       items.push({ value: "launch", label: t("tool.openWindow"), icon: AppWindow, disabled: busy });
     }
     if (canCheck) items.push({ value: "check", label: t("tool.checkUpdates"), icon: RefreshCw, disabled: busy });
     if (canReconnect) items.push({ value: "reconnect", label: t("tool.reconnect"), icon: RotateCw });
     if (tool.running) items.push({ value: "stop", label: t("tool.stopProcess"), icon: CircleStop, disabled: busy });
+    // The divider sits above the first entry of tuxhub's own, if any follows the app's.
+    if (ownStart > 0 && items.length > ownStart) items[ownStart].separated = true;
+    appActions
+      .filter((a) => a.danger)
+      .forEach((a, i) =>
+        items.push({
+          value: `live:${a.id}`,
+          label: a.label,
+          icon: TriangleAlert,
+          danger: true,
+          separated: i === 0 && items.length > 0,
+        }),
+      );
     if (removable) {
       items.push({
         value: "remove",
@@ -123,7 +167,7 @@
         icon: isLocal ? Unlink : Trash,
         danger: true,
         disabled: busy,
-        separated: items.length > 0,
+        separated: items.length > 0 && !items.at(-1)?.danger,
       });
     }
     // The header shows the state and version first, then where the tool comes from.
@@ -135,7 +179,11 @@
   }
 
   export function select(value: string) {
-    if (value === "launch") run(() => api.launch(id), t("tool.started", { name: tool.entry.name }));
+    if (value.startsWith("live:")) livePanel?.runAction(value.slice(5));
+    else if (value === "about") {
+      aboutLoaded = true;
+      aboutOpen = true;
+    } else if (value === "launch") run(() => api.launch(id), t("tool.started", { name: tool.entry.name }));
     else if (value === "check") checkUpdate();
     else if (value === "reconnect") (webTool ? webPanel?.reconnect() : embedPanel?.reconnect());
     else if (value === "stop") run(() => api.stop(id));
@@ -256,10 +304,15 @@
   {/if}
 
   {#if liveApp}
-    <LaunchPanel {tool} {onchanged} bind:running={liveRunning} />
+    <LaunchPanel {tool} {onchanged} bind:running={liveRunning} header />
     {#if liveRunning}
       {#key id}
-        <LivePanel {tool} onclosed={() => (liveRunning = false)} />
+        <LivePanel
+          {tool}
+          bind:this={livePanel}
+          bind:actions={liveActions}
+          onclosed={() => (liveRunning = false)}
+        />
       {/key}
     {/if}
   {:else if m.ui}
@@ -310,12 +363,26 @@
     </wa-card>
   {/if}
 
-  {#if tool.entry.repo && !m.ui && !m.web_url && !embedded}
+  {#if tool.entry.repo && !m.ui && !m.web_url && !embedded && !liveApp}
     <wa-card>
       <Readme repo={tool.entry.repo} />
     </wa-card>
   {/if}
 </div>
+
+{#if liveApp && tool.entry.repo}
+  <wa-dialog
+    class="about"
+    label={t("live.about", { name: tool.entry.name })}
+    open={aboutOpen}
+    onwa-after-hide={(e: Event) => {
+      if (e.target === e.currentTarget) aboutOpen = false;
+    }}
+  >
+    <!-- Loaded on first opening, then kept. -->
+    {#if aboutLoaded}<Readme repo={tool.entry.repo} />{/if}
+  </wa-dialog>
+{/if}
 
 <wa-dialog
   label={t(isLocal ? "tool.confirmUnlink" : "tool.confirmUninstall", { name: tool.entry.name })}
@@ -378,6 +445,9 @@
     width: 100%;
     border: 0;
     background: transparent;
+  }
+  .about {
+    --width: min(48rem, 90vw);
   }
   .dialog-buttons {
     display: flex;

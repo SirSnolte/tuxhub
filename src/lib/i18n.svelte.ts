@@ -69,6 +69,9 @@ const en = {
   "app.running": "{name} is running.",
   "app.stopped": "{name} is not running.",
   "app.quitDone": "{name} quit",
+  "app.stateRunning": "Running",
+  "app.stateStopped": "Stopped",
+  "app.startToChange": "Start {name} to change its settings.",
   "app.hint": "{name} runs in its own window on the desktop, also when tuxhub is closed.",
 
   "web.checking": "Checking web interface…",
@@ -88,7 +91,9 @@ const en = {
   "live.empty": "{name} has no settings.",
   "live.unreachable":
     "{name} is running, but its settings cannot be reached. Versions without the tuxhub interface can only be started and quit here.",
-  "live.actions": "Actions",
+  "live.advanced": "Advanced",
+  "live.reset": "Reset {label}",
+  "live.about": "About {name}",
   "live.protocol": "This version of {name} does not match tuxhub.",
   "live.protocolHint": "Update {name} or tuxhub to change its settings here.",
   "live.unsupported": "Not supported by this version of tuxhub.",
@@ -249,6 +254,9 @@ const de: Record<Key, string> = {
   "app.running": "{name} läuft.",
   "app.stopped": "{name} läuft nicht.",
   "app.quitDone": "{name} beendet",
+  "app.stateRunning": "Läuft",
+  "app.stateStopped": "Beendet",
+  "app.startToChange": "Starte {name}, um die Einstellungen zu ändern.",
   "app.hint": "{name} läuft in einem eigenen Fenster auf dem Desktop, auch wenn tuxhub geschlossen ist.",
 
   "web.checking": "Web-Oberfläche wird geprüft…",
@@ -268,7 +276,9 @@ const de: Record<Key, string> = {
   "live.empty": "{name} hat keine Einstellungen.",
   "live.unreachable":
     "{name} läuft, aber seine Einstellungen sind nicht erreichbar. Versionen ohne tuxhub-Schnittstelle lassen sich hier nur starten und beenden.",
-  "live.actions": "Aktionen",
+  "live.advanced": "Erweitert",
+  "live.reset": "{label} zurücksetzen",
+  "live.about": "Über {name}",
   "live.protocol": "Diese Version von {name} passt nicht zu tuxhub.",
   "live.protocolHint": "Aktualisiere {name} oder tuxhub, um die Einstellungen hier zu ändern.",
   "live.unsupported": "Wird von dieser tuxhub-Version nicht unterstützt.",
