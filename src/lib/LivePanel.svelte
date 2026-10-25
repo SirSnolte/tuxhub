@@ -13,7 +13,7 @@
   import { i18n, t, type Key } from "./i18n.svelte";
   import { onLiveEvent, toast } from "./state.svelte";
   import { checkedOf, valueOf } from "./wa";
-  import { delayFor, keepKnown, mergeChanged, Sender } from "./live";
+  import { afterStatus, delayFor, keepKnown, mergeChanged, Sender } from "./live";
 
   // Settings of a running application with a live interface (level 3). The
   // application describes its fields and texts itself; everything it sends is
@@ -34,6 +34,9 @@
   /** The page cannot show the settings: timeout, invalid answer. */
   let failure = $state<LiveError | null>(null);
   let loading = $state(true);
+  /** The program runs, but its socket does not answer (yet). */
+  let unreachable = $state(false);
+  let retry: ReturnType<typeof setTimeout> | undefined;
   let confirming = $state<Action | null>(null);
   let running = $state<string | null>(null);
 
@@ -73,6 +76,7 @@
 
   async function load() {
     const tool = id;
+    clearTimeout(retry);
     loading = true;
     failure = null;
     try {
@@ -83,12 +87,13 @@
         await new Promise((r) => setTimeout(r, 400));
       }
       if (tool !== id) return;
-      if (!status.running) return onclosed();
-      if (status.error) {
-        failure = status.error;
-        return;
-      }
-      if (!status.protocol_ok) return;
+      const step = afterStatus(status);
+      unreachable = step === "unreachable";
+      // A version without the interface, or one that is still starting:
+      // check again, the page fills as soon as the socket answers.
+      if (step === "unreachable") retry = setTimeout(load, 2000);
+      if (step === "failure") failure = status.error ?? null;
+      if (step !== "load") return;
       const next = await api.liveSchema(tool, i18n.locale);
       const current = await api.liveGet(tool);
       if (tool !== id) return;
@@ -96,7 +101,7 @@
       confirmed = { ...current };
       values = mergeChanged(keepKnown(values, next), current, editing);
     } catch (e) {
-      if (isLiveError(e) && (e.code === "closed" || e.code === "not-running")) return onclosed();
+      if (isLiveError(e) && e.code === "closed") return onclosed();
       failure = isLiveError(e) ? e : { code: "", message: errText(e) };
     } finally {
       loading = false;
@@ -129,6 +134,7 @@
   onDestroy(() => {
     off();
     sender.cancel();
+    clearTimeout(retry);
   });
 
   async function send(key: string, value: unknown) {
@@ -189,7 +195,14 @@
   };
 </script>
 
-{#if loading && !schema}
+{#if unreachable}
+  <wa-callout variant="neutral">
+    <div class="callout">
+      <span>{t("live.unreachable", { name })}</span>
+      <wa-button size="s" appearance="outlined" onclick={load}>{t("common.retry")}</wa-button>
+    </div>
+  </wa-callout>
+{:else if loading && !schema}
   <wa-card aria-busy="true">
     <span class="wa-visually-hidden">{t("live.loading", { name })}</span>
     <div class="loading">

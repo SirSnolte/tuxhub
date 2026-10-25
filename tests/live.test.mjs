@@ -1,7 +1,7 @@
 // Logic of the live settings page (src/lib/live.ts). Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { delayFor, keepKnown, mergeChanged, PAUSE_MS, Sender } from "../src/lib/live.ts";
+import { afterStatus, delayFor, keepKnown, mergeChanged, PAUSE_MS, Sender } from "../src/lib/live.ts";
 
 const field = (type, extra = {}) => ({ key: "k", label: "K", disabled: false, type, ...extra });
 
@@ -92,6 +92,19 @@ test("after `schema-changed` the values of the remaining fields stay", () => {
     invalid: [],
   };
   assert.deepEqual(keepKnown({ size: 26, on: true, gone: "x", when: "today" }, schema), { size: 26, on: true });
+});
+
+// Code review: a running program without a reachable socket (an older version
+// without the interface) must not be reported as stopped, or the page flips
+// between running and stopped.
+test("a status without socket shows a notice instead of closing the page", () => {
+  assert.equal(afterStatus({ running: false, protocol_ok: false }), "unreachable");
+  assert.equal(
+    afterStatus({ running: true, protocol_ok: false, error: { code: "timeout", message: "" } }),
+    "failure",
+  );
+  assert.equal(afterStatus({ running: true, protocol_ok: false }), "protocol");
+  assert.equal(afterStatus({ running: true, protocol_ok: true }), "load");
 });
 
 test("mergeChanged leaves the original object alone", () => {

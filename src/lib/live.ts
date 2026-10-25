@@ -1,7 +1,19 @@
 // Logic of the live settings page that does not depend on Svelte: when a
 // field sends its value, and which values the application may overwrite.
 // Tested in tests/live.test.mjs.
-import type { LiveField, LiveSchema } from "./api";
+import type { LiveField, LiveSchema, LiveStatus } from "./api";
+
+/**
+ * What the page shows after `live_status`. A program can run without a
+ * reachable socket (an older version without the interface, or while it
+ * starts); the page then says so instead of reporting it as stopped.
+ */
+export function afterStatus(status: LiveStatus): "unreachable" | "failure" | "protocol" | "load" {
+  if (!status.running) return "unreachable";
+  if (status.error) return "failure";
+  if (!status.protocol_ok) return "protocol";
+  return "load";
+}
 
 /** Pause after the last input before sliders, numbers and text send. */
 export const PAUSE_MS = 300;

@@ -86,6 +86,8 @@ const en = {
 
   "live.loading": "Loading the settings of {name}…",
   "live.empty": "{name} has no settings.",
+  "live.unreachable":
+    "{name} is running, but its settings cannot be reached. Versions without the tuxhub interface can only be started and quit here.",
   "live.actions": "Actions",
   "live.protocol": "This version of {name} does not match tuxhub.",
   "live.protocolHint": "Update {name} or tuxhub to change its settings here.",
@@ -256,6 +258,8 @@ const de: Record<Key, string> = {
 
   "live.loading": "Einstellungen von {name} werden geladen…",
   "live.empty": "{name} hat keine Einstellungen.",
+  "live.unreachable":
+    "{name} läuft, aber seine Einstellungen sind nicht erreichbar. Versionen ohne tuxhub-Schnittstelle lassen sich hier nur starten und beenden.",
   "live.actions": "Aktionen",
   "live.protocol": "Diese Version von {name} passt nicht zu tuxhub.",
   "live.protocolHint": "Aktualisiere {name} oder tuxhub, um die Einstellungen hier zu ändern.",

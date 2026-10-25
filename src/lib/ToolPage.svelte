@@ -44,6 +44,11 @@
   /** Runs on its own and offers its settings over the live interface. */
   const liveApp = $derived(m.live === true);
   let liveRunning = $state(false);
+  // Before rendering, so the page of another tool never starts with the
+  // state of the previous one.
+  $effect.pre(() => {
+    liveRunning = tool.app_running;
+  });
   /** Belongs on the desktop: tuxhub only starts and stops it. */
   const launchOnly = $derived(plainApp && m.embed === false);
 
