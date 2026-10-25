@@ -4,7 +4,7 @@
     AppWindow,
     CircleStop,
     ExternalLink,
-    Info,
+    Play,
     RefreshCw,
     RotateCw,
     Trash,
@@ -66,9 +66,9 @@
   $effect.pre(() => {
     liveRunning = tool.app_running;
   });
-  /** The README of a live application opens from the menu, not below its settings. */
-  let aboutOpen = $state(false);
-  let aboutLoaded = $state(false);
+  /** Starts and quits a live application and notices when that happens elsewhere. */
+  let launcher = $state<LaunchPanel>();
+  let liveBusy = $state(false);
   /** Belongs on the desktop: tuxhub only starts and stops it. */
   const launchOnly = $derived(plainApp && m.embed === false);
 
@@ -134,16 +134,18 @@
     for (const a of appActions.filter((a) => !a.danger)) {
       items.push({ value: `live:${a.id}`, label: a.label, icon: Zap, disabled: liveActing });
     }
-    if (liveApp && tool.entry.repo) {
+    if (liveApp && liveRunning) {
       items.push({
-        value: "about",
-        label: t("live.about", { name: tool.entry.name }),
-        icon: Info,
+        value: "quit",
+        label: t("app.quit"),
+        icon: CircleStop,
+        disabled: liveBusy,
         separated: items.length > 0,
       });
     }
     const ownStart = items.length;
-    if (tool.can_launch && !plainApp) {
+    // A live application is started from the bar above its README.
+    if (tool.can_launch && !plainApp && !liveApp) {
       items.push({ value: "launch", label: t("tool.openWindow"), icon: AppWindow, disabled: busy });
     }
     if (canCheck) items.push({ value: "check", label: t("tool.checkUpdates"), icon: RefreshCw, disabled: busy });
@@ -183,10 +185,8 @@
 
   export function select(value: string) {
     if (value.startsWith("live:")) livePanel?.runAction(value.slice(5));
-    else if (value === "about") {
-      aboutLoaded = true;
-      aboutOpen = true;
-    } else if (value === "launch") run(() => api.launch(id), t("tool.started", { name: tool.entry.name }));
+    else if (value === "quit") launcher?.quit();
+    else if (value === "launch") run(() => api.launch(id), t("tool.started", { name: tool.entry.name }));
     else if (value === "check") checkUpdate();
     else if (value === "reconnect") (webTool ? webPanel?.reconnect() : embedPanel?.reconnect());
     else if (value === "stop") run(() => api.stop(id));
@@ -252,8 +252,14 @@
        that need to be at hand get a slim bar. The heading stays for screen
        readers. -->
   <h1 class="wa-visually-hidden">{tool.entry.name}</h1>
-  {#if (updatable && update) || (plainApp && !launchOnly) || webTool}
+  {#if (updatable && update) || (plainApp && !launchOnly) || webTool || (liveApp && !liveRunning)}
     <div class="buttons">
+      {#if liveApp && !liveRunning}
+        <wa-button size="s" variant="brand" loading={liveBusy} onclick={() => launcher?.start()}>
+          <span slot="start"><Play size={14} aria-hidden="true" /></span>
+          {t("app.start")}
+        </wa-button>
+      {/if}
       {#if updatable && update}
         <wa-button
           size="s"
@@ -307,7 +313,9 @@
   {/if}
 
   {#if liveApp}
-    <LaunchPanel {tool} {onchanged} bind:running={liveRunning} header />
+    <!-- Running: only the settings. Stopped: the README below, started from
+         the bar above; quitting is in the tool menu. -->
+    <LaunchPanel {tool} {onchanged} bind:this={launcher} bind:running={liveRunning} bind:busy={liveBusy} hidden />
     {#if liveRunning}
       {#key id}
         <LivePanel
@@ -318,6 +326,8 @@
           onclosed={() => (liveRunning = false)}
         />
       {/key}
+    {:else if !tool.entry.repo}
+      <wa-card><p class="muted">{t("app.startToChange", { name: tool.entry.name })}</p></wa-card>
     {/if}
   {:else if m.ui}
     <!--
@@ -367,26 +377,12 @@
     </wa-card>
   {/if}
 
-  {#if tool.entry.repo && !m.ui && !m.web_url && !embedded && !liveApp}
+  {#if tool.entry.repo && !m.ui && !m.web_url && !embedded && !(liveApp && liveRunning)}
     <wa-card>
       <Readme repo={tool.entry.repo} />
     </wa-card>
   {/if}
 </div>
-
-{#if liveApp && tool.entry.repo}
-  <wa-dialog
-    class="about"
-    label={t("live.about", { name: tool.entry.name })}
-    open={aboutOpen}
-    onwa-after-hide={(e: Event) => {
-      if (e.target === e.currentTarget) aboutOpen = false;
-    }}
-  >
-    <!-- Loaded on first opening, then kept. -->
-    {#if aboutLoaded}<Readme repo={tool.entry.repo} />{/if}
-  </wa-dialog>
-{/if}
 
 <wa-dialog
   label={t(isLocal ? "tool.confirmUnlink" : "tool.confirmUninstall", { name: tool.entry.name })}
@@ -449,9 +445,6 @@
     width: 100%;
     border: 0;
     background: transparent;
-  }
-  .about {
-    --width: min(48rem, 90vw);
   }
   .dialog-buttons {
     display: flex;

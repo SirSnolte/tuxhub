@@ -12,15 +12,16 @@ All notable changes to tuxhub are documented in this file. The format follows
   and descriptions, `advanced` fields, `visible_if` conditions, and options
   with descriptions and color swatches. `hello` lists them in `features`.
   Applications without them keep working unchanged.
-- Live settings pages: a one-line header with the state and Start or Quit,
-  one tab per section (the last tab is remembered), a folded "Advanced"
-  part, a reset button for fields that differ from their default, and an
-  empty state with a Start button while the application is not running.
+- Live settings pages: one tab per section (the last tab is remembered), a
+  folded "Advanced" part and a reset button for fields that differ from
+  their default.
 
 ### Changed
 
-- The actions of a live application and its README ("About") are in the
-  tool menu of the sidebar instead of on the page.
+- The page of a running live application shows only its settings, without
+  the start card and the README. While it is stopped, the page shows the
+  README with a Start button above it. Quit and the application's actions
+  are in the tool menu of the sidebar.
 - `examples/live-demo` 0.2.0 uses every addition of protocol 1.1.
 
 ## [0.5.0] - 2026-10-25

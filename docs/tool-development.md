@@ -315,6 +315,10 @@ without breaking older versions of tuxhub.
 
 ### Behavior in tuxhub
 
+- While the application runs, its page shows only the settings. While it
+  is stopped, the page shows the README of the workshop entry with a Start
+  button above it. Quit and the application's actions are in the tool menu
+  of the sidebar.
 - Switches, selections and colors are sent immediately; sliders, numbers
   and text after a short pause and when the field loses focus.
 - tuxhub checks values against the schema before it sends them. The
@@ -383,7 +387,7 @@ them looks as before (with one tab per section). `hello` lists them as
 | Field | `default` (protocol 1) | When the value differs, a reset button next to the field sends `set` with the default. Colors `#rrggbb` and `#rrggbbff` count as equal |
 | Option | `description` (at most 200 characters) | Second line in the list |
 | Option | `colors: ["#rrggbb[aa]", …]` (at most 6) | Color swatches next to the option, for example for themes |
-| Action | `confirm`, `danger` (protocol 1) | Actions are in the tool menu of the sidebar; `danger` ones in red below a divider, `confirm` asks in a dialog first |
+| Action | `confirm`, `danger` (protocol 1) | Actions are in the tool menu of the sidebar, next to Quit; `danger` ones in red below a divider, `confirm` asks in a dialog first |
 
 An invalid addition is left out and listed among the left-out entries; the
 field, section or option itself stays usable. A hidden field keeps its
