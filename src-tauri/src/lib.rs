@@ -1,5 +1,6 @@
 mod embed;
 mod github;
+mod live;
 mod manifest;
 mod native;
 mod shortcuts;
@@ -13,7 +14,7 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 use tauri::http::{Response, StatusCode, header};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tools::{Entry, Installed, Source};
 
 /// Repository the workshop index is loaded from.
@@ -23,6 +24,8 @@ const WORKSHOP_PATH: &str = "registry/index.json";
 const WORKSHOP_BUNDLED: &str = include_str!("../../registry/index.json");
 /// JavaScript bridge that tool interfaces load with `<script src="/__tuxhub/bridge.js">`.
 const BRIDGE_JS: &str = include_str!("bridge.js");
+/// Time a live application has to quit before it is ended with SIGTERM.
+const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 
 pub struct Hub {
     tools_dir: PathBuf,
@@ -35,6 +38,8 @@ pub struct Hub {
     updates: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
     /// Running sessions of applications shown inside tuxhub
     embeds: embed::Sessions,
+    /// Connections to applications with a live interface
+    live: live::Live,
 }
 
 impl Hub {
@@ -49,6 +54,7 @@ impl Hub {
             settings: Default::default(),
             updates: Default::default(),
             embeds: Default::default(),
+            live: live::Live::new(None, std::sync::Arc::new(|_| {})),
         }
     }
 
@@ -305,7 +311,7 @@ async fn tool_list(app: AppHandle) -> Vec<ToolView> {
         let manifest = inst.manifest(&hub.tools_dir);
         out.push(ToolView {
             running: hub.runtime.is_running(inst.id()).await,
-            app_running: tools::app_running(&hub.tools_dir, &inst),
+            app_running: app_is_running(&hub, &inst).await,
             level: manifest.level(),
             can_launch: manifest.run.is_some()
                 || inst.detected_run.is_some()
@@ -324,34 +330,66 @@ async fn tool_list(app: AppHandle) -> Vec<ToolView> {
     out
 }
 
+/// Whether the application of a tool that tuxhub only starts and stops, or
+/// one with a live interface, is running, also when it was started outside
+/// tuxhub.
+async fn app_is_running(hub: &Hub, inst: &tools::Installed) -> bool {
+    tools::app_running(&hub.tools_dir, inst)
+        || (inst.manifest(&hub.tools_dir).live == Some(true) && hub.live.running(inst.id()).await)
+}
+
+/// Quits the application: a live application with `quit` first, and with
+/// SIGTERM when it is still running after `wait`.
+async fn quit_app(
+    hub: &Hub,
+    inst: &tools::Installed,
+    wait: std::time::Duration,
+) -> Result<(), String> {
+    let id = inst.id();
+    let program = tools::app_program(&hub.tools_dir, inst);
+    if inst.manifest(&hub.tools_dir).live == Some(true)
+        && hub.live.running(id).await
+        && !hub.live.quit(id, wait).await
+        && program.is_none()
+    {
+        return Err(format!("{} did not quit", inst.entry.name));
+    }
+    match program {
+        Some(p) => tools::quit(&p).await,
+        None => Ok(()),
+    }
+}
+
 #[tauri::command]
-fn tool_launch(app: AppHandle, id: String) -> Result<(), String> {
+async fn tool_launch(app: AppHandle, id: String) -> Result<(), String> {
     let hub = app.state::<Hub>();
     let inst = tools::load(&hub.tools_dir, &id)?;
     // An application that tuxhub only starts and stops runs once.
-    if tools::app_running(&hub.tools_dir, &inst) {
+    if app_is_running(&hub, &inst).await {
         return Ok(());
     }
     tools::launch(&hub.tools_dir, &inst)
 }
 
 #[tauri::command]
-fn tool_app_running(app: AppHandle, id: String) -> Result<bool, String> {
+async fn tool_app_running(app: AppHandle, id: String) -> Result<bool, String> {
     let hub = app.state::<Hub>();
-    Ok(tools::app_running(
-        &hub.tools_dir,
-        &tools::load(&hub.tools_dir, &id)?,
-    ))
+    let inst = tools::load(&hub.tools_dir, &id)?;
+    Ok(app_is_running(&hub, &inst).await)
 }
 
-/// Quits the application of a tool that tuxhub only starts and stops.
+/// Quits the application of a tool that tuxhub only starts and stops, or one
+/// with a live interface.
 #[tauri::command]
 async fn tool_quit(app: AppHandle, id: String) -> Result<(), String> {
     let hub = app.state::<Hub>();
     let inst = tools::load(&hub.tools_dir, &id)?;
-    let program = tools::app_program(&hub.tools_dir, &inst)
-        .ok_or_else(|| format!("{id} is not started and stopped by tuxhub"))?;
-    tools::quit(&program).await
+    if inst.manifest(&hub.tools_dir).live != Some(true)
+        && tools::app_program(&hub.tools_dir, &inst).is_none()
+    {
+        return Err(format!("{id} is not started and stopped by tuxhub"));
+    }
+    quit_app(&hub, &inst, QUIT_WAIT).await
 }
 
 #[tauri::command]
@@ -360,9 +398,7 @@ async fn tool_uninstall(app: AppHandle, id: String) -> Result<(), String> {
     let inst = tools::load(&hub.tools_dir, &id)?;
     hub.runtime.stop(&id).await;
     embed::stop(&app, &id).await;
-    if let Some(program) = tools::app_program(&hub.tools_dir, &inst) {
-        tools::quit(&program).await?;
-    }
+    quit_app(&hub, &inst, QUIT_WAIT).await?;
     tools::uninstall(&hub.tools_dir, &inst).await?;
     let _ = std::fs::remove_file(hub.settings_path(&id));
     let _ = std::fs::remove_file(hub.dyn_shortcuts_path(&id));
@@ -440,6 +476,72 @@ async fn tool_call(
 #[tauri::command]
 async fn tool_stop(app: AppHandle, id: String) {
     app.state::<Hub>().runtime.stop(&id).await;
+}
+
+// ---------------------------------------------------------- Live interface
+
+/// The live interface is only used for installed tools with `live = true`.
+fn live_tool(hub: &Hub, id: &str) -> Result<(), live::LiveError> {
+    match hub.load(id) {
+        Ok((_, m)) if m.live == Some(true) => Ok(()),
+        _ => Err(live::LiveError::new(
+            "not-live",
+            format!("{id} has no live interface"),
+        )),
+    }
+}
+
+/// Languages the interface asks the application for.
+fn live_locale(locale: &str) -> &'static str {
+    if locale == "de" { "de" } else { "en" }
+}
+
+#[tauri::command]
+async fn live_status(
+    app: AppHandle,
+    id: String,
+    locale: String,
+) -> Result<live::Status, live::LiveError> {
+    let hub = app.state::<Hub>();
+    live_tool(&hub, &id)?;
+    Ok(hub.live.status(&id, live_locale(&locale)).await)
+}
+
+#[tauri::command]
+async fn live_schema(
+    app: AppHandle,
+    id: String,
+    locale: String,
+) -> Result<live::Schema, live::LiveError> {
+    let hub = app.state::<Hub>();
+    live_tool(&hub, &id)?;
+    hub.live.schema(&id, live_locale(&locale)).await
+}
+
+#[tauri::command]
+async fn live_get(app: AppHandle, id: String) -> Result<Map<String, Value>, live::LiveError> {
+    let hub = app.state::<Hub>();
+    live_tool(&hub, &id)?;
+    hub.live.values(&id).await
+}
+
+#[tauri::command]
+async fn live_set(
+    app: AppHandle,
+    id: String,
+    key: String,
+    value: Value,
+) -> Result<Value, live::LiveError> {
+    let hub = app.state::<Hub>();
+    live_tool(&hub, &id)?;
+    hub.live.set(&id, &key, &value).await
+}
+
+#[tauri::command]
+async fn live_action(app: AppHandle, id: String, action: String) -> Result<Value, live::LiveError> {
+    let hub = app.state::<Hub>();
+    live_tool(&hub, &id)?;
+    hub.live.action(&id, &action).await
 }
 
 // ------------------------------------------------------- Hub & Updates
@@ -642,6 +744,16 @@ pub fn run() {
             {
                 eprintln!("autostart: {e}");
             }
+            // Notifications of live applications go to every window.
+            let handle = app.handle().clone();
+            let live = live::Live::new(
+                std::env::var_os("XDG_RUNTIME_DIR")
+                    .map(PathBuf::from)
+                    .filter(|p| p.is_absolute()),
+                std::sync::Arc::new(move |event| {
+                    let _ = handle.emit("live-event", event);
+                }),
+            );
             app.manage(Hub {
                 tools_dir,
                 settings_dir,
@@ -651,6 +763,7 @@ pub fn run() {
                 settings: std::sync::Mutex::new(settings),
                 updates: Default::default(),
                 embeds: Default::default(),
+                live,
             });
 
             if let Err(e) = system::setup_tray(app.handle()) {
@@ -713,6 +826,11 @@ pub fn run() {
             embed_start,
             embed_status,
             embed_stop,
+            live_status,
+            live_schema,
+            live_get,
+            live_set,
+            live_action,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -767,5 +885,110 @@ mod tests {
             "took {:?}",
             started.elapsed()
         );
+    }
+
+    /// A tool folder with a copy of `sleep` as its program, announced with
+    /// `manifest`, and a hub whose live interface looks in `<base>/run`.
+    fn hub_with_tool(name: &str, manifest: Value) -> (Hub, PathBuf, PathBuf) {
+        let base = std::env::temp_dir().join(format!("tuxhub-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let tool = base.join("tool");
+        std::fs::create_dir_all(&tool).unwrap();
+        std::fs::create_dir_all(base.join("tools/livedemo")).unwrap();
+        std::fs::create_dir_all(base.join("run/tuxhub")).unwrap();
+        std::fs::copy("/usr/bin/sleep", tool.join("app")).unwrap();
+        let entry = json!({ "entry": {
+            "id": "livedemo",
+            "name": "Live Demo",
+            "source": { "type": "local", "path": tool },
+            "manifest": manifest
+        }});
+        std::fs::write(base.join("tools/livedemo/tool.json"), entry.to_string()).unwrap();
+        let mut hub = Hub::for_test(base.join("tools"), base.join("settings"));
+        hub.live = live::Live::new(Some(base.join("run")), std::sync::Arc::new(|_| {}));
+        (hub, base, tool)
+    }
+
+    async fn exits_soon(child: &mut std::process::Child) -> bool {
+        for _ in 0..200 {
+            if child.try_wait().unwrap().is_some() {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let _ = child.kill();
+        false
+    }
+
+    /// 7.15: a live application that answers `quit` but keeps running is
+    /// ended as before, with SIGTERM.
+    #[tokio::test]
+    async fn quit_falls_back_to_ending_the_process() {
+        use std::io::{BufRead, Write};
+        let (hub, base, tool) = hub_with_tool(
+            "quit",
+            json!({ "embed": false, "live": true, "run": { "command": "app" } }),
+        );
+        let listener =
+            std::os::unix::net::UnixListener::bind(base.join("run/tuxhub/livedemo.sock")).unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                std::thread::spawn(move || {
+                    let mut out = stream.try_clone().unwrap();
+                    for line in std::io::BufReader::new(stream)
+                        .lines()
+                        .map_while(Result::ok)
+                    {
+                        let msg: Value = serde_json::from_str(&line).unwrap();
+                        let result = match msg["method"].as_str() {
+                            Some("hello") => json!({ "protocol": 1 }),
+                            _ => json!(true),
+                        };
+                        let _ = writeln!(out, "{}", json!({ "id": msg["id"], "result": result }));
+                    }
+                });
+            }
+        });
+        let mut child = tools::spawn_copied(&tool.join("app"), &["30"]).await;
+        let inst = tools::load(&hub.tools_dir, "livedemo").unwrap();
+        assert!(app_is_running(&hub, &inst).await);
+
+        let started = std::time::Instant::now();
+        quit_app(&hub, &inst, std::time::Duration::from_millis(300))
+            .await
+            .unwrap();
+        assert!(exits_soon(&mut child).await, "the program still runs");
+        assert!(started.elapsed() >= std::time::Duration::from_millis(300));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 7.1 and 7.15: without a socket, the program is ended directly.
+    #[tokio::test]
+    async fn quit_without_socket_ends_the_process() {
+        let (hub, base, tool) = hub_with_tool(
+            "quit-nosock",
+            json!({ "embed": false, "live": true, "run": { "command": "app" } }),
+        );
+        let mut child = tools::spawn_copied(&tool.join("app"), &["30"]).await;
+        let inst = tools::load(&hub.tools_dir, "livedemo").unwrap();
+        assert!(app_is_running(&hub, &inst).await);
+        quit_app(&hub, &inst, std::time::Duration::from_secs(3))
+            .await
+            .unwrap();
+        assert!(exits_soon(&mut child).await, "the program still runs");
+        assert!(!app_is_running(&hub, &inst).await);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The live commands only talk to tools that declare `live = true`.
+    #[tokio::test]
+    async fn live_commands_need_a_live_tool() {
+        let (hub, base, _) = hub_with_tool("notlive", json!({ "embed": false }));
+        assert_eq!(live_tool(&hub, "livedemo").unwrap_err().code, "not-live");
+        assert_eq!(live_tool(&hub, "missing").unwrap_err().code, "not-live");
+        let _ = std::fs::remove_dir_all(&base);
+        let (hub, base, _) = hub_with_tool("islive", json!({ "live": true }));
+        assert!(live_tool(&hub, "livedemo").is_ok());
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

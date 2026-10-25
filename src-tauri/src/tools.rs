@@ -1126,6 +1126,22 @@ pub async fn check_update(inst: &Installed) -> Result<Option<String>, String> {
     Ok(newer.then_some(rel.tag_name))
 }
 
+/// Starts a program the test just copied. Another test may fork while the
+/// copy is still open for writing; exec then fails with "Text file busy" for
+/// a moment.
+#[cfg(test)]
+pub(crate) async fn spawn_copied(program: &Path, args: &[&str]) -> std::process::Child {
+    for _ in 0..100 {
+        match std::process::Command::new(program).args(args).spawn() {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            res => return res.unwrap(),
+        }
+    }
+    panic!("{} stays busy", program.display());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1367,7 +1383,7 @@ mod tests {
     async fn finds_and_quits_running_applications() {
         use std::os::unix::process::ExitStatusExt;
         let app = fake_app("app");
-        let mut child = std::process::Command::new(&app).arg("30").spawn().unwrap();
+        let mut child = spawn_copied(&app, &["30"]).await;
         let pid = child.id();
         wait_for(&app, pid).await;
 
