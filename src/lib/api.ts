@@ -104,11 +104,30 @@ export type LiveStatus = {
   error?: LiveError;
 };
 
+/** Condition of `visible_if`: the value of field `key`. */
+export type LiveCondition =
+  | { key: string; equals: string | number | boolean }
+  | { key: string; in: (string | number | boolean)[] };
+
+export type LiveOption = { value: string; label: string; description?: string; colors?: string[] };
+
+export type LiveSection = { id: string; label: string; description?: string; icon?: string; fields: LiveField[] };
+
 /** A setting as the running application describes it, checked by tuxhub. */
-export type LiveField = { key: string; label: string; help?: string; default?: unknown; disabled: boolean } & (
+export type LiveField = {
+  key: string;
+  label: string;
+  help?: string;
+  default?: unknown;
+  disabled: boolean;
+  /** Shown in the folded "Advanced" part of its section (protocol 1.1). */
+  advanced?: boolean;
+  /** Shown only while another field has one of these values (protocol 1.1). */
+  visible_if?: LiveCondition;
+} & (
   | { type: "toggle" }
   | { type: "number"; min?: number; max?: number; step?: number; unit?: string; slider: boolean }
-  | { type: "select"; options: { value: string; label: string }[] }
+  | { type: "select"; options: LiveOption[] }
   | { type: "text"; placeholder?: string; max_length?: number; multiline: boolean }
   | { type: "color"; alpha: boolean }
   /** A type this tuxhub does not know. */
@@ -116,7 +135,7 @@ export type LiveField = { key: string; label: string; help?: string; default?: u
 );
 
 export type LiveSchema = {
-  sections: { id: string; label: string; fields: LiveField[] }[];
+  sections: LiveSection[];
   actions: { id: string; label: string; danger: boolean; confirm?: string }[];
   /** Fields and actions that were left out, and why. */
   invalid: { key: string; reason: string }[];
