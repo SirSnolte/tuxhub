@@ -4,7 +4,7 @@ All notable changes to tuxhub are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.4.0] - 2026-10-25
 
 ### Added
 
@@ -71,6 +71,7 @@ First public release.
 - System tray, autostart and single-instance behavior.
 - English and German user interface.
 
+[0.4.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.4.0
 [0.3.1]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.3.1
 [0.3.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.3.0
 [0.2.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.2.0
