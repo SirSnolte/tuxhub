@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Reference application for the tuxhub live interface (protocol 1).
+"""Reference application for the tuxhub live interface (protocol 1, with the
+optional additions of 1.1: tabs with icons, conditions, "Advanced", defaults
+for resetting, options with colors and descriptions).
 
 Uses only the Python standard library. The application shows a text in a
 small window and offers its settings on the Unix socket
@@ -27,14 +29,28 @@ import threading
 
 APP_ID = "live-demo"
 NAME = "Live Demo"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 PROTOCOL = 1
 MAX_LINE = 1 << 20
 
 TEXTS = {
     "en": {
         "look": "Look",
+        "look_description": "How the text looks in the window.",
         "text_section": "Text",
+        "developer": "Developer",
+        "theme": "Theme",
+        "theme_light": "Light",
+        "theme_light_description": "Blue text on white",
+        "theme_dark": "Dark",
+        "theme_dark_description": "White text on dark purple",
+        "theme_sunset": "Sunset",
+        "theme_sunset_description": "Red text on orange",
+        "theme_custom": "Own colors",
+        "theme_custom_description": "Choose text and background yourself",
+        "shadow_offset": "Shadow offset",
+        "log": "Print changes in the terminal",
+        "log_help": "For trying out the interface.",
         "size": "Size",
         "color": "Text color",
         "background": "Background",
@@ -42,6 +58,7 @@ TEXTS = {
         "font_sans": "Sans",
         "font_serif": "Serif",
         "font_mono": "Monospace",
+        "font_mono_description": "Every character has the same width",
         "padding": "Padding",
         "padding_help": "Space around the text.",
         "shadow": "Shadow",
@@ -57,7 +74,21 @@ TEXTS = {
     },
     "de": {
         "look": "Aussehen",
+        "look_description": "So sieht der Text im Fenster aus.",
         "text_section": "Text",
+        "developer": "Entwickler",
+        "theme": "Design",
+        "theme_light": "Hell",
+        "theme_light_description": "Blauer Text auf Weiß",
+        "theme_dark": "Dunkel",
+        "theme_dark_description": "Weißer Text auf Dunkellila",
+        "theme_sunset": "Sonnenuntergang",
+        "theme_sunset_description": "Roter Text auf Orange",
+        "theme_custom": "Eigene Farben",
+        "theme_custom_description": "Text und Hintergrund selbst wählen",
+        "shadow_offset": "Versatz des Schattens",
+        "log": "Änderungen im Terminal ausgeben",
+        "log_help": "Zum Ausprobieren der Schnittstelle.",
         "size": "Größe",
         "color": "Textfarbe",
         "background": "Hintergrund",
@@ -65,6 +96,7 @@ TEXTS = {
         "font_sans": "Serifenlos",
         "font_serif": "Serif",
         "font_mono": "Festbreite",
+        "font_mono_description": "Alle Zeichen sind gleich breit",
         "padding": "Abstand",
         "padding_help": "Platz um den Text.",
         "shadow": "Schatten",
@@ -80,15 +112,24 @@ TEXTS = {
     },
 }
 
+# A theme sets both colors; changing one of them makes it "custom".
+THEMES = {
+    "light": {"color": "#3584e4ff", "background": "#ffffff"},
+    "dark": {"color": "#ffffffff", "background": "#241f31"},
+    "sunset": {"color": "#c01c28ff", "background": "#ffbe6f"},
+}
+
 DEFAULTS = {
+    "theme": "light",
     "size": 48,
-    "color": "#3584e4ff",
-    "background": "#ffffff",
+    **THEMES["light"],
     "font": "sans",
     "padding": 24,
     "shadow": False,
+    "shadow_offset": 3,
     "text": "tuxhub",
     "note": "",
+    "log": True,
 }
 
 COLOR = re.compile(r"^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$")
@@ -101,34 +142,63 @@ def texts(locale):
 
 def schema(locale):
     tx = texts(locale)
+    d = DEFAULTS
+
+    def theme(value):
+        option = {"value": value, "label": tx[f"theme_{value}"],
+                  "description": tx[f"theme_{value}_description"]}
+        if value in THEMES:
+            option["colors"] = [THEMES[value]["background"], THEMES[value]["color"]]
+        return option
+
     return {
         "sections": [
             {
                 "id": "look",
                 "label": tx["look"],
+                "icon": "palette",
+                "description": tx["look_description"],
                 "fields": [
+                    {"key": "theme", "type": "select", "label": tx["theme"], "default": d["theme"],
+                     "options": [theme(v) for v in ("light", "dark", "sunset", "custom")]},
                     {"key": "size", "type": "number", "label": tx["size"], "min": 12, "max": 160,
-                     "step": 1, "unit": "px", "slider": True, "default": DEFAULTS["size"]},
-                    {"key": "color", "type": "color", "label": tx["color"], "alpha": True},
-                    {"key": "background", "type": "color", "label": tx["background"]},
-                    {"key": "font", "type": "select", "label": tx["font"], "options": [
+                     "step": 1, "unit": "px", "slider": True, "default": d["size"]},
+                    {"key": "color", "type": "color", "label": tx["color"], "alpha": True,
+                     "default": d["color"], "visible_if": {"key": "theme", "in": ["custom"]}},
+                    {"key": "background", "type": "color", "label": tx["background"],
+                     "default": d["background"], "visible_if": {"key": "theme", "in": ["custom"]}},
+                    {"key": "font", "type": "select", "label": tx["font"], "default": d["font"], "options": [
                         {"value": "sans", "label": tx["font_sans"]},
                         {"value": "serif", "label": tx["font_serif"]},
-                        {"value": "mono", "label": tx["font_mono"]},
+                        {"value": "mono", "label": tx["font_mono"], "description": tx["font_mono_description"]},
                     ]},
+                    {"key": "shadow", "type": "toggle", "label": tx["shadow"], "default": d["shadow"]},
+                    {"key": "shadow_offset", "type": "number", "label": tx["shadow_offset"], "min": 1,
+                     "max": 12, "step": 1, "unit": "px", "slider": True, "default": d["shadow_offset"],
+                     "visible_if": {"key": "shadow", "equals": True}},
                     {"key": "padding", "type": "number", "label": tx["padding"], "help": tx["padding_help"],
-                     "min": 0, "max": 80, "step": 4, "unit": "px"},
-                    {"key": "shadow", "type": "toggle", "label": tx["shadow"]},
+                     "min": 0, "max": 80, "step": 4, "unit": "px", "default": d["padding"], "advanced": True},
                 ],
             },
             {
                 "id": "text",
                 "label": tx["text_section"],
+                "icon": "type",
                 "fields": [
                     {"key": "text", "type": "text", "label": tx["text"], "help": tx["text_help"],
-                     "max_length": 40},
+                     "max_length": 40, "default": d["text"]},
                     {"key": "note", "type": "text", "label": tx["note"], "help": tx["note_help"],
-                     "multiline": True, "max_length": 200},
+                     "multiline": True, "max_length": 200, "default": d["note"]},
+                ],
+            },
+            {
+                # Only advanced fields: tuxhub shows "Advanced" unfolded.
+                "id": "developer",
+                "label": tx["developer"],
+                "icon": "wrench",
+                "fields": [
+                    {"key": "log", "type": "toggle", "label": tx["log"], "help": tx["log_help"],
+                     "default": d["log"], "advanced": True},
                 ],
             },
         ],
@@ -137,6 +207,18 @@ def schema(locale):
             {"id": "reset", "label": tx["reset"], "danger": True, "confirm": tx["reset_confirm"]},
         ],
     }
+
+
+def with_theme(key, value, values):
+    """A change and what follows from it: a theme sets its colors, a single
+    color makes the theme "custom" unless it matches a theme."""
+    changes = {key: value}
+    if key == "theme" and value in THEMES:
+        changes.update(THEMES[value])
+    elif key in ("color", "background"):
+        colors = {"color": values["color"], "background": values["background"], key: value}
+        changes["theme"] = next((t for t, c in THEMES.items() if c == colors), "custom")
+    return changes
 
 
 class Refused(Exception):
@@ -197,7 +279,8 @@ class App:
             others = [c for c in self.clients if c is not origin]
         if not changes:
             return
-        print(f"changed: {json.dumps(changes, ensure_ascii=False)}", flush=True)
+        if self.get()["log"] or "log" in changes:
+            print(f"changed: {json.dumps(changes, ensure_ascii=False)}", flush=True)
         for c in others:
             c.send({"method": "changed", "params": {"values": changes}})
         if origin is not None:
@@ -272,7 +355,12 @@ class Client:
         if method == "set":
             key = params.get("key")
             value = check(key, params.get("value"), self.locale)
-            self.app.update({key: value}, origin=self)
+            changes = with_theme(key, value, self.app.get())
+            self.app.update(changes, origin=self)
+            # The client that set the value learns what followed from it.
+            follows = {k: v for k, v in changes.items() if k != key}
+            if follows:
+                self.send({"method": "changed", "params": {"values": follows}})
             return {"value": value}
         if method == "action":
             if params.get("id") == "flash":
@@ -357,7 +445,8 @@ def run_window(app):
         font = (fonts[v["font"]], -int(v["size"]))
         x, y = w // 2, h // 2
         if v["shadow"]:
-            canvas.create_text(x + 3, y + 3, text=v["text"], font=font, fill="#888888")
+            o = v["shadow_offset"]
+            canvas.create_text(x + o, y + o, text=v["text"], font=font, fill="#888888")
         canvas.create_text(x, y, text=v["text"], font=font, fill=v["color"][:7])
         if v["note"]:
             canvas.create_text(x, y + int(v["size"]) // 2 + 12 + v["padding"], text=v["note"],

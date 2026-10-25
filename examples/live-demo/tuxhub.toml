@@ -8,7 +8,7 @@
 id = "live-demo"
 name = "Live Demo"
 description = "Shows how a running application offers its settings to tuxhub."
-version = "0.1.0"
+version = "0.2.0"
 live = true
 embed = false
 
