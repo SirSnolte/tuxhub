@@ -3,12 +3,9 @@
 // when a field offers a reset. Tested in tests/live-logic.test.mjs.
 import type { LiveField, LiveSchema, LiveSection } from "./api";
 
-function fieldOf(schema: LiveSchema, key: string): LiveField | undefined {
-  for (const s of schema.sections) {
-    const f = s.fields.find((f) => f.key === key);
-    if (f) return f;
-  }
-  return undefined;
+/** The fields of a schema by key, built once per schema for the conditions. */
+export function fieldIndex(schema: LiveSchema): Map<string, LiveField> {
+  return new Map(schema.sections.flatMap((s) => s.fields.map((f) => [f.key, f] as const)));
 }
 
 /**
@@ -16,12 +13,17 @@ function fieldOf(schema: LiveSchema, key: string): LiveField | undefined {
  * schema does not have shows the field, so a mistake never hides a setting.
  * Before a value arrives, the other field's default counts.
  */
-export function isVisible(field: LiveField, values: Record<string, unknown>, schema: LiveSchema): boolean {
+export function isVisible(
+  field: LiveField,
+  values: Record<string, unknown>,
+  fields: Map<string, LiveField>,
+): boolean {
   const c = field.visible_if;
   if (!c) return true;
-  const other = fieldOf(schema, c.key);
+  const other = fields.get(c.key);
   if (!other || other.type === "unsupported") return true;
-  const value = c.key in values ? values[c.key] : other.default;
+  // Own keys only: a key such as "constructor" is a field, not a member.
+  const value = Object.hasOwn(values, c.key) ? values[c.key] : other.default;
   return "equals" in c ? value === c.equals : c.in.some((v) => v === value);
 }
 
@@ -29,9 +31,9 @@ export function isVisible(field: LiveField, values: Record<string, unknown>, sch
 export function groupFields(
   section: LiveSection,
   values: Record<string, unknown>,
-  schema: LiveSchema,
+  fields: Map<string, LiveField>,
 ): { main: LiveField[]; advanced: LiveField[]; open: boolean } {
-  const shown = section.fields.filter((f) => isVisible(f, values, schema));
+  const shown = section.fields.filter((f) => isVisible(f, values, fields));
   const main = shown.filter((f) => !f.advanced);
   const advanced = shown.filter((f) => f.advanced);
   // A tab with only advanced fields would otherwise look empty.

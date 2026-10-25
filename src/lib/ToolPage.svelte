@@ -59,6 +59,8 @@
   /** Actions the running live application offers, shown in the tool menu. */
   let liveActions = $state<LiveSchema["actions"]>([]);
   let livePanel = $state<LivePanel>();
+  /** An action of the live application is running. */
+  let liveActing = $state(false);
   // Before rendering, so the page of another tool never starts with the
   // state of the previous one.
   $effect.pre(() => {
@@ -130,7 +132,7 @@
     const items: MenuItem[] = [];
     const appActions = liveApp && liveRunning ? liveActions : [];
     for (const a of appActions.filter((a) => !a.danger)) {
-      items.push({ value: `live:${a.id}`, label: a.label, icon: Zap });
+      items.push({ value: `live:${a.id}`, label: a.label, icon: Zap, disabled: liveActing });
     }
     if (liveApp && tool.entry.repo) {
       items.push({
@@ -157,6 +159,7 @@
           label: a.label,
           icon: TriangleAlert,
           danger: true,
+          disabled: liveActing,
           separated: i === 0 && items.length > 0,
         }),
       );
@@ -311,6 +314,7 @@
           {tool}
           bind:this={livePanel}
           bind:actions={liveActions}
+          bind:acting={liveActing}
           onclosed={() => (liveRunning = false)}
         />
       {/key}

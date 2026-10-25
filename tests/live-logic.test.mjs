@@ -2,7 +2,7 @@
 // "Advanced" and resetting single fields. Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { differsFromDefault, groupFields, iconFor, isVisible, pickTab, tabsOf } from "../src/lib/live-logic.ts";
+import { differsFromDefault, fieldIndex, groupFields, iconFor, isVisible, pickTab, tabsOf } from "../src/lib/live-logic.ts";
 
 const field = (key, extra = {}) => ({ key, label: key, disabled: false, type: "toggle", ...extra });
 const select = (key, extra = {}) => field(key, { type: "select", options: [{ value: "a", label: "A" }], ...extra });
@@ -14,42 +14,52 @@ const format = field("format", { type: "text", multiline: false, visible_if: { k
 const look = schema(section("main", [preset, format]));
 
 test("a field without condition is always shown", () => {
-  assert.equal(isVisible(preset, {}, look), true);
+  assert.equal(isVisible(preset, {}, fieldIndex(look)), true);
 });
 
 test("a condition is checked against the current value, or the default before there is one", () => {
-  assert.equal(isVisible(format, { preset: "custom" }, look), true);
-  assert.equal(isVisible(format, { preset: "time" }, look), false);
-  assert.equal(isVisible(format, {}, look), false, "default is time");
+  assert.equal(isVisible(format, { preset: "custom" }, fieldIndex(look)), true);
+  assert.equal(isVisible(format, { preset: "time" }, fieldIndex(look)), false);
+  assert.equal(isVisible(format, {}, fieldIndex(look)), false, "default is time");
   const many = field("x", { visible_if: { key: "preset", in: ["custom", "other"] } });
-  assert.equal(isVisible(many, { preset: "other" }, look), true);
-  assert.equal(isVisible(many, { preset: "time" }, look), false);
+  assert.equal(isVisible(many, { preset: "other" }, fieldIndex(look)), true);
+  assert.equal(isVisible(many, { preset: "time" }, fieldIndex(look)), false);
   // Types are compared strictly: 1 is not "1".
   const num = field("y", { visible_if: { key: "preset", equals: 1 } });
-  assert.equal(isVisible(num, { preset: "1" }, look), false);
+  assert.equal(isVisible(num, { preset: "1" }, fieldIndex(look)), false);
 });
 
 test("Randfall 1: a condition on an unknown key shows the field", () => {
   const orphan = field("z", { visible_if: { key: "gone", equals: true } });
-  assert.equal(isVisible(orphan, { gone: false }, look), true);
+  assert.equal(isVisible(orphan, { gone: false }, fieldIndex(look)), true);
   // An unsupported field is no value either.
   const s = schema(section("main", [field("odd", { type: "unsupported", declared: "date" }), orphan]));
   const onOdd = field("w", { visible_if: { key: "odd", equals: true } });
-  assert.equal(isVisible(onOdd, {}, s), true);
+  assert.equal(isVisible(onOdd, {}, fieldIndex(s)), true);
+});
+
+test("keys named like members of Object.prototype are plain keys", () => {
+  const ctor = select("constructor", { default: "a" });
+  const s = schema(section("main", [ctor]));
+  const dep = field("d", { visible_if: { key: "constructor", equals: "a" } });
+  assert.equal(isVisible(dep, {}, fieldIndex(s)), true, "default counts before a value arrives");
+  assert.equal(isVisible(dep, { constructor: "b" }, fieldIndex(s)), false);
+  const orphan = field("e", { visible_if: { key: "toString", equals: 1 } });
+  assert.equal(isVisible(orphan, {}, fieldIndex(s)), true, "not a field of the schema");
 });
 
 test("Randfall 3: fields appear and disappear as soon as a value changes", () => {
   const s = schema(section("main", [preset, format]));
-  assert.deepEqual(groupFields(s.sections[0], { preset: "time" }, s).main.map((f) => f.key), ["preset"]);
+  assert.deepEqual(groupFields(s.sections[0], { preset: "time" }, fieldIndex(s)).main.map((f) => f.key), ["preset"]);
   assert.deepEqual(
-    groupFields(s.sections[0], { preset: "custom" }, s).main.map((f) => f.key),
+    groupFields(s.sections[0], { preset: "custom" }, fieldIndex(s)).main.map((f) => f.key),
     ["preset", "format"],
   );
 });
 
 test("Randfall 4: hiding a field leaves its value alone", () => {
   const values = { preset: "time", format: "HH:mm" };
-  groupFields(look.sections[0], values, look);
+  groupFields(look.sections[0], values, fieldIndex(look));
   assert.deepEqual(values, { preset: "time", format: "HH:mm" });
 });
 
@@ -57,17 +67,17 @@ test("advanced fields go to the end, only visible ones count", () => {
   const gap = field("gap", { type: "number", slider: false, advanced: true });
   const hidden = field("sep", { advanced: true, visible_if: { key: "preset", equals: "custom" } });
   const s = schema(section("main", [gap, preset, hidden]));
-  const g = groupFields(s.sections[0], {}, s);
+  const g = groupFields(s.sections[0], {}, fieldIndex(s));
   assert.deepEqual(g.main.map((f) => f.key), ["preset"]);
   assert.deepEqual(g.advanced.map((f) => f.key), ["gap"]);
   assert.equal(g.open, false, "folded while normal fields are there");
-  const none = groupFields(section("x", [preset, hidden]), {}, s);
+  const none = groupFields(section("x", [preset, hidden]), {}, fieldIndex(s));
   assert.deepEqual(none.advanced, [], "no Advanced part without visible advanced fields");
 });
 
 test("Randfall 5: a tab with only advanced fields shows Advanced unfolded", () => {
   const s = schema(section("main", [field("a", { advanced: true }), field("b", { advanced: true })]));
-  const g = groupFields(s.sections[0], {}, s);
+  const g = groupFields(s.sections[0], {}, fieldIndex(s));
   assert.deepEqual(g.main, []);
   assert.equal(g.advanced.length, 2);
   assert.equal(g.open, true);

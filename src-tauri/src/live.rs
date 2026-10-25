@@ -227,12 +227,17 @@ pub fn parse_schema(v: &Value) -> Result<Schema, LiveError> {
                 });
                 break;
             }
-            match parse_field(fv, &mut out.invalid) {
+            // Left-out additions count only for a field that stays.
+            let mut dropped = Vec::new();
+            match parse_field(fv, &mut dropped) {
                 Ok(f) if !keys.insert(f.key.clone()) => out.invalid.push(Invalid {
                     key: f.key,
                     reason: "duplicate key".into(),
                 }),
-                Ok(f) => section.fields.push(f),
+                Ok(f) => {
+                    section.fields.push(f);
+                    out.invalid.append(&mut dropped);
+                }
                 Err(reason) => out.invalid.push(Invalid {
                     key: name_of(fv, "key", j),
                     reason,
@@ -1414,6 +1419,22 @@ mod tests {
             ]
         );
         assert!(s.invalid.iter().all(|i| !i.reason.is_empty()));
+    }
+
+    /// A field dropped as a duplicate lists only that, not its additions.
+    #[test]
+    fn a_dropped_duplicate_lists_no_additions() {
+        let s = schema(json!([
+            { "key": "size", "type": "toggle", "label": "First" },
+            { "key": "size", "type": "toggle", "label": "Second", "advanced": "yes" }
+        ]));
+        assert_eq!(
+            s.invalid,
+            [Invalid {
+                key: "size".into(),
+                reason: "duplicate key".into()
+            }]
+        );
     }
 
     /// 7.9: values that do not fit the field are refused with a reason.

@@ -15,7 +15,7 @@
   import { onLiveEvent, toast } from "./state.svelte";
   import { checkedOf, valueOf } from "./wa";
   import { afterStatus, delayFor, keepKnown, mergeChanged, Sender } from "./live";
-  import { differsFromDefault, groupFields, iconFor, pickTab, tabsOf } from "./live-logic";
+  import { differsFromDefault, fieldIndex, groupFields, iconFor, pickTab, tabsOf } from "./live-logic";
   import { SECTION_ICONS } from "./live-icons";
   import { RotateCcw } from "@lucide/svelte";
 
@@ -29,7 +29,8 @@
     tool,
     onclosed,
     actions = $bindable([]),
-  }: { tool: Tool; onclosed: () => void; actions?: Action[] } = $props();
+    acting = $bindable(false),
+  }: { tool: Tool; onclosed: () => void; actions?: Action[]; acting?: boolean } = $props();
 
   const id = $derived(tool.entry.id);
   const name = $derived(tool.entry.name);
@@ -50,6 +51,7 @@
   let running = $state<string | null>(null);
 
   const tabs = $derived(schema ? tabsOf(schema) : []);
+  const fields = $derived(schema ? fieldIndex(schema) : new Map<string, LiveField>());
   /** Tab shown; remembered per tool. */
   let activeTab = $state<string | null>(null);
   const tabKey = $derived(`live-tab.${id}`);
@@ -75,6 +77,9 @@
 
   $effect(() => {
     actions = schema?.actions ?? [];
+  });
+  $effect(() => {
+    acting = running !== null;
   });
 
   const sender = new Sender((key, value) => send(key, value));
@@ -231,6 +236,7 @@
     running = a.id;
     try {
       await api.liveAction(id, a.id);
+      toast(t("live.actionDone", { label: a.label }), "info");
     } catch (e) {
       if (isLiveError(e) && e.code === "closed") return onclosed();
       toast(errorText(e));
@@ -265,7 +271,7 @@
 {/snippet}
 
 {#snippet sectionBody(section: LiveSection, heading: boolean)}
-  {@const group = schema ? groupFields(section, values, schema) : { main: [], advanced: [], open: false }}
+  {@const group = groupFields(section, values, fields)}
   <div class="section">
     {#if section.description}<p class="muted description">{section.description}</p>{/if}
     <wa-card>
