@@ -215,7 +215,7 @@
     <wa-callout variant="warning">
       <p>{t("live.invalid", { count: schema.invalid.length, name })}</p>
       <wa-details summary={t("live.invalidDetails")} appearance="plain">
-        <ul class="invalid">
+        <ul class="invalid-list">
           {#each schema.invalid as entry, i (i)}
             <li><code>{entry.key}</code>: {entry.reason}</li>
           {/each}
@@ -233,7 +233,7 @@
       <h3>{section.label}</h3>
       <div class="fields">
         {#each section.fields as f (f.key)}
-          <div class="field" class:invalid={!!errors[f.key]}>
+          <div class="field">
             {#if f.type === "toggle"}
               <wa-switch
                 class="setting"
@@ -404,7 +404,7 @@
     gap: var(--wa-space-s);
     flex-wrap: wrap;
   }
-  .invalid {
+  .invalid-list {
     margin: 0;
     padding-inline-start: var(--wa-space-l);
   }
@@ -434,22 +434,23 @@
   wa-color-picker::part(form-control) {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: 1fr auto auto 1fr;
     column-gap: var(--wa-space-l);
     align-items: center;
   }
   wa-color-picker::part(form-control-label) {
     grid-column: 1;
-    grid-row: 1;
+    grid-row: 2;
     margin: 0;
     font-weight: var(--wa-font-weight-body);
   }
   wa-color-picker::part(hint) {
     grid-column: 1;
-    grid-row: 2;
+    grid-row: 3;
   }
   wa-color-picker::part(form-control-input) {
     grid-column: 2;
-    grid-row: 1 / span 2;
+    grid-row: 1 / -1;
   }
   .unsupported {
     display: grid;
