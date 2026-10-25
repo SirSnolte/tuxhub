@@ -1,200 +1,186 @@
-# SPEC: Live-Schnittstelle für Apps (Protokoll 1)
+# SPEC: Einstellungsseiten modern und logisch (Live-Schnittstelle 1.1, Fliq 1.5)
 
-Stand: 25.10.2026 · Ziel-Version: tuxhub 0.5.0 · Erster Anwender: Fliq
+Stand: 25.10.2026 · Ziel: tuxhub 0.6.0, Fliq 1.5.0 · Vorgänger: Protokoll 1
+(in tuxhub 0.5.0 umgesetzt, Spec in der Git-Historie)
 
 ## 1. Ziel
 
-Eine App, die normal auf dem PC installiert ist und läuft, kann ihre
-Einstellungen und Aktionen über eine einheitliche Schnittstelle an tuxhub
-melden. tuxhub zeigt daraus eine Einstellungsseite mit eigenen Bauteilen
-(Web Awesome + tuxhub-Theme), die aussieht, als gehöre sie zu tuxhub.
-Änderungen wirken sofort in der laufenden App. Weil die App ihre Felder und
-Texte zur Laufzeit selbst beschreibt, passt die Seite nach jedem App-Update.
-
-Die Schnittstelle ist für alle Apps gedacht, nicht nur für Fliq. Sie ist
-das, womit sich der Workshop später füllen soll: Ein Publisher baut sie ein,
-wir ergänzen den Workshop-Eintrag (Pull Requests in beide Richtungen).
+Die Einstellungen einer Live-App (zuerst Fliq) wirken in tuxhub wie eine
+durchdachte, native Einstellungsseite: kompakte Kopfzeile, Tabs je Bereich,
+nur relevante Felder sichtbar, seltene Optionen eingeklappt, Zurücksetzen je
+Feld, Vorlagen statt Platzhalter-Code, fertige Designs. Alles bleibt
+update-sicher, weil die App ihre Struktur weiter selbst beschreibt.
 
 ## 2. Nicht-Ziele
 
-- Keine Einstellungen, solange die App nicht läuft (dann: Hinweis + Starten).
-- Kein eigenes HTML der App in tuxhub (dafür gibt es weiter `ui`, Stufe 2).
-- Keine Übersetzung durch tuxhub: Beschriftungen kommen von der App.
-- Kein D-Bus, kein Netzwerk-Socket, kein Zugriff anderer Benutzer.
-- Kein SDK/Crate für App-Entwickler in diesem Schritt (Beispiel in der Doku
-  genügt; ein Rust-/Python-Helfer kann später folgen).
-- Keine Änderung an den bestehenden Stufen 0–2 und ihrem stdin-RPC.
+- Kein Baukasten für Formate (nur Vorlagen + „Eigenes Format“).
+- Keine Live-Vorschau in tuxhub (die Uhr auf dem Desktop ändert sich sofort).
+- Kein neues Protokoll 2: alle Erweiterungen sind optionale Angaben in
+  Protokoll 1. Ältere tuxhub-Versionen ignorieren sie und zeigen alles wie
+  bisher; ältere Apps ohne die Angaben sehen in tuxhub 0.6 aus wie in 0.5
+  (plus Tabs und Kopfzeile).
+- Fliqs eigenes Styling-Fenster wird nicht umgebaut.
 
-## 3. Begriffe und Stufe
+## 3. Protokoll-Erweiterungen (1.1, alle optional)
 
-Neue Stufe **3 – Live-Schnittstelle**: Die App läuft eigenständig und
-bietet einen Socket an. Sie kann mit `embed = false` kombiniert werden
-(Fliq) oder mit `run` (eigenes Fenster).
-
-## 4. Protokoll 1
-
-### 4.1 Verbindung
-
-- Socket: `$XDG_RUNTIME_DIR/tuxhub/<id>.sock`, `<id>` = Workshop-ID.
-- Die App legt den Ordner mit `0700` an, den Socket mit `0600`. Ein
-  vorhandener Socket, an dem niemand lauscht, wird beim Start ersetzt.
-- Mehrere Verbindungen gleichzeitig sind erlaubt (tuxhub-Fenster, Tests).
-- Kodierung: UTF-8, ein JSON-Objekt pro Zeile (`\n`), höchstens 1 MiB pro Zeile.
-- Gleiche Nachrichtenform wie das bestehende tuxhub-RPC:
-  - Anfrage: `{"id": 1, "method": "get", "params": {}}`
-  - Antwort: `{"id": 1, "result": …}` oder
-    `{"id": 1, "error": {"message": "…", "field": "key"}}` (`field` optional)
-  - Benachrichtigung (ohne `id`): `{"method": "changed", "params": {…}}`
-- Antwortzeit: 5 s je Anfrage, sonst gilt die Anfrage als gescheitert.
-
-### 4.2 Methoden (tuxhub → App)
-
-| Methode | params | result |
+| Wo | Angabe | Bedeutung in tuxhub |
 |---|---|---|
-| `hello` | `{"protocol": 1, "client": "tuxhub", "version": "0.5.0", "locale": "de"}` | `{"protocol": 1, "name": "Fliq", "version": "1.4.0"}` |
-| `schema` | `{"locale": "de"}` | Beschreibung, siehe 4.4 |
-| `get` | `{}` | `{"values": {"key": value, …}}` |
-| `set` | `{"key": "textColor", "value": "#fafafaff"}` | `{"value": <übernommener Wert>}` |
-| `action` | `{"id": "open-styling"}` | beliebig, meist `true` |
-| `quit` | `{}` | `true`, danach beendet sich die App |
+| `hello` params | `"features": ["tabs", "visible_if", "advanced", "reset", "option_colors", "confirm"]` | Was dieses tuxhub darstellt; Apps dürfen das auswerten, müssen aber nicht |
+| Abschnitt | `description` (≤ 300) | Kurzer Text oben im Tab |
+| Abschnitt | `icon` (Name aus der tuxhub-Iconliste, z. B. `palette`, `clock`, `cloud-sun`, `settings`) | Icon im Tab; unbekannter Name → kein Icon |
+| Feld | `advanced: true` | Feld steht im einklappbaren Bereich „Erweitert“ am Ende seines Tabs |
+| Feld | `visible_if: {"key": "<k>", "equals": <v>}` oder `{"key": "<k>", "in": [<v>, …]}` | Feld nur zeigen, wenn die Bedingung auf die aktuellen Werte zutrifft; wird bei jeder Wertänderung sofort neu ausgewertet. Unbekannter `key` → Feld wird gezeigt |
+| Feld | `default` (gab es schon) | Weicht der Wert ab, zeigt tuxhub am Feld einen Knopf „Zurücksetzen“ (↺), der `set(key, default)` sendet |
+| Auswahl-Option | `description` (≤ 200) | Zweite Zeile in der Auswahlliste |
+| Auswahl-Option | `colors: ["#rrggbb[aa]", …]` (≤ 6) | Farbfelder neben der Option (für Design-Vorlagen) |
+| Aktion | `confirm` (≤ 200, gab es im Beispiel schon) | Bestätigungsdialog mit diesem Text vor dem Ausführen |
+| Aktion | `danger: true` | rote Darstellung, nur im Menü |
 
-`hello` kommt immer zuerst. Antwortet die App mit einer anderen
-`protocol`-Zahl, zeigt tuxhub „Diese Version von <Name> passt nicht zu
-tuxhub“ und keine Felder.
+Prüfregeln in tuxhub (Erweiterung von `live.rs`): Längen wie angegeben,
+`visible_if.key` im Schlüssel-Format, `in` höchstens 50 Einträge, Farben im
+Farbformat; Verstöße → Angabe verworfen (Feld bleibt nutzbar), Eintrag in
+`invalid`.
 
-### 4.3 Benachrichtigungen (App → tuxhub)
+## 4. tuxhub 0.6.0
 
-| Name | params | Bedeutung |
-|---|---|---|
-| `changed` | `{"values": {"key": value, …}}` | Werte wurden in der App selbst geändert |
-| `schema-changed` | `{}` | Felder haben sich geändert, tuxhub holt `schema` neu |
+### 4.1 Aufbau der Seite für Live-Apps
 
-### 4.4 Schema
+- **Kopfzeile** (ersetzt die große Start-Karte bei Live-Apps): Icon, Name,
+  Status-Pille („Läuft“ / „Beendet“, Form + Text, nicht nur Farbe), rechts
+  Starten bzw. Beenden. Eine Zeile, auch bei 760 px.
+- **Tabs** (`wa-tab-group`) je Abschnitt, mit Icon. Ein Abschnitt → keine
+  Tabs. Der zuletzt gewählte Tab wird je Tool gemerkt (localStorage mit
+  try/catch). Abschnitt-`description` steht oben im Tab.
+- **Erweitert**: `wa-details` am Ende des Tabs, standardmäßig zu; enthält die
+  `advanced`-Felder, nur wenn es sichtbare gibt.
+- **Zurücksetzen je Feld**: kleiner Icon-Knopf mit Beschriftung für
+  Screenreader („<Label> zurücksetzen“), nur bei Abweichung vom `default`.
+- **Aktionen** der App wandern ins Tool-Menü der Seitenleiste; `danger` rot
+  und abgetrennt, `confirm` mit `wa-dialog`.
+- **App läuft nicht**: Kopfzeile + leerer Zustand „Starte <Name>, um die
+  Einstellungen zu ändern.“ mit Starten-Knopf.
+- **README** der App bei Live-Apps nicht mehr unter den Einstellungen,
+  sondern über einen Menüeintrag „Über <Name>“ (Dialog).
 
-```json
-{
-  "sections": [
-    {
-      "id": "clock",
-      "label": "Uhr",
-      "fields": [
-        { "key": "clockTextSize", "type": "number", "label": "Größe",
-          "min": 8, "max": 120, "step": 1, "unit": "px", "slider": true, "default": 26 },
-        { "key": "clockTextColor", "type": "color", "label": "Textfarbe", "alpha": true },
-        { "key": "format", "type": "text", "label": "Format",
-          "help": "Platzhalter: $FLIPTIME(HH:mm:ss), $TIME(…), $WEATHER(…)", "default": "$FLIPTIME(HH:mm:ss)" },
-        { "key": "textFont", "type": "select", "label": "Schrift",
-          "options": [{ "value": "Arial, sans-serif", "label": "Arial" }] },
-        { "key": "autostart", "type": "toggle", "label": "Mit dem PC starten" }
-      ]
-    }
-  ],
-  "actions": [
-    { "id": "open-styling", "label": "Fliq-Fenster für Styling öffnen" },
-    { "id": "reset", "label": "Zurücksetzen", "danger": true, "confirm": "Alle Einstellungen zurücksetzen?" }
-  ]
-}
-```
-
-Feldtypen in Protokoll 1 und ihre Darstellung in tuxhub:
-
-| type | Wert | Zusatzangaben | Bauteil |
-|---|---|---|---|
-| `toggle` | bool | – | `wa-switch` |
-| `number` | Zahl | `min`, `max`, `step`, `unit`, `slider` | `wa-slider` oder `wa-input type=number` |
-| `select` | String | `options` (1–200) | `wa-select` |
-| `text` | String | `placeholder`, `max_length`, `multiline` | `wa-input` / `wa-textarea` |
-| `color` | `#rrggbb` oder `#rrggbbaa` | `alpha` | `wa-color-picker` |
-
-Gemeinsame Angaben je Feld: `key` (Pflicht, `[A-Za-z0-9_.-]`, ≤ 64),
-`type` (Pflicht), `label` (Pflicht, ≤ 120 Zeichen), `help` (≤ 500),
-`default`, `disabled`.
-
-## 5. Dateien und Schnittstellen
-
-### tuxhub
+### 4.2 Dateien
 
 | Datei | Änderung |
 |---|---|
-| `src-tauri/src/manifest.rs` | Feld `live: Option<bool>`; Stufe 3 in `level()` |
-| `src-tauri/src/live.rs` (neu) | Socket-Verbindung je Tool, `hello`, Anfragen mit 5-s-Zeitlimit, Lesen der Benachrichtigungen, Prüfen der Nachrichten und des Schemas |
-| `src-tauri/src/lib.rs` | Befehle `live_status`, `live_schema`, `live_get`, `live_set`, `live_action`; `tool_quit` nutzt bei Live-Apps zuerst `quit`; Ereignis `live-event` ans Frontend; Laufend-Erkennung über den Socket |
-| `src/lib/LivePanel.svelte` (neu) | Abschnitte als Karten, Felder als Web-Awesome-Bauteile, Fehler am Feld, Aktionen; ersetzt bei Live-Apps das reine Starten/Beenden der `LaunchPanel` (Status und Starten/Beenden bleiben oben) |
-| `src/lib/api.ts`, `i18n.svelte.ts` | Typen, Befehle, Texte |
-| `docs/tool-development.md`, `README.md`, `CHANGELOG.md` | Doku Stufe 3, Abschnitt für App-Entwickler |
-| `registry/index.json` | Fliq: `"manifest": {"embed": false, "live": true}` (erst nach Fliq-Release mit Schnittstelle) |
+| `src-tauri/src/live.rs` | neue Angaben parsen/prüfen, `features` in `hello` |
+| `src/lib/LivePanel.svelte` | Kopfzeile, Tabs, Erweitert, Zurücksetzen, `visible_if`, Optionen mit Farben/Beschreibung |
+| `src/lib/ToolPage.svelte`, `ToolMenu` | Aktionen + „Über“ im Menü, README-Dialog |
+| `src/lib/live-logic.ts` (neu) | reine Funktionen: `isVisible(field, values)`, `differsFromDefault`, Gruppierung – mit Frontend-Tests |
+| `examples/live-demo` | nutzt alle neuen Angaben |
+| `docs/tool-development.md`, `README.md`, `CHANGELOG.md` | Protokoll 1.1 dokumentieren |
 
-### Fliq (Pull Request an Dav1d-Fn, Fork SirSnolte)
+## 5. Fliq 1.5.0 (Pull Request an Dav1d-Fn)
 
-| Datei | Änderung |
-|---|---|
-| `src-tauri/src/tuxhub.rs` (neu) | Socket-Server (tokio, Unix-Socket), leitet Anfragen per Tauri-Event an das Hauptfenster, Antworten zurück |
-| `src/pages/App.tsx` / neues `src/tuxhub.ts` | Beantwortet `schema`/`get`/`set`/`action`/`quit` aus den Jotai-Atomen; meldet `changed`, wenn sich Atome ändern (auch aus dem Styling-Fenster) |
-| Schema-Inhalt | Alle Felder des Styling-Fensters (Sprache, Hintergrund, Rundung, Abstand, Schrift, Farben, Overlay-Modus, Größe, Format, zweite Zeile, Trennzeichen, Wetter-Einheit und -Ort) und die Rechtsklick-Einträge (Autostart, In Taskleiste verstecken, Immer im Vordergrund) als Schalter; Aktionen „Styling-Fenster öffnen“ und „Beenden“ |
-| Texte | Englisch und Deutsch im Schema |
+### 5.1 Neue Ordnung (de/en)
 
-## 6. Verhaltensvertrag (tuxhub)
+**Tab „Anzeige“** (`clock`)
+- `formatPreset` (Auswahl): Uhrzeit mit Sekunden → `$FLIPTIME(HH:mm:ss)` ·
+  Uhrzeit ohne Sekunden → `$FLIPTIME(HH:mm)` · 12-Stunden →
+  12-Stunden-Format, das Fliq tatsächlich darstellen kann (vorher prüfen) ·
+  Eigenes Format.
+- `format` (Text, mehrzeilig, Hilfe mit Platzhaltern) – `visible_if`
+  `formatPreset = custom`.
+- `secondRowEnabled` (Schalter „Zweite Zeile“).
+- `secondRowPreset` (Auswahl, `visible_if` zweite Zeile an): Datum ·
+  Datum und Wetter (heutiger Standard) · Nur Wetter · Eigenes Format.
+- `secondRowFormat` – `visible_if` `secondRowPreset = custom`.
+- `lang` „Sprache von Datum und Wetter“.
 
-- `live_status(id)` → `{running, protocol_ok, name, version}`.
-  Vorbedingung: Tool installiert und `live = true`. Socket fehlt oder
-  Verbindung scheitert → `running = false`, kein Fehler.
-- `live_schema(id)` → geprüftes Schema. Ungültige Felder werden verworfen
-  und als `invalid: [{key, reason}]` mitgeliefert; der Rest bleibt nutzbar.
-- `live_get(id)` → Werte nur für bekannte Schlüssel des Schemas.
-- `live_set(id, key, value)` → Vorbedingung: `key` im Schema, Wert passt zum
-  Typ (Zahl in `min..max`, Option vorhanden, Farbe im Format, Text ≤
-  `max_length`). Sonst Fehler ohne Senden. Antwortet die App mit Fehler,
-  zeigt das Feld diesen Text und den letzten gültigen Wert.
-- `live_action(id, action)` → nur Aktionen aus dem Schema.
-- Frontend: Schalter, Auswahl und Farbe senden sofort; Regler, Zahl und
-  Text nach 300 ms ohne weitere Eingabe und beim Verlassen des Felds.
-  Ein `changed` der App überschreibt den Wert nur, wenn das Feld gerade
-  nicht bearbeitet wird.
+**Tab „Aussehen“** (`palette`)
+- `theme` (Auswahl mit `colors`): Dunkel (heutige Standardfarben) · Hell ·
+  Glas (transparent) · Retro · Eigenes Design. Eine Vorlage setzt alle
+  Farben; jede einzelne Farbänderung setzt `theme` auf „Eigenes Design“.
+  Fliq meldet beides per `changed`.
+- `textFont`, `clockTextSize` „Größe der Uhrzeit“, `secondRowClockTextSize`
+  „Größe der zweiten Zeile“ (`visible_if` zweite Zeile an).
+- Farben: `boxBackgroundColor` Hintergrund, `flipCardBackground`
+  Klappkarten, `clockTextColor` Ziffern, `clockSeparatorColor`
+  Trennzeichen, `textColor` übriger Text.
+- `boxRounded` Rundung des Hintergrunds, `flipcardRounded` Rundung der
+  Klappkarten.
+- Erweitert: `clockPadding`, `secondRowGap`, `seperatorString`.
 
-## 7. Randfälle (je ein Test)
+**Tab „Wetter“** (`cloud-sun`), `description`: gilt für Wetterangaben in
+der Anzeige: `weatherLocation` (leer = automatisch), `weatherUnit`.
 
-1. Kein Socket → „läuft nicht“, Starten-Knopf, keine Fehlermeldung.
-2. Socket-Datei vorhanden, niemand lauscht → „läuft nicht“.
-3. Socket gehört einem anderen Benutzer → wird nicht benutzt.
-4. App antwortet nicht innerhalb von 5 s → Feld zeigt Zeitüberschreitung, Seite bleibt bedienbar.
-5. Zeile über 1 MiB oder kein JSON → Verbindung wird getrennt, Hinweis „Antwort der App ungültig“.
-6. `hello` mit `protocol: 2` → Hinweis „passt nicht zu tuxhub“, keine Felder.
-7. Unbekannter Feldtyp → Feld erscheint als Hinweis „wird von dieser tuxhub-Version nicht unterstützt“, übrige Felder normal.
-8. Doppelter `key` im Schema → zweites Feld verworfen.
-9. `set` mit Zahl außerhalb des Bereichs / unbekannter Option / falscher Farbe → abgelehnt, ohne zu senden.
-10. App lehnt `set` ab → Fehlertext am Feld, alter Wert bleibt.
-11. App beendet sich während offener Anfrage → Anfrage scheitert sauber, Status „läuft nicht“.
-12. `changed` während der Nutzer tippt → Eingabe wird nicht überschrieben.
-13. `schema-changed` → Seite baut Felder neu auf, Werte bleiben.
-14. Labels mit HTML (`<b>`) → als Text angezeigt.
-15. Beenden bei Live-App → zuerst `quit`; reagiert die App nicht in 3 s → SIGTERM wie bisher.
-16. Zwei tuxhub-Verbindungen (Hub + Tool-Fenster) → beide erhalten `changed`.
+**Tab „Verhalten“** (`settings`): `autostart` „Mit dem PC starten“,
+`alwaysOnTop` „Immer im Vordergrund“, `hideInTaskbar` „In der Taskleiste
+verstecken“; Erweitert: `overlayMode` (mit Optionsbeschreibungen, Hinweis
+„wirkt nach Neustart“).
 
-## 8. Sicherheit
+**Aktionen**: `open-styling` „Fliqs eigenes Fenster öffnen“, `reset` „Alle
+Einstellungen zurücksetzen“ (`danger`, `confirm`). Die Aktion `quit` entfällt
+(tuxhub hat Beenden in der Kopfzeile; die Methode `quit` bleibt).
 
-- Externe Eingabe ist alles, was über den Socket kommt: Größe (1 MiB),
-  JSON-Form, Typen und Längen werden geprüft; Werte nur als Text gerendert.
-- Der Socket liegt im Laufzeitordner des Benutzers; tuxhub prüft vor dem
-  Verbinden Eigentümer (`uid`) und Typ (Socket, kein Symlink).
-- tuxhub führt nichts aus dem Schema aus und öffnet keine Links daraus.
-- Keine neue Abhängigkeit in tuxhub (tokio `net` ist Teil von tokio, nur
-  Feature ergänzen). In Fliq ebenfalls nur tokio-Feature bzw. std.
+Jedes Feld liefert `default`.
 
-## 9. Ende-zu-Ende-Prüfung
+### 5.2 Ableitungen
 
-1. `cargo test` (tuxhub): Tests für 7.1–7.15 mit einer Test-App, die einen
-   Socket öffnet (Rust-Test-Helfer), `cargo clippy --all-targets -- -D warnings`,
-   `npm run check`.
-2. Beispiel-App `examples/live-demo` (Python, nur Standardbibliothek)
-   implementiert Protokoll 1 mit allen Feldtypen; dient als Vorlage für
-   Publisher.
-3. Isolierte KWin-Sitzung (`kwin_wayland --virtual --no-lockscreen`):
-   tuxhub + Fliq-Build mit Schnittstelle; Screenshots: Seite bei laufender
-   App (hell, dunkel, 760 px), Farbe ändern → Uhr ändert sich sofort,
-   Änderung im Fliq-Styling-Fenster → tuxhub zeigt sie, Beenden.
+- `formatPreset`/`secondRowPreset` werden aus dem gespeicherten Format
+  abgeleitet: passt es genau zu einer Vorlage → diese, sonst `custom`.
+  `set(preset, x)` schreibt das Format der Vorlage; `set(preset, custom)`
+  lässt das Format unverändert. Ändert jemand das Format (tuxhub oder
+  Styling-Fenster), meldet Fliq das abgeleitete Preset mit `changed`.
+- `theme` wird gespeichert (neues Atom `theme`); fehlt es (Update von
+  1.4), wird es aus den Farben abgeleitet (passt zu einer Vorlage → diese,
+  sonst `custom`).
+- `reset` setzt alle Atome auf die Standardwerte und meldet sie per `changed`.
 
-## 10. Reihenfolge
+## 6. Randfälle (je ein Test)
 
-1. tuxhub: Protokoll, `live.rs`, Seite, Demo-App, Doku → Release 0.5.0.
-2. Fliq: Fork, Umsetzung, Pull Request an Dav1d-Fn.
-3. Nach Fliq-Release: Workshop-Eintrag `live: true`.
+tuxhub:
+1. `visible_if` auf unbekannten Schlüssel → Feld sichtbar.
+2. `visible_if` mit `in` von 51 Einträgen → Angabe verworfen, Feld sichtbar, `invalid`.
+3. Wert ändert sich per `changed` → abhängige Felder erscheinen/verschwinden sofort.
+4. Ein verstecktes Feld behält seinen Wert (kein `set` beim Verstecken).
+5. Alle Felder eines Tabs `advanced` → Tab zeigt nur „Erweitert“ (aufgeklappt).
+6. Ein Abschnitt → keine Tabs.
+7. Gemerkter Tab existiert nicht mehr → erster Tab.
+8. Zurücksetzen-Knopf nur bei Abweichung; nach Klick `set(default)`; Farben `#rrggbb` und `#rrggbbff` gelten als gleich.
+9. Unbekanntes Icon → Tab ohne Icon.
+10. Option mit 7 Farben → `colors` verworfen.
+11. Aktion mit `confirm` → Dialog; Abbrechen sendet nichts.
+12. App ohne neue Angaben (Fliq 1.4) → Seite funktioniert, Tabs je Abschnitt, keine Zurücksetzen-Knöpfe ohne `default`.
+13. 760 px, hell und dunkel: Kopfzeile einzeilig, Tabs scrollen statt umzubrechen.
+
+Fliq:
+14. Format genau wie Vorlage → Preset = Vorlage; sonst `custom`.
+15. `set(formatPreset, custom)` ändert das Format nicht.
+16. Farbe ändern → `theme` wird `custom`, `changed` enthält beide.
+17. `set(theme, light)` → alle Farben der Vorlage gesetzt, `changed` enthält alle.
+18. Update von 1.4 ohne `theme`-Atom → `theme` aus Farben abgeleitet.
+19. `reset` → alle Standardwerte, `changed` mit allen Schlüsseln.
+20. Styling-Fenster ändert Format → tuxhub sieht neues Preset.
+21. 12-Stunden-Vorlage wird von FlipClock korrekt dargestellt (Screenshot).
+
+## 7. Sicherheit
+
+Alle neuen Angaben kommen über den Socket und werden wie bisher geprüft
+(Längen, Formate, Anzahl); Texte nur als Text, keine Links, keine
+Ausführung. Keine neuen Abhängigkeiten (Icons aus dem vorhandenen
+`@lucide/svelte`, feste Zuordnungstabelle Name → Icon).
+
+## 8. Ende-zu-Ende
+
+1. tuxhub: `cargo test`, `cargo clippy --all-targets -- -D warnings`,
+   `cargo fmt --check`, `npm run check`, Frontend-Tests; Fliq: `npm test`,
+   `cargo test`.
+2. Isolierte Sitzung (`dbus-run-session` + `kwin_wayland --virtual
+   --no-lockscreen --no-global-shortcuts`, eigene XDG-Ordner, kurzes
+   `XDG_RUNTIME_DIR`), tuxhub-Debug-Build + Fliq-Build mit 1.5:
+   Screenshots aller vier Tabs (hell, dunkel, 760 px), Design „Hell“ wählen
+   → Uhr wird hell, einzelne Farbe ändern → „Eigenes Design“, Preset
+   „Eigenes Format“ → Textfeld erscheint, Erweitert auf/zu, Zurücksetzen
+   eines Felds, Aktion „Alle zurücksetzen“ mit Dialog.
+3. Gegenprobe: tuxhub 0.6 mit Fliq 1.4 (alte Angaben) und
+   `examples/live-demo` funktionieren.
+
+## 9. Reihenfolge
+
+tuxhub (4) und Fliq (5) können parallel entstehen, beide gegen diese Spec.
+tuxhub 0.6.0 erst veröffentlichen, wenn der Ende-zu-Ende-Test mit dem
+Fliq-Build läuft; der Fliq-PR geht an Dav1d-Fn, das Release macht er.
