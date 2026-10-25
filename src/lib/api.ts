@@ -115,6 +115,7 @@ export const api = {
   setHubSettings: (settings: HubSettings) => invoke<void>("hub_settings_set", { settings }),
   updates: () => invoke<Updates>("updates_list"),
   checkUpdates: () => invoke<Updates>("updates_check"),
+  updatedFrom: () => invoke<string | null>("self_updated_from"),
   webStatus: (id: string) => invoke<boolean>("tool_web_status", { id }),
   webWindow: (id: string) => invoke<void>("tool_web_window", { id }),
   embedMissing: () => invoke<string | null>("embed_missing"),

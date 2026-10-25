@@ -35,6 +35,8 @@ pub struct Hub {
     updates: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
     /// Running sessions of applications shown inside tuxhub
     embeds: embed::Sessions,
+    /// Version that ran before an update, until the interface has shown it.
+    updated_from: std::sync::Mutex<Option<String>>,
 }
 
 impl Hub {
@@ -49,6 +51,7 @@ impl Hub {
             settings: Default::default(),
             updates: Default::default(),
             embeds: Default::default(),
+            updated_from: Default::default(),
         }
     }
 
@@ -460,6 +463,12 @@ fn hub_settings_set(app: AppHandle, settings: system::HubSettings) -> Result<(),
     Ok(())
 }
 
+/// The version tuxhub was updated from, once per update.
+#[tauri::command]
+fn self_updated_from(app: AppHandle) -> Option<String> {
+    app.state::<Hub>().updated_from.lock().unwrap().take()
+}
+
 #[tauri::command]
 fn updates_list(app: AppHandle) -> std::collections::BTreeMap<String, String> {
     app.state::<Hub>().updates.lock().unwrap().clone()
@@ -636,6 +645,10 @@ pub fn run() {
             std::fs::create_dir_all(&settings_dir)?;
             let hub_settings_path = config_dir.join("hub.json");
             let settings = system::HubSettings::load(&hub_settings_path);
+            let updated_from = system::record_version(
+                &config_dir.join("version"),
+                &app.package_info().version.to_string(),
+            );
             // Keep the autostart entry pointing to the running installation.
             if settings.autostart
                 && let Err(e) = system::apply_autostart(&settings)
@@ -651,13 +664,16 @@ pub fn run() {
                 settings: std::sync::Mutex::new(settings),
                 updates: Default::default(),
                 embeds: Default::default(),
+                updated_from: std::sync::Mutex::new(updated_from.clone()),
             });
 
             if let Err(e) = system::setup_tray(app.handle()) {
                 eprintln!("tray icon not available: {e}");
             }
             // The window starts hidden and stays hidden only when started with --minimized.
-            if !std::env::args().any(|a| a == system::MINIMIZED_ARG) {
+            // After an update it is shown anyway: the restart keeps the arguments of the
+            // autostart, and a window that disappears looks like a crash.
+            if updated_from.is_some() || !std::env::args().any(|a| a == system::MINIMIZED_ARG) {
                 system::show_window(app.handle());
             }
             shortcuts::rebind(app.handle().clone());
@@ -707,6 +723,7 @@ pub fn run() {
             hub_settings_set,
             updates_list,
             updates_check,
+            self_updated_from,
             tool_web_status,
             tool_web_window,
             embed_missing,

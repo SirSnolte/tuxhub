@@ -142,9 +142,17 @@ const en = {
   "selfupdate.install": "Update now",
   "selfupdate.later": "Later",
   "selfupdate.downloading": "Downloading update… {percent}%",
-  "selfupdate.installing": "Installing update…",
+  "selfupdate.installing": "Installing update… If the system asks for your password, confirm there.",
   "selfupdate.failed": "Update failed: {error}",
   "selfupdate.notes": "Release notes",
+  "selfupdate.done": "tuxhub was updated to {version}.",
+  "selfupdate.whatsNew": "What's new",
+  "selfupdate.section.Added": "New",
+  "selfupdate.section.Changed": "Changed",
+  "selfupdate.section.Fixed": "Fixed",
+  "selfupdate.section.Removed": "Removed",
+  "selfupdate.section.Security": "Security",
+  "selfupdate.section.Deprecated": "Deprecated",
 } as const;
 
 export type Key = keyof typeof en;
@@ -290,9 +298,17 @@ const de: Record<Key, string> = {
   "selfupdate.install": "Jetzt aktualisieren",
   "selfupdate.later": "Später",
   "selfupdate.downloading": "Update wird geladen… {percent} %",
-  "selfupdate.installing": "Update wird installiert…",
+  "selfupdate.installing": "Update wird installiert… Fragt das System nach deinem Passwort, bestätige dort.",
   "selfupdate.failed": "Update fehlgeschlagen: {error}",
   "selfupdate.notes": "Versionshinweise",
+  "selfupdate.done": "tuxhub wurde auf {version} aktualisiert.",
+  "selfupdate.whatsNew": "Was ist neu?",
+  "selfupdate.section.Added": "Neu",
+  "selfupdate.section.Changed": "Geändert",
+  "selfupdate.section.Fixed": "Behoben",
+  "selfupdate.section.Removed": "Entfernt",
+  "selfupdate.section.Security": "Sicherheit",
+  "selfupdate.section.Deprecated": "Veraltet",
 };
 
 export type Locale = "en" | "de";

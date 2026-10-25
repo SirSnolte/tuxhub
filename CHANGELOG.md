@@ -4,6 +4,19 @@ All notable changes to tuxhub are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- After an update, tuxhub opens its window again instead of restarting
+  hidden in the tray when it was started minimized at login.
+
+### Changed
+
+- The update notice shows the release notes formatted, with translated
+  section names, and asks to confirm in the system's password dialog while
+  installing. After the restart, a note confirms the new version.
+
 ## [0.4.0] - 2026-10-25
 
 ### Added

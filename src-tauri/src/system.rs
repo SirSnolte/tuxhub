@@ -102,6 +102,21 @@ pub fn apply_autostart(s: &HubSettings) -> Result<(), String> {
     std::fs::write(&path, content).map_err(|e| e.to_string())
 }
 
+/// Records the running version and returns the previous one when it differs,
+/// that is on the first start after an update.
+pub fn record_version(path: &Path, current: &str) -> Option<String> {
+    let previous = std::fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_string());
+    if previous.as_deref() == Some(current) {
+        return None;
+    }
+    if let Err(e) = std::fs::write(path, current) {
+        eprintln!("version file: {e}");
+    }
+    previous.filter(|p| !p.is_empty())
+}
+
 pub fn show_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.unminimize();
@@ -174,5 +189,24 @@ pub fn set_tray_updates(app: &AppHandle, count: usize) {
         };
         let _ = items.updates.set_text(text);
         let _ = items.updates.set_enabled(count > 0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_change_is_reported_once() {
+        let dir = std::env::temp_dir().join(format!("tuxhub-version-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("version");
+        // First start ever: nothing to report.
+        assert_eq!(record_version(&path, "0.4.0"), None);
+        assert_eq!(record_version(&path, "0.4.0"), None);
+        // First start after an update.
+        assert_eq!(record_version(&path, "0.4.1"), Some("0.4.0".into()));
+        assert_eq!(record_version(&path, "0.4.1"), None);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

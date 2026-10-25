@@ -1,12 +1,26 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { errText } from "./api";
-import { t } from "./i18n.svelte";
+import { marked } from "marked";
+import DOMPurify from "dompurify";
+import { api, errText } from "./api";
+import { t, type Key } from "./i18n.svelte";
 
 /** Interval between automatic checks for a new tuxhub release. */
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 /** Delay before the first automatic check, to keep startup fast. */
 const FIRST_CHECK_MS = 20 * 1000;
+
+/** Section names of Keep a Changelog, as used in CHANGELOG.md. */
+const SECTIONS = ["Added", "Changed", "Fixed", "Removed", "Security", "Deprecated"];
+
+/** Release notes (Markdown from CHANGELOG.md) as HTML, with translated section names. */
+export function notesHtml(body: string): string {
+  const md = body.replace(/^#{1,6}\s+(\w+)\s*$/gm, (line, name: string) =>
+    SECTIONS.includes(name) ? `#### ${t(`selfupdate.section.${name}` as Key)}` : line,
+  );
+  return DOMPurify.sanitize(marked.parse(md, { async: false }), { USE_PROFILES: { html: true } });
+}
 
 class SelfUpdate {
   /** Development builds have no signed release to update to. */
@@ -19,6 +33,8 @@ class SelfUpdate {
   installing = $state(false);
   error = $state<string | null>(null);
   dismissed = $state(false);
+  /** Version installed by the update that just finished, until the note is closed. */
+  updatedTo = $state<string | null>(null);
 
   /** Checks GitHub for a newer signed release. */
   async check(manual = false) {
@@ -73,6 +89,9 @@ class SelfUpdate {
 
   /** Starts periodic background checks. */
   start() {
+    api.updatedFrom().then(async (from) => {
+      if (from) this.updatedTo = await getVersion();
+    });
     if (!this.supported) return;
     setTimeout(() => this.check(), FIRST_CHECK_MS);
     setInterval(() => this.check(), CHECK_INTERVAL_MS);
