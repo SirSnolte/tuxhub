@@ -8,11 +8,14 @@
 
   // Applications that belong on the desktop, such as overlays: tuxhub only
   // starts and stops them and never shows them inside its window.
-  let { tool, onchanged }: { tool: Tool; onchanged: () => void } = $props();
+  let {
+    tool,
+    onchanged,
+    running = $bindable(false),
+  }: { tool: Tool; onchanged: () => void; running?: boolean } = $props();
 
   const id = $derived(tool.entry.id);
   const name = $derived(tool.entry.name);
-  let running = $state(false);
   let busy = $state(false);
 
   $effect(() => {

@@ -27,6 +27,8 @@ export type Manifest = {
   run?: Cmd;
   /** `false`: tuxhub only starts and stops the application, never shows it inside. */
   embed?: boolean;
+  /** The running application offers the live interface (level 3). */
+  live?: boolean;
   rpc?: Cmd;
   uninstall?: Cmd;
   ui?: string;
@@ -63,7 +65,7 @@ export type Tool = {
   entry: Entry;
   version: string | null;
   manifest: Manifest;
-  level: 0 | 1 | 2;
+  level: 0 | 1 | 2 | 3;
   running: boolean;
   /** The application of a tool with `embed: false` is running. */
   app_running: boolean;
@@ -88,6 +90,43 @@ export type HubSettings = {
   close_to_tray: boolean;
   check_updates: boolean;
 };
+
+/** Error of the live interface: `code` selects the text, `message` has the details. */
+export type LiveError = { code: string; message: string };
+
+export type LiveStatus = {
+  running: boolean;
+  /** The application speaks the protocol of this tuxhub. */
+  protocol_ok: boolean;
+  name?: string;
+  version?: string;
+  /** The application runs, but the connection failed. */
+  error?: LiveError;
+};
+
+/** A setting as the running application describes it, checked by tuxhub. */
+export type LiveField = { key: string; label: string; help?: string; default?: unknown; disabled: boolean } & (
+  | { type: "toggle" }
+  | { type: "number"; min?: number; max?: number; step?: number; unit?: string; slider: boolean }
+  | { type: "select"; options: { value: string; label: string }[] }
+  | { type: "text"; placeholder?: string; max_length?: number; multiline: boolean }
+  | { type: "color"; alpha: boolean }
+  /** A type this tuxhub does not know. */
+  | { type: "unsupported"; declared: string }
+);
+
+export type LiveSchema = {
+  sections: { id: string; label: string; fields: LiveField[] }[];
+  actions: { id: string; label: string; danger: boolean; confirm?: string }[];
+  /** Fields and actions that were left out, and why. */
+  invalid: { key: string; reason: string }[];
+};
+
+/** Notification of a live application (`live-event`). */
+export type LiveEvent =
+  | { tool: string; method: "changed"; params: { values: Record<string, unknown> } }
+  | { tool: string; method: "schema-changed"; params: Record<string, never> }
+  | { tool: string; method: "closed"; params: LiveError };
 
 /** Tool-ID → neue Version */
 export type Updates = Record<string, string>;
@@ -121,7 +160,16 @@ export const api = {
   embedStart: (id: string) => invoke<{ url: string }>("embed_start", { id }),
   embedStatus: (id: string) => invoke<{ url: string } | null>("embed_status", { id }),
   embedStop: (id: string) => invoke<void>("embed_stop", { id }),
+  liveStatus: (id: string, locale: string) => invoke<LiveStatus>("live_status", { id, locale }),
+  liveSchema: (id: string, locale: string) => invoke<LiveSchema>("live_schema", { id, locale }),
+  liveGet: (id: string) => invoke<Record<string, unknown>>("live_get", { id }),
+  liveSet: (id: string, key: string, value: unknown) => invoke<unknown>("live_set", { id, key, value }),
+  liveAction: (id: string, action: string) => invoke<unknown>("live_action", { id, action }),
 };
+
+export function isLiveError(e: unknown): e is LiveError {
+  return typeof e === "object" && e !== null && typeof (e as LiveError).code === "string";
+}
 
 /** Description in the current UI language, falling back to the English text. */
 export function describe(entry: Entry): string {
@@ -129,5 +177,6 @@ export function describe(entry: Entry): string {
 }
 
 export function errText(e: unknown): string {
+  if (isLiveError(e)) return e.message;
   return typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e);
 }

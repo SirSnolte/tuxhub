@@ -9,6 +9,7 @@
   import WebPanel from "./WebPanel.svelte";
   import EmbedPanel from "./EmbedPanel.svelte";
   import LaunchPanel from "./LaunchPanel.svelte";
+  import LivePanel from "./LivePanel.svelte";
   import type { MenuItem } from "./ToolMenu.svelte";
 
   let {
@@ -40,6 +41,9 @@
   const removable = $derived(source.type !== "external" || (ownedExternal && !!m.uninstall));
   const webTool = $derived(!!m.web_url && !m.ui);
   const plainApp = $derived(tool.level === 0 && tool.can_launch);
+  /** Runs on its own and offers its settings over the live interface. */
+  const liveApp = $derived(m.live === true);
+  let liveRunning = $state(false);
   /** Belongs on the desktop: tuxhub only starts and stops it. */
   const launchOnly = $derived(plainApp && m.embed === false);
 
@@ -246,7 +250,14 @@
     <p class="status">{String(status.text)}</p>
   {/if}
 
-  {#if m.ui}
+  {#if liveApp}
+    <LaunchPanel {tool} {onchanged} bind:running={liveRunning} />
+    {#if liveRunning}
+      {#key id}
+        <LivePanel {tool} onclosed={() => (liveRunning = false)} />
+      {/key}
+    {/if}
+  {:else if m.ui}
     <!--
       The page has its own origin (tool://<id>), separate from tuxhub and from
       other tools, so it can only reach tuxhub through the bridge (postMessage).
