@@ -4,6 +4,24 @@ All notable changes to tuxhub are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - unreleased
+
+### Added
+
+- `[live]` section in the manifest: the command that starts a live
+  service. tuxhub starts it in the background, once, when the page, the
+  tool's interface or a hotkey needs it, and reports a service that does
+  not open its socket within five seconds.
+- Live tools can show their own interface (`ui`): the bridge's `call` and
+  `action` go over the live socket, and the service's own notifications
+  reach the page. Reserved and invalid method names are refused.
+- `shortcuts` over the live interface sets the runtime hotkeys.
+
+### Changed
+
+- Hotkeys of live tools send `action` over the live socket instead of an
+  RPC process.
+
 ## [0.5.0] - 2026-10-25
 
 ### Added

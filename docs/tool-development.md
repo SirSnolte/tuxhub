@@ -48,6 +48,10 @@ icon = "icon.png"            # HTTPS URL or image path relative to the tool root
 notice = "Text shown above the tool's interface, for example a usage notice."
 
 live = true                  # level 3: the running application offers the live interface
+# or, from tuxhub 0.6.0, a section that also lets tuxhub start the service:
+# [live]
+# command = "example-tool"   # relative to the tool root
+# args = ["daemon"]
 
 [run]                        # launches the tool in its own window
 command = "example-tool"     # relative to the tool root
@@ -172,7 +176,7 @@ bridge script provided by tuxhub:
 The bridge exposes `window.tuxhub`:
 
 ```js
-await tuxhub.call("method", { key: "value" }); // JSON-RPC request to the tool process
+await tuxhub.call("method", { key: "value" }); // request to the tool process or live service
 await tuxhub.action("toggle");                 // run an action from tuxhub.toml
 const settings = await tuxhub.getSettings();
 await tuxhub.saveSettings({ interval_ms: 50 }); // save and send to the process
@@ -187,6 +191,10 @@ separate from tuxhub and from other tools, and has no direct access to
 tuxhub. Every request goes through the bridge and is limited to the tool's
 own process and settings. Do not rely on web storage (`localStorage`,
 cookies); store state in the tool process or in the tool's settings instead.
+
+For a live tool (`live` together with `ui`), `call`, `action` and `on` go
+over the live socket instead of a process tuxhub runs; see
+[Own interface of a live tool](#own-interface-of-a-live-tool).
 
 To match the look of tuxhub, build the interface with the components and the
 theme from [`ui-kit/`](../ui-kit/README.md).
@@ -208,6 +216,24 @@ Enable it in the manifest or the workshop entry:
 live = true
 embed = false   # optional: the application belongs on the desktop
 ```
+
+From tuxhub 0.6.0, a `[live]` section instead of `live = true` names the
+command that starts the service in the background. tuxhub runs it when the
+tool's page, its interface or one of its hotkeys needs the service and the
+socket is missing:
+
+```toml
+[live]
+command = "example-tool"   # relative to the tool root, no `..`
+args = ["daemon"]
+```
+
+The command runs without a shell and without a window, in its own process
+group, so the service keeps running when tuxhub exits. tuxhub starts it once
+even when several requests need it at the same time, and waits up to five
+seconds for the socket; otherwise it reports that the tool does not start.
+Without `[live]` tuxhub cannot start the service, and the page offers to
+start the application itself (`[run]`).
 
 ### Connection
 
@@ -254,6 +280,11 @@ Notifications from the application:
 |---|---|---|
 | `changed` | `{"values": {"<key>": <value>, …}}` | Values changed in the application itself, for example in its own window |
 | `schema-changed` | `{}` | The fields changed; tuxhub requests `schema` again |
+| `shortcuts` | `[{"id", "label", "shortcut"}, …]` | Runtime hotkeys, as in the RPC protocol (from 0.6.0) |
+
+From tuxhub 0.6.0 every other notification whose name has only lowercase
+letters, digits, `.`, `_` and `-` (at most 64 characters) is passed on to the
+tool's own interface, if it has one. Other names are dropped.
 
 ### Schema
 
@@ -325,8 +356,30 @@ without breaking older versions of tuxhub.
 - Quit sends `quit` and waits until the application stops listening: close
   the socket and remove the file when the application exits. After three
   seconds tuxhub ends the process with SIGTERM.
-- Unknown notifications are ignored, so newer versions of the protocol can
-  add some.
+- Unknown notifications are ignored by the settings page, so newer
+  versions of the protocol can add some.
+- Hotkeys of a live tool (`[[actions]]` with `shortcut`, and runtime hotkeys
+  from `shortcuts`) send `action` over the socket, after starting the
+  service from `[live]` if needed. Errors end up in tuxhub's log.
+
+### Own interface of a live tool
+
+From tuxhub 0.6.0 a live tool can bring its own page (`ui`). The page then
+replaces the generic settings page, and the tool keeps every feature that
+does not fit into the schema (lists, recording keys …). Its bridge talks to
+the live service:
+
+- `tuxhub.call(method, params)` sends `method` over the socket, after
+  starting the service from `[live]` if needed. Names must have only
+  lowercase letters, digits, `.`, `_` and `-` (at most 64 characters), and
+  `hello`, `quit`, `schema`, `get` and `set` are reserved for tuxhub. A
+  request may be at most 1 MiB.
+- `tuxhub.action(id)` runs an action of `[[actions]]` or a runtime hotkey.
+- `tuxhub.on(name, …)` receives the service's notifications (see above)
+  and `closed` when the connection ends.
+
+tuxhub's live connection counts as a client of the service. Still offer the
+schema with the basic settings: other clients and older pages use it.
 
 ### Checklist for publishers
 
@@ -336,6 +389,7 @@ without breaking older versions of tuxhub.
 - [ ] `changed` sent when a value changes outside tuxhub
 - [ ] Values validated by the application; errors name the field
 - [ ] The application works exactly as before when tuxhub is not installed
+- [ ] Optional: `[live]` so tuxhub can start the service, and `ui` for an own page
 
 The reference application in [`examples/live-demo`](../examples/live-demo)
 implements protocol 1 with every field type, using only the Python
