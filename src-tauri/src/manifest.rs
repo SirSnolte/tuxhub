@@ -3,7 +3,7 @@
 //!
 //! Every field is optional. A tool without a manifest is level 0 (launch only),
 //! `web_url` makes it level 1, and `rpc`, `ui`, `settings` or `actions` make it
-//! level 2.
+//! level 2. `live = true` makes it level 3.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -31,6 +31,10 @@ pub struct Manifest {
     /// desktop.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embed: Option<bool>,
+    /// The running application offers the live interface (level 3) on
+    /// `$XDG_RUNTIME_DIR/tuxhub/<id>.sock`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<bool>,
     /// Background process that tuxhub talks to over JSON-RPC.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rpc: Option<Cmd>,
@@ -138,9 +142,12 @@ impl Manifest {
         Ok(())
     }
 
-    /// 0 = launch only, 1 = web interface, 2 = fully integrated
+    /// 0 = launch only, 1 = web interface, 2 = fully integrated, 3 = live
+    /// interface of the running application
     pub fn level(&self) -> u8 {
-        if self.rpc.is_some() || self.ui.is_some() || !self.settings.is_empty() {
+        if self.live == Some(true) {
+            3
+        } else if self.rpc.is_some() || self.ui.is_some() || !self.settings.is_empty() {
             2
         } else if self.web_url.is_some() {
             1
@@ -184,6 +191,19 @@ mod tests {
         assert_eq!(m.embed, None);
         let m: Manifest = toml::from_str("embed = false").unwrap();
         assert_eq!(m.embed, Some(false));
+        assert_eq!(m.level(), 0);
+    }
+
+    #[test]
+    fn live_interface_is_level_3() {
+        assert_eq!(Manifest::default().live, None);
+        let m: Manifest = toml::from_str("embed = false\nlive = true").unwrap();
+        assert_eq!(m.live, Some(true));
+        assert_eq!(m.level(), 3);
+        // Also above a web interface or an own process.
+        let m: Manifest = toml::from_str("live = true\nweb_url = \"http://127.0.0.1:1\"").unwrap();
+        assert_eq!(m.level(), 3);
+        let m: Manifest = toml::from_str("live = false").unwrap();
         assert_eq!(m.level(), 0);
     }
 }
