@@ -28,6 +28,7 @@ const en = {
   "source.flatpak": "Flatpak",
   "source.local": "Local",
   "source.external": "Installed separately",
+  "source.system-package": "System package",
 
   "level.0": "Standalone",
   "level.1": "Web interface",
@@ -61,6 +62,13 @@ const en = {
   "embed.lost": "Connection to {name} lost",
   "embed.startedWindow": "{name} opened in its own window",
   "embed.missing": "Running applications inside tuxhub requires {dep}. Install it with your package manager:",
+
+  "app.start": "Start",
+  "app.quit": "Quit",
+  "app.running": "{name} is running.",
+  "app.stopped": "{name} is not running.",
+  "app.quitDone": "{name} quit",
+  "app.hint": "{name} runs in its own window on the desktop, also when tuxhub is closed.",
 
   "web.checking": "Checking web interface…",
   "web.unreachable": "The web interface is not responding. Is {name} running?",
@@ -97,6 +105,7 @@ const en = {
   "progress.extracting": "Extracting…",
   "progress.flathub": "Setting up Flathub…",
   "progress.flatpak": "Installing {id}. This may take a while…",
+  "progress.package": "Installing the package. Enter your password when asked…",
 
   "hub.title": "Settings",
   "hub.general": "General",
@@ -167,6 +176,7 @@ const de: Record<Key, string> = {
   "source.flatpak": "Flatpak",
   "source.local": "Lokal",
   "source.external": "Separat installiert",
+  "source.system-package": "Systempaket",
 
   "level.0": "Eigenständig",
   "level.1": "Web-Oberfläche",
@@ -200,6 +210,13 @@ const de: Record<Key, string> = {
   "embed.lost": "Verbindung zu {name} verloren",
   "embed.startedWindow": "{name} im eigenen Fenster geöffnet",
   "embed.missing": "Für die Anzeige innerhalb von tuxhub wird {dep} benötigt. Installation über die Paketverwaltung:",
+
+  "app.start": "Starten",
+  "app.quit": "Beenden",
+  "app.running": "{name} läuft.",
+  "app.stopped": "{name} läuft nicht.",
+  "app.quitDone": "{name} beendet",
+  "app.hint": "{name} läuft in einem eigenen Fenster auf dem Desktop, auch wenn tuxhub geschlossen ist.",
 
   "web.checking": "Web-Oberfläche wird geprüft…",
   "web.unreachable": "Die Web-Oberfläche antwortet nicht. Läuft {name}?",
@@ -236,6 +253,7 @@ const de: Record<Key, string> = {
   "progress.extracting": "Wird entpackt…",
   "progress.flathub": "Flathub wird eingerichtet…",
   "progress.flatpak": "{id} wird installiert. Das kann etwas dauern…",
+  "progress.package": "Paket wird installiert. Gib dein Passwort ein, wenn du gefragt wirst…",
 
   "hub.title": "Einstellungen",
   "hub.general": "Allgemein",

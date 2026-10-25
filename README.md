@@ -20,8 +20,8 @@ use it either in its own window or directly inside tuxhub.
 
 ## Features
 
-- **Workshop:** a curated list of tools, installed from GitHub releases or
-  Flathub with a single click.
+- **Workshop:** a curated list of tools, installed from GitHub releases,
+  distribution packages or Flathub with a single click.
 - **Updates:** tuxhub checks installed tools and itself for new releases.
   Updates of tuxhub are cryptographically signed and verified before they are
   installed.
@@ -59,6 +59,7 @@ tuxhub updates itself from then on. Installing an update of the `.rpm` or
 |---|---|
 | Running applications inside tuxhub | `xpra` (available in the repositories of all major distributions) |
 | Installing Flatpak applications | `flatpak` |
+| Installing distribution packages | `pkexec` (polkit) and dnf, zypper or apt |
 | Global hotkeys | A desktop that implements the GlobalShortcuts portal, such as KDE Plasma or GNOME 48 and later |
 
 ## Building from source

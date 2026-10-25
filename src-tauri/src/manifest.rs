@@ -26,6 +26,11 @@ pub struct Manifest {
     /// Launch as a regular application (own window).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<Cmd>,
+    /// `false`: the application never runs inside tuxhub; its page only
+    /// starts and stops it. For overlays and other windows that belong on the
+    /// desktop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embed: Option<bool>,
     /// Background process that tuxhub talks to over JSON-RPC.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rpc: Option<Cmd>,
@@ -165,4 +170,20 @@ pub fn valid_id(id: &str) -> bool {
         && id
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedding_is_switched_off_explicitly() {
+        // Tools without a manifest, or without the field, can run inside tuxhub.
+        assert_eq!(Manifest::default().embed, None);
+        let m: Manifest = toml::from_str("name = \"Clock\"").unwrap();
+        assert_eq!(m.embed, None);
+        let m: Manifest = toml::from_str("embed = false").unwrap();
+        assert_eq!(m.embed, Some(false));
+        assert_eq!(m.level(), 0);
+    }
 }

@@ -96,6 +96,25 @@
     }
   },
   {
+    "id": "fliq",
+    "name": "Fliq",
+    "description": "Flip clock for the desktop. On KDE Plasma and wlroots compositors it stays visible above fullscreen games. Installed as a system package. By Dav1d-Fn.",
+    "icon": "https://raw.githubusercontent.com/Dav1d-Fn/Fliq-Desktop-Flipclock/HEAD/src-tauri/icons/128x128.png",
+    "category": "overlay",
+    "repo": "Dav1d-Fn/Fliq-Desktop-Flipclock",
+    "source": {
+      "type": "system-package",
+      "package": "fliq",
+      "rpm": "*.x86_64.rpm",
+      "deb": "*_amd64.deb",
+      "command": "/usr/bin/desktop-flipclock"
+    },
+    "manifest": { "embed": false },
+    "translations": {
+      "de": { "description": "Klappuhr für den Desktop. Unter KDE Plasma und wlroots-Compositors bleibt sie auch über Spielen im Vollbild sichtbar. Wird als Systempaket installiert. Von Dav1d-Fn." }
+    }
+  },
+  {
     "id": "heroic",
     "name": "Heroic Games Launcher",
     "description": "Launcher for Epic Games, GOG and Amazon Games libraries. Installed as an AppImage from the official releases.",

@@ -8,6 +8,7 @@
   import SettingsForm from "./SettingsForm.svelte";
   import WebPanel from "./WebPanel.svelte";
   import EmbedPanel from "./EmbedPanel.svelte";
+  import LaunchPanel from "./LaunchPanel.svelte";
   import type { MenuItem } from "./ToolMenu.svelte";
 
   let {
@@ -32,11 +33,15 @@
   /** Installed outside tuxhub, in the user's home: tuxhub can update and remove it. */
   const ownedExternal = $derived(source.type === "external" && source.user);
   const updatable = $derived(
-    source.type === "github-release" || (ownedExternal && source.type === "external" && !!source.asset && !!tool.entry.repo),
+    source.type === "github-release" ||
+      source.type === "system-package" ||
+      (ownedExternal && source.type === "external" && !!source.asset && !!tool.entry.repo),
   );
   const removable = $derived(source.type !== "external" || (ownedExternal && !!m.uninstall));
   const webTool = $derived(!!m.web_url && !m.ui);
   const plainApp = $derived(tool.level === 0 && tool.can_launch);
+  /** Belongs on the desktop: tuxhub only starts and stops it. */
+  const launchOnly = $derived(plainApp && m.embed === false);
 
   let busy = $state(false);
   let confirming = $state(false);
@@ -113,7 +118,9 @@
       });
     }
     // The header shows the state and version first, then where the tool comes from.
-    const state = [tool.running ? t("tool.running") : "", tool.version ?? ""].filter(Boolean).join(" · ");
+    const state = [tool.running || tool.app_running ? t("tool.running") : "", tool.version ?? ""]
+      .filter(Boolean)
+      .join(" · ");
     const kind = `${t(`source.${source.type}` as Key)} · ${t(`level.${tool.level}` as Key)}`;
     return { title: state ? [state, kind] : [kind], items };
   }
@@ -185,7 +192,7 @@
        that need to be at hand get a slim bar. The heading stays for screen
        readers. -->
   <h1 class="wa-visually-hidden">{tool.entry.name}</h1>
-  {#if (updatable && update) || plainApp || webTool}
+  {#if (updatable && update) || (plainApp && !launchOnly) || webTool}
     <div class="buttons">
       {#if updatable && update}
         <wa-button
@@ -198,7 +205,7 @@
           {t("tool.updateTo", { version: update })}
         </wa-button>
       {/if}
-      {#if plainApp || webTool}
+      {#if (plainApp && !launchOnly) || webTool}
         <wa-button
           size="s"
           appearance="outlined"
@@ -276,6 +283,8 @@
         <SettingsForm toolId={id} settings={m.settings} />
       {/if}
     </wa-card>
+  {:else if launchOnly}
+    <LaunchPanel {tool} {onchanged} />
   {:else if plainApp}
     <EmbedPanel {tool} bind:running={embedded} bind:this={embedPanel} />
   {:else}

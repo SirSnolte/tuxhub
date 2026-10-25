@@ -25,6 +25,8 @@ export type Manifest = {
   icon?: string;
   version?: string;
   run?: Cmd;
+  /** `false`: tuxhub only starts and stops the application, never shows it inside. */
+  embed?: boolean;
   rpc?: Cmd;
   uninstall?: Cmd;
   ui?: string;
@@ -37,6 +39,8 @@ export type Manifest = {
 export type Source =
   | { type: "github-release"; asset: string }
   | { type: "flatpak"; flatpak_id: string; remote?: string }
+  /** A distribution package installed with dnf, zypper or apt. */
+  | { type: "system-package"; package: string; rpm?: string; deb?: string; command: string }
   | { type: "local"; path: string }
   /** Installed outside tuxhub; `user` marks an installation in the user's home. */
   | { type: "external"; path: string; asset?: string; user: boolean };
@@ -61,6 +65,8 @@ export type Tool = {
   manifest: Manifest;
   level: 0 | 1 | 2;
   running: boolean;
+  /** The application of a tool with `embed: false` is running. */
+  app_running: boolean;
   can_launch: boolean;
   path: string | null;
 };
@@ -92,6 +98,8 @@ export const api = {
   install: (id: string) => invoke<void>("tool_install", { id }),
   tools: () => invoke<Tool[]>("tool_list"),
   launch: (id: string) => invoke<void>("tool_launch", { id }),
+  appRunning: (id: string) => invoke<boolean>("tool_app_running", { id }),
+  quit: (id: string) => invoke<void>("tool_quit", { id }),
   uninstall: (id: string) => invoke<void>("tool_uninstall", { id }),
   checkUpdate: (id: string) => invoke<string | null>("tool_check_update", { id }),
   linkLocal: (path: string) => invoke<string>("tool_link_local", { path }),

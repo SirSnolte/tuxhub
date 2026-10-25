@@ -4,6 +4,16 @@ All notable changes to tuxhub are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Workshop: Fliq, a flip clock for the desktop by Dav1d-Fn.
+- Tools released only as `.rpm` or `.deb` packages are installed, updated and
+  removed with the system's package manager (dnf, zypper or apt).
+- Manifest: `embed = false` for applications that belong on the desktop. Their
+  page only starts and stops them, also when they were started outside tuxhub.
+
 ## [0.3.1] - 2026-10-24
 
 ### Changed

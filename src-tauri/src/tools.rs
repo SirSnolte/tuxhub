@@ -8,6 +8,7 @@
 //! `tuxhub/apps/<id>.toml` in `$XDG_DATA_HOME` or one of `$XDG_DATA_DIRS`
 //! (see [`discover`]). They appear like any other installed tool.
 
+use crate::embed::which;
 use crate::github;
 use crate::manifest::{Manifest, safe_relative, valid_id};
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,8 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Runtime};
 use tokio::process::Command;
 
@@ -55,6 +58,20 @@ pub enum Source {
         #[serde(default = "default_remote")]
         remote: String,
     },
+    /// A distribution package from the latest release of `repo`, installed
+    /// system-wide with the package manager (dnf, zypper or apt).
+    SystemPackage {
+        /// Package name, used to check and remove the installation.
+        package: String,
+        /// Asset pattern of the `.rpm` package, for example `*.x86_64.rpm`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rpm: Option<String>,
+        /// Asset pattern of the `.deb` package, for example `*_amd64.deb`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        deb: Option<String>,
+        /// Absolute path of the program the package installs.
+        command: String,
+    },
     /// A local folder linked in developer mode.
     Local { path: String },
     /// Installed outside tuxhub and announced in a `tuxhub/apps/<id>.toml`.
@@ -80,11 +97,38 @@ impl Entry {
         if !valid_id(&self.id) {
             return Err(format!("invalid tool id {:?}", self.id));
         }
-        if matches!(self.source, Source::GithubRelease { .. }) && self.repo.is_none() {
-            return Err(format!(
-                "{}: a GitHub release source requires `repo`",
-                self.id
-            ));
+        if matches!(
+            self.source,
+            Source::GithubRelease { .. } | Source::SystemPackage { .. }
+        ) && self.repo.is_none()
+        {
+            return Err(format!("{}: a release source requires `repo`", self.id));
+        }
+        if let Source::SystemPackage {
+            package,
+            rpm,
+            deb,
+            command,
+        } = &self.source
+        {
+            // The name is passed to the package manager as an argument.
+            let name_ok = !package.is_empty()
+                && !package.starts_with('-')
+                && package
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "._+-".contains(c));
+            if !name_ok {
+                return Err(format!("{}: invalid package name {package:?}", self.id));
+            }
+            if rpm.is_none() && deb.is_none() {
+                return Err(format!(
+                    "{}: a system package needs `rpm` or `deb`",
+                    self.id
+                ));
+            }
+            if !command.starts_with('/') || command.split('/').any(|c| c == "..") {
+                return Err(format!("{}: `command` must be an absolute path", self.id));
+            }
         }
         if let Source::Flatpak { flatpak_id, remote } = &self.source {
             // Never let an id start with "-": it would be parsed as a flatpak option.
@@ -157,7 +201,7 @@ impl Installed {
                     .join(&self.entry.id)
                     .join(self.root.as_deref().unwrap_or("files")),
             ),
-            Source::Flatpak { .. } => None,
+            Source::Flatpak { .. } | Source::SystemPackage { .. } => None,
         }
     }
 
@@ -402,21 +446,21 @@ pub async fn install<R: Runtime>(
             write_record(&dir, &inst)?;
             Ok(inst)
         }
+        Source::SystemPackage { .. } => install_system_package(app, tools_dir, entry).await,
         Source::Local { .. } => Err("local tools are linked, not installed".into()),
         Source::External { .. } => Err("this tool is installed outside tuxhub".into()),
     }
 }
 
-/// Downloads the latest release asset matching `pattern` and extracts it to
-/// `staging/files`. Returns the release tag and the tool root relative to
-/// `staging`.
-async fn fetch_release<R: Runtime>(
+/// Downloads the latest release asset matching `pattern` into the emptied
+/// folder `staging`. Returns the release tag and the downloaded file.
+async fn download_release<R: Runtime>(
     app: &AppHandle<R>,
     staging: &Path,
     id: &str,
     repo: &str,
     pattern: &str,
-) -> Result<(String, String), String> {
+) -> Result<(String, PathBuf), String> {
     progress(app, stage(id, "resolving", None));
     let rel = github::latest_release(repo).await?;
     let asset = rel
@@ -429,8 +473,7 @@ async fn fetch_release<R: Runtime>(
         .clone();
 
     let _ = std::fs::remove_dir_all(staging);
-    let files = staging.join("files");
-    std::fs::create_dir_all(&files).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(staging).map_err(|e| e.to_string())?;
 
     let download = staging.join(&asset.name);
     let size = asset.size;
@@ -447,9 +490,30 @@ async fn fetch_release<R: Runtime>(
         );
     })
     .await?;
+    Ok((rel.tag_name, download))
+}
+
+/// Downloads the latest release asset matching `pattern` and extracts it to
+/// `staging/files`. Returns the release tag and the tool root relative to
+/// `staging`.
+async fn fetch_release<R: Runtime>(
+    app: &AppHandle<R>,
+    staging: &Path,
+    id: &str,
+    repo: &str,
+    pattern: &str,
+) -> Result<(String, String), String> {
+    let (tag, download) = download_release(app, staging, id, repo, pattern).await?;
+    let name = download
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let files = staging.join("files");
+    std::fs::create_dir_all(&files).map_err(|e| e.to_string())?;
 
     progress(app, stage(id, "extracting", None));
-    let lower = asset.name.to_lowercase();
+    let lower = name.to_lowercase();
     let is_tar = [".tar.gz", ".tgz", ".tar.xz", ".tar.zst", ".tar.bz2", ".tar"]
         .iter()
         .any(|ext| lower.ends_with(ext));
@@ -480,7 +544,7 @@ async fn fetch_release<R: Runtime>(
         std::fs::remove_file(&download).map_err(|e| e.to_string())?;
     } else {
         // A single file (AppImage or binary).
-        let target = files.join(&asset.name);
+        let target = files.join(&name);
         std::fs::rename(&download, &target).map_err(|e| e.to_string())?;
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
             .map_err(|e| e.to_string())?;
@@ -495,7 +559,199 @@ async fn fetch_release<R: Runtime>(
     if top.len() == 1 && top[0].path().is_dir() {
         root = format!("files/{}", top[0].file_name().to_string_lossy());
     }
-    Ok((rel.tag_name, root))
+    Ok((tag, root))
+}
+
+/// Package managers tuxhub installs distribution packages with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PackageManager {
+    Dnf,
+    Zypper,
+    Apt,
+}
+
+impl PackageManager {
+    /// The first available package manager for one of the offered formats.
+    fn pick(rpm: bool, deb: bool, available: impl Fn(&str) -> bool) -> Option<Self> {
+        [(Self::Dnf, rpm), (Self::Zypper, rpm), (Self::Apt, deb)]
+            .into_iter()
+            .find(|(pm, offered)| *offered && available(pm.program()))
+            .map(|(pm, _)| pm)
+    }
+
+    /// The package manager of this system for an entry's packages.
+    fn detect(rpm: bool, deb: bool) -> Option<Self> {
+        Self::pick(rpm, deb, |cmd| which(cmd).is_some())
+    }
+
+    fn program(self) -> &'static str {
+        match self {
+            Self::Dnf => "dnf",
+            Self::Zypper => "zypper",
+            Self::Apt => "apt-get",
+        }
+    }
+
+    fn rpm(self) -> bool {
+        !matches!(self, Self::Apt)
+    }
+
+    fn install_args(self, file: &Path) -> Vec<String> {
+        let file = file.to_string_lossy().into_owned();
+        match self {
+            Self::Dnf | Self::Apt => vec!["install".into(), "-y".into(), file],
+            // Release packages are usually not signed.
+            Self::Zypper => vec![
+                "--non-interactive".into(),
+                "install".into(),
+                "--allow-unsigned-rpm".into(),
+                file,
+            ],
+        }
+    }
+
+    fn remove_args(self, package: &str) -> Vec<String> {
+        match self {
+            Self::Dnf | Self::Apt => vec!["remove".into(), "-y".into(), package.into()],
+            Self::Zypper => vec!["--non-interactive".into(), "remove".into(), package.into()],
+        }
+    }
+
+    async fn installed(self, package: &str) -> bool {
+        if self.rpm() {
+            Command::new("rpm")
+                .args(["-q", "--quiet", package])
+                .status()
+                .await
+                .is_ok_and(|s| s.success())
+        } else {
+            // A removed package can leave its configuration: "deinstall ok config-files".
+            Command::new("dpkg-query")
+                .args(["-W", "-f=${Status}", package])
+                .output()
+                .await
+                .is_ok_and(|o| o.status.success() && o.stdout.ends_with(b" installed"))
+        }
+    }
+
+    /// Name of the package in a package file.
+    async fn package_name(self, file: &Path) -> Result<String, String> {
+        let mut cmd = if self.rpm() {
+            let mut c = Command::new("rpm");
+            c.args(["-qp", "--qf", "%{NAME}"]).arg(file);
+            c
+        } else {
+            let mut c = Command::new("dpkg-deb");
+            c.arg("-f").arg(file).arg("Package");
+            c
+        };
+        let out = cmd
+            .output()
+            .await
+            .map_err(|e| format!("could not read the package: {e}"))?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// Runs the package manager as root. pkexec asks for the password.
+    async fn run_privileged(self, args: Vec<String>) -> Result<(), String> {
+        let pkexec = which("pkexec").ok_or("pkexec is not installed")?;
+        let program =
+            which(self.program()).ok_or_else(|| format!("{} is missing", self.program()))?;
+        let out = Command::new(pkexec)
+            .arg(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .await
+            .map_err(|e| format!("could not run pkexec: {e}"))?;
+        match out.status.code() {
+            Some(0) => Ok(()),
+            Some(126) => Err("the password prompt was cancelled".into()),
+            Some(127) => Err("not authorized to install packages".into()),
+            _ => {
+                let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                Err(if err.is_empty() {
+                    String::from_utf8_lossy(&out.stdout).trim().to_string()
+                } else {
+                    err
+                })
+            }
+        }
+    }
+}
+
+/// Downloads the package for this distribution from the latest release and
+/// installs it with the package manager.
+async fn install_system_package<R: Runtime>(
+    app: &AppHandle<R>,
+    tools_dir: &Path,
+    entry: &Entry,
+) -> Result<Installed, String> {
+    let (
+        Source::SystemPackage {
+            package,
+            rpm,
+            deb,
+            command,
+        },
+        Some(repo),
+    ) = (&entry.source, &entry.repo)
+    else {
+        return Err(format!("{} is not a system package", entry.id));
+    };
+    let id = entry.id.as_str();
+    let pm = PackageManager::detect(rpm.is_some(), deb.is_some()).ok_or_else(|| {
+        format!(
+            "{} offers no package for this distribution (dnf, zypper or apt)",
+            entry.name
+        )
+    })?;
+    let pattern = if pm.rpm() { rpm } else { deb };
+    let staging = tools_dir.join(format!(".{id}.new"));
+    let result = async {
+        let (tag, file) =
+            download_release(app, &staging, id, repo, pattern.as_deref().unwrap()).await?;
+        // Removal later uses the name from the workshop entry, so it must be
+        // the package installed now.
+        let name = pm.package_name(&file).await?;
+        if name != *package {
+            return Err(format!(
+                "the release contains the package {name:?} instead of {package:?}"
+            ));
+        }
+        progress(app, stage(id, "package", None));
+        pm.run_privileged(pm.install_args(&file)).await?;
+        if !Path::new(command).is_file() {
+            return Err(format!("the package does not provide {command}"));
+        }
+        let dir = tools_dir.join(id);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let inst = Installed {
+            entry: entry.clone(),
+            version: Some(tag),
+            root: None,
+            detected_run: None,
+        };
+        write_record(&dir, &inst)?;
+        Ok(inst)
+    }
+    .await;
+    let _ = std::fs::remove_dir_all(&staging);
+    result
+}
+
+/// Removes a system package unless it is already gone.
+async fn remove_system_package(package: &str, rpm: bool, deb: bool) -> Result<(), String> {
+    let Some(pm) = PackageManager::detect(rpm, deb) else {
+        return Ok(());
+    };
+    if !pm.installed(package).await {
+        return Ok(());
+    }
+    pm.run_privileged(pm.remove_args(package)).await
 }
 
 async fn install_github<R: Runtime>(
@@ -700,6 +956,12 @@ pub async fn uninstall(tools_dir: &Path, inst: &Installed) -> Result<(), String>
         )
         .await?;
     }
+    if let Source::SystemPackage {
+        package, rpm, deb, ..
+    } = &inst.entry.source
+    {
+        remove_system_package(package, rpm.is_some(), deb.is_some()).await?;
+    }
     // For local tools only the link is removed, never the folder itself.
     std::fs::remove_dir_all(tools_dir.join(inst.id())).map_err(|e| e.to_string())
 }
@@ -720,6 +982,18 @@ pub fn launch_cmd(tools_dir: &Path, inst: &Installed) -> Result<LaunchCmd, Strin
             cwd: None,
             flatpak: true,
         }),
+        Source::SystemPackage { command, .. } => {
+            let exe = PathBuf::from(command);
+            if !exe.is_file() {
+                return Err(format!("{command} is missing; install the tool again"));
+            }
+            Ok(LaunchCmd {
+                program: exe,
+                args: vec![],
+                cwd: None,
+                flatpak: false,
+            })
+        }
         _ => {
             let root = inst.root_dir(tools_dir).ok_or("the tool has no folder")?;
             let manifest = inst.manifest(tools_dir);
@@ -760,10 +1034,85 @@ pub fn launch(tools_dir: &Path, inst: &Installed) -> Result<(), String> {
     Ok(())
 }
 
+/// The program of a tool that tuxhub only starts and stops (`embed = false`).
+pub fn app_program(tools_dir: &Path, inst: &Installed) -> Option<PathBuf> {
+    if inst.manifest(tools_dir).embed != Some(false) {
+        return None;
+    }
+    launch_cmd(tools_dir, inst)
+        .ok()
+        .filter(|lc| !lc.flatpak)
+        .map(|lc| lc.program)
+}
+
+/// Whether a tool that tuxhub only starts and stops is running, also when it
+/// was started outside tuxhub.
+pub fn app_running(tools_dir: &Path, inst: &Installed) -> bool {
+    app_program(tools_dir, inst).is_some_and(|p| !processes(&p).is_empty())
+}
+
+/// Processes of the current user that run `program`. The processes of other
+/// users cannot be read and are left out.
+pub fn processes(program: &Path) -> Vec<u32> {
+    let program = program
+        .canonicalize()
+        .unwrap_or_else(|_| program.to_path_buf());
+    let Ok(rd) = std::fs::read_dir("/proc") else {
+        return vec![];
+    };
+    rd.flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|pid| {
+            std::fs::read_link(format!("/proc/{pid}/exe")).is_ok_and(|exe| runs(&exe, &program))
+        })
+        .collect()
+}
+
+/// Whether `exe`, the target of `/proc/<pid>/exe`, is `program`. When an
+/// update replaced the file, the kernel appends " (deleted)".
+fn runs(exe: &Path, program: &Path) -> bool {
+    exe == program
+        || exe
+            .to_str()
+            .and_then(|s| s.strip_suffix(" (deleted)"))
+            .is_some_and(|s| Path::new(s) == program)
+}
+
+/// Ends the processes that run `program`: SIGTERM first, SIGKILL for those
+/// still running after three seconds.
+pub async fn quit(program: &Path) -> Result<(), String> {
+    let mut left = processes(program);
+    if left.is_empty() {
+        return Ok(());
+    }
+    signal("TERM", &left).await?;
+    for _ in 0..30 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let running = processes(program);
+        left.retain(|pid| running.contains(pid));
+        if left.is_empty() {
+            return Ok(());
+        }
+    }
+    signal("KILL", &left).await
+}
+
+async fn signal(name: &str, pids: &[u32]) -> Result<(), String> {
+    // A process may exit in between, so the exit status does not matter.
+    Command::new("kill")
+        .arg(format!("-{name}"))
+        .args(pids.iter().map(u32::to_string))
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("could not run kill: {e}"))
+}
+
 /// Returns the latest release tag if it differs from the installed one.
 pub async fn check_update(inst: &Installed) -> Result<Option<String>, String> {
     let updatable = match &inst.entry.source {
-        Source::GithubRelease { .. } => true,
+        Source::GithubRelease { .. } | Source::SystemPackage { .. } => true,
         Source::External { asset, user, .. } => *user && asset.is_some(),
         _ => false,
     };
@@ -875,6 +1224,179 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn system_package(source: Value) -> Entry {
+        serde_json::from_value(serde_json::json!({
+            "id": "clock",
+            "name": "Clock",
+            "repo": "owner/clock",
+            "source": source,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn validates_system_packages() {
+        let ok = system_package(serde_json::json!({
+            "type": "system-package",
+            "package": "clock",
+            "rpm": "*.x86_64.rpm",
+            "deb": "*_amd64.deb",
+            "command": "/usr/bin/clock",
+        }));
+        ok.validate().unwrap();
+
+        let mut no_repo = ok.clone();
+        no_repo.repo = None;
+        assert!(no_repo.validate().is_err());
+
+        let bad = |package: &str, rpm: Option<&str>, command: &str| {
+            system_package(serde_json::json!({
+                "type": "system-package",
+                "package": package,
+                "rpm": rpm,
+                "command": command,
+            }))
+        };
+        for e in [
+            bad("clock", None, "/usr/bin/clock"),
+            bad("-clock", Some("*.rpm"), "/usr/bin/clock"),
+            bad("clock x", Some("*.rpm"), "/usr/bin/clock"),
+            bad("clock", Some("*.rpm"), "usr/bin/clock"),
+            bad("clock", Some("*.rpm"), "/usr/bin/../clock"),
+        ] {
+            assert!(e.validate().is_err(), "{:?}", e.source);
+        }
+    }
+
+    #[test]
+    fn picks_a_package_manager_for_the_available_packages() {
+        use PackageManager::*;
+        let only = |cmds: &'static [&'static str]| move |c: &str| cmds.contains(&c);
+        assert_eq!(
+            PackageManager::pick(true, true, only(&["dnf", "apt-get"])),
+            Some(Dnf)
+        );
+        assert_eq!(
+            PackageManager::pick(true, true, only(&["zypper"])),
+            Some(Zypper)
+        );
+        assert_eq!(
+            PackageManager::pick(true, true, only(&["apt-get"])),
+            Some(Apt)
+        );
+        // Only a package of the other family: nothing fits.
+        assert_eq!(PackageManager::pick(true, false, only(&["apt-get"])), None);
+        assert_eq!(PackageManager::pick(false, true, only(&["dnf"])), None);
+        assert_eq!(PackageManager::pick(true, true, only(&[])), None);
+    }
+
+    #[test]
+    fn package_manager_commands() {
+        use PackageManager::*;
+        let file = Path::new("/data/clock.pkg");
+        assert_eq!(Dnf.install_args(file), ["install", "-y", "/data/clock.pkg"]);
+        assert_eq!(
+            Zypper.install_args(file),
+            [
+                "--non-interactive",
+                "install",
+                "--allow-unsigned-rpm",
+                "/data/clock.pkg"
+            ]
+        );
+        // apt-get treats the argument as a file only with a path.
+        assert_eq!(Apt.install_args(file), ["install", "-y", "/data/clock.pkg"]);
+        assert_eq!(Dnf.remove_args("clock"), ["remove", "-y", "clock"]);
+        assert_eq!(
+            Zypper.remove_args("clock"),
+            ["--non-interactive", "remove", "clock"]
+        );
+        assert_eq!(Apt.remove_args("clock"), ["remove", "-y", "clock"]);
+    }
+
+    #[test]
+    fn system_packages_launch_their_command() {
+        let entry = system_package(serde_json::json!({
+            "type": "system-package",
+            "package": "clock",
+            "deb": "*.deb",
+            "command": "/bin/sh",
+        }));
+        let inst = Installed {
+            entry,
+            version: None,
+            root: None,
+            detected_run: None,
+        };
+        assert!(inst.root_dir(Path::new("/tools")).is_none());
+        let lc = launch_cmd(Path::new("/tools"), &inst).unwrap();
+        assert_eq!(lc.program, PathBuf::from("/bin/sh"));
+        assert!(!lc.flatpak);
+    }
+
+    /// A copy of `sleep`, so the test has an executable of its own.
+    fn fake_app(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("tuxhub-app-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let app = dir.join(name);
+        let sleep = ["/usr/bin/sleep", "/bin/sleep"]
+            .into_iter()
+            .find(|p| Path::new(p).is_file())
+            .expect("sleep is installed");
+        std::fs::copy(sleep, &app).unwrap();
+        app
+    }
+
+    async fn wait_for(app: &Path, pid: u32) {
+        for _ in 0..100 {
+            if processes(app).contains(&pid) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("process {pid} does not run {}", app.display());
+    }
+
+    #[tokio::test]
+    async fn finds_and_quits_running_applications() {
+        use std::os::unix::process::ExitStatusExt;
+        let app = fake_app("app");
+        let mut child = std::process::Command::new(&app).arg("30").spawn().unwrap();
+        let pid = child.id();
+        wait_for(&app, pid).await;
+
+        // An update replaces the file while the old version keeps running.
+        std::fs::remove_file(&app).unwrap();
+        assert!(processes(&app).contains(&pid));
+
+        quit(&app).await.unwrap();
+        assert!(!processes(&app).contains(&pid));
+        assert_eq!(child.wait().unwrap().signal(), Some(15));
+        let _ = std::fs::remove_dir_all(app.parent().unwrap());
+    }
+
+    #[tokio::test]
+    async fn kills_applications_that_ignore_sigterm() {
+        use std::os::unix::process::ExitStatusExt;
+        let app = fake_app("stubborn");
+        // An ignored signal stays ignored across exec.
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "trap '' TERM; exec \"$0\" 30"])
+            .arg(&app)
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        wait_for(&app, pid).await;
+
+        quit(&app).await.unwrap();
+        assert_eq!(child.wait().unwrap().signal(), Some(9));
+        let _ = std::fs::remove_dir_all(app.parent().unwrap());
     }
 
     #[test]

@@ -37,7 +37,7 @@ pub struct EmbedInfo {
     pub url: String,
 }
 
-fn which(cmd: &str) -> Option<PathBuf> {
+pub(crate) fn which(cmd: &str) -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|p| {
         std::env::split_paths(&p)
             .map(|d| d.join(cmd))
@@ -156,6 +156,9 @@ pub async fn start<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<EmbedInfo
     }
 
     let inst = tools::load(&hub.tools_dir, id)?;
+    if inst.manifest(&hub.tools_dir).embed == Some(false) {
+        return Err(format!("{} cannot run inside tuxhub", inst.entry.name));
+    }
     let lc = tools::launch_cmd(&hub.tools_dir, &inst)?;
     let base = hub
         .tools_dir

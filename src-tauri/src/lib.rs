@@ -289,6 +289,9 @@ struct ToolView {
     manifest: Manifest,
     level: u8,
     running: bool,
+    /// The application of a tool that tuxhub only starts and stops
+    /// (`embed = false`) is running.
+    app_running: bool,
     can_launch: bool,
     /// Folder of the tool on disk (not for Flatpaks)
     path: Option<String>,
@@ -302,10 +305,14 @@ async fn tool_list(app: AppHandle) -> Vec<ToolView> {
         let manifest = inst.manifest(&hub.tools_dir);
         out.push(ToolView {
             running: hub.runtime.is_running(inst.id()).await,
+            app_running: tools::app_running(&hub.tools_dir, &inst),
             level: manifest.level(),
             can_launch: manifest.run.is_some()
                 || inst.detected_run.is_some()
-                || matches!(inst.entry.source, Source::Flatpak { .. }),
+                || matches!(
+                    inst.entry.source,
+                    Source::Flatpak { .. } | Source::SystemPackage { .. }
+                ),
             path: inst
                 .root_dir(&hub.tools_dir)
                 .map(|p| p.to_string_lossy().into_owned()),
@@ -320,7 +327,31 @@ async fn tool_list(app: AppHandle) -> Vec<ToolView> {
 #[tauri::command]
 fn tool_launch(app: AppHandle, id: String) -> Result<(), String> {
     let hub = app.state::<Hub>();
-    tools::launch(&hub.tools_dir, &tools::load(&hub.tools_dir, &id)?)
+    let inst = tools::load(&hub.tools_dir, &id)?;
+    // An application that tuxhub only starts and stops runs once.
+    if tools::app_running(&hub.tools_dir, &inst) {
+        return Ok(());
+    }
+    tools::launch(&hub.tools_dir, &inst)
+}
+
+#[tauri::command]
+fn tool_app_running(app: AppHandle, id: String) -> Result<bool, String> {
+    let hub = app.state::<Hub>();
+    Ok(tools::app_running(
+        &hub.tools_dir,
+        &tools::load(&hub.tools_dir, &id)?,
+    ))
+}
+
+/// Quits the application of a tool that tuxhub only starts and stops.
+#[tauri::command]
+async fn tool_quit(app: AppHandle, id: String) -> Result<(), String> {
+    let hub = app.state::<Hub>();
+    let inst = tools::load(&hub.tools_dir, &id)?;
+    let program = tools::app_program(&hub.tools_dir, &inst)
+        .ok_or_else(|| format!("{id} is not started and stopped by tuxhub"))?;
+    tools::quit(&program).await
 }
 
 #[tauri::command]
@@ -329,6 +360,9 @@ async fn tool_uninstall(app: AppHandle, id: String) -> Result<(), String> {
     let inst = tools::load(&hub.tools_dir, &id)?;
     hub.runtime.stop(&id).await;
     embed::stop(&app, &id).await;
+    if let Some(program) = tools::app_program(&hub.tools_dir, &inst) {
+        tools::quit(&program).await?;
+    }
     tools::uninstall(&hub.tools_dir, &inst).await?;
     let _ = std::fs::remove_file(hub.settings_path(&id));
     let _ = std::fs::remove_file(hub.dyn_shortcuts_path(&id));
@@ -657,6 +691,8 @@ pub fn run() {
             tool_install,
             tool_list,
             tool_launch,
+            tool_app_running,
+            tool_quit,
             tool_uninstall,
             tool_check_update,
             tool_link_local,

@@ -7,7 +7,7 @@ without any changes to its repository.
 
 | Level | The tool provides | tuxhub provides |
 |---|---|---|
-| 0 | A release (AppImage, binary or archive) or a Flatpak | Installation, updates, launching in its own window or inside tuxhub |
+| 0 | A release (AppImage, binary, archive or distribution package) or a Flatpak | Installation, updates, launching in its own window or inside tuxhub |
 | 1 | A local web interface (`web_url`) | Embedding of the web interface |
 | 2 | A `tuxhub.toml` manifest and optionally a JSON-RPC process | Settings, actions, global hotkeys, status display and a custom interface |
 
@@ -23,6 +23,12 @@ Supported asset formats:
 
 If an archive contains exactly one top-level folder, that folder is the tool
 root. A `tuxhub.toml` is read from the tool root.
+
+Tools released only as distribution packages (`.rpm`, `.deb`) are installed
+system-wide with the package manager of the system: dnf, zypper or apt.
+pkexec asks for the password. Updates install the package of the newer
+release, and removal removes the package. Such a tool has no tool root, so
+its manifest comes from the workshop entry.
 
 Release binaries should run on older distributions. Building on Ubuntu 22.04
 (glibc 2.35) or a similar baseline is recommended.
@@ -43,6 +49,8 @@ notice = "Text shown above the tool's interface, for example a usage notice."
 [run]                        # launches the tool in its own window
 command = "example-tool"     # relative to the tool root
 args = []
+
+embed = false                # level 0: never run inside tuxhub, only start and stop
 
 web_url = "http://127.0.0.1:8080/"   # level 1: existing local web interface
 
@@ -99,6 +107,12 @@ deletes the tool folder.
 If a manifest exists but has no `run` section, tuxhub treats the tool as
 operated exclusively through tuxhub and does not offer to launch it in a
 window.
+
+`embed = false` is meant for overlays and other windows that belong on the
+desktop. The tool page then only starts and stops the application. tuxhub
+recognizes the running application by its executable, so it also stops an
+instance that was started outside tuxhub; it ends the process with SIGTERM.
+The application keeps running when tuxhub exits.
 
 Settings are stored by tuxhub and sent to the RPC process with the
 `configure` method. When a tool provides `ui`, tuxhub shows that page instead
@@ -232,11 +246,25 @@ Workshop entries live in [`registry/index.json`](../registry/index.json):
 | Field | Notes |
 |---|---|
 | `id` | Lowercase letters, digits, `-`, `_` and `.`; at most 64 characters. |
-| `source` | `{"type": "github-release", "asset": "<pattern>"}` or `{"type": "flatpak", "flatpak_id": "<app id>"}` |
+| `source` | `{"type": "github-release", "asset": "<pattern>"}`, `{"type": "flatpak", "flatpak_id": "<app id>"}` or a system package (see below) |
 | `category` | `input`, `compatibility`, `overlay`, `launcher` or `creative` |
 | `icon` | HTTPS URL of a square image, at least 128 pixels |
 | `manifest` | Optional. Replaces the tool's own `tuxhub.toml`, so third-party tools can be integrated without changes to their repository. |
 | `translations` | Optional localized descriptions by language code |
+
+A system package names the package, an asset pattern per package format and
+the absolute path of the program it installs. tuxhub checks that the
+downloaded package has this name before it installs it:
+
+```json
+"source": {
+  "type": "system-package",
+  "package": "example-tool",
+  "rpm": "*.x86_64.rpm",
+  "deb": "*_amd64.deb",
+  "command": "/usr/bin/example-tool"
+}
+```
 
 ## Developing locally
 
