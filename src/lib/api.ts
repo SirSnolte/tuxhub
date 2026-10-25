@@ -128,6 +128,9 @@ export type LiveEvent =
   | { tool: string; method: "changed"; params: { values: Record<string, unknown> } }
   | { tool: string; method: "schema-changed"; params: Record<string, never> }
   | { tool: string; method: "closed"; params: LiveError };
+/** Any notification of a live application; besides the ones above, the
+ * application's own ones for its interface in tuxhub. */
+export type LiveNote = { tool: string; method: string; params: unknown };
 
 /** Tool-ID → neue Version */
 export type Updates = Record<string, string>;

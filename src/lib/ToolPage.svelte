@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { AppWindow, CircleStop, ExternalLink, RefreshCw, RotateCw, Trash, Unlink, X } from "@lucide/svelte";
-  import { api, describe, errText, type ShortcutStatus, type Tool } from "./api";
-  import { hub, onToolEvent, progressText, toast } from "./state.svelte";
+  import { api, describe, errText, type LiveNote, type ShortcutStatus, type Tool } from "./api";
+  import { hub, onLiveEvent, onToolEvent, progressText, toast } from "./state.svelte";
   import { i18n, t, type Key } from "./i18n.svelte";
   import Readme from "./Readme.svelte";
   import SettingsForm from "./SettingsForm.svelte";
@@ -190,7 +190,15 @@
   const off = onToolEvent((ev) => {
     if (ev.addon === id) post({ event: ev.method, params: ev.params });
   });
-  onDestroy(off);
+  // The page of a live tool hears its service through the live interface.
+  const offLive = onLiveEvent((ev) => {
+    const note = ev as LiveNote;
+    if (liveApp && note.tool === id) post({ event: note.method, params: note.params });
+  });
+  onDestroy(() => {
+    off();
+    offLive();
+  });
 </script>
 
 <svelte:window {onmessage} />
@@ -255,7 +263,7 @@
     <p class="status">{String(status.text)}</p>
   {/if}
 
-  {#if liveApp}
+  {#if liveApp && !m.ui}
     <LaunchPanel {tool} {onchanged} bind:running={liveRunning} />
     {#if liveRunning}
       {#key id}
@@ -269,6 +277,8 @@
       allow-same-origin keeps that origin: with an opaque origin WebKitGTK does
       not load the page's scripts and stylesheets from the tool: scheme.
       The page background is transparent, so its cards sit on the tuxhub page.
+      For a live tool, `call` and `action` go over its live service, which
+      tuxhub starts when needed.
     -->
     <iframe
       bind:this={frame}
