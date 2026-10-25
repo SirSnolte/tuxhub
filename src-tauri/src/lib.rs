@@ -26,6 +26,8 @@ const WORKSHOP_BUNDLED: &str = include_str!("../../registry/index.json");
 const BRIDGE_JS: &str = include_str!("bridge.js");
 /// Time a live service started by tuxhub has to open its socket.
 const LIVE_START_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+/// Time a service started elsewhere gets after tuxhub's own start ended.
+const STARTED_ELSEWHERE_WAIT: std::time::Duration = std::time::Duration::from_millis(1000);
 /// Time a live application has to quit before it is ended with SIGTERM.
 const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 
@@ -242,6 +244,11 @@ async fn action_on(hub: &Hub, id: &str, action: &str) -> Result<Value, String> {
 /// Request of a tool page to its live service.
 async fn call_on(hub: &Hub, id: &str, method: &str, params: Value) -> Result<Value, String> {
     live::bridge_method(method).map_err(|e| e.message)?;
+    // Actions follow the same rules as from `tuxhub.action`.
+    if method == "action" {
+        let action = params.get("id").and_then(Value::as_str).unwrap_or_default();
+        return action_on(hub, id, action).await;
+    }
     ensure_live(hub, id).await?;
     hub.live
         .call(id, method, params)
@@ -298,12 +305,18 @@ async fn ensure_live_within(hub: &Hub, id: &str, wait: std::time::Duration) -> R
         .spawn()
         .map_err(|e| format!("{name} does not start: {e}"))?;
     let deadline = tokio::time::Instant::now() + wait;
+    let mut exited = None;
     let result = loop {
         if hub.live.running(id).await {
             break Ok(());
         }
-        // A service that ended without listening will not come.
-        if matches!(child.try_wait(), Ok(Some(_))) && !hub.live.running(id).await {
+        // A service that ended without listening will not come, unless
+        // another instance (own window, login) is just starting: it held the
+        // lock, so give it a moment to open the socket.
+        if exited.is_none() && matches!(child.try_wait(), Ok(Some(_))) {
+            exited = Some(tokio::time::Instant::now());
+        }
+        if exited.is_some_and(|t| t.elapsed() >= STARTED_ELSEWHERE_WAIT) {
             break Err(format!("{name} does not start"));
         }
         if tokio::time::Instant::now() >= deadline {
@@ -1409,5 +1422,33 @@ while True:
             "livedemo",
             &json!([{ "id": "macro:a", "label": "A", "shortcut": "F7" }])
         ));
+    }
+
+    /// A start that ends at once because another instance is starting is not
+    /// an error when that instance opens the socket shortly after.
+    #[tokio::test]
+    async fn ensure_live_waits_for_an_instance_started_elsewhere() {
+        let script = format!(
+            "#!/bin/sh\n(sleep 0.4; exec python3 -c '{}' \"$@\") >/dev/null 2>&1 &\nexit 0\n",
+            "import sys,os;exec(open(os.path.join(os.path.dirname(sys.argv[0]),\"svc.py\")).read())"
+        );
+        let (hub, base) = hub_with_service("elsewhere", &script);
+        std::fs::write(base.join("tool/svc.py"), TEST_SERVICE).unwrap();
+        let r = ensure_live(&hub, "livedemo").await;
+        stop_services(&base);
+        r.unwrap();
+    }
+
+    /// `call("action")` from a tool page only runs declared actions.
+    #[tokio::test]
+    async fn bridge_action_call_is_checked() {
+        let (hub, base) = hub_with_service("bridge-action", TEST_SERVICE);
+        let ok = call_on(&hub, "livedemo", "action", json!({ "id": "toggle" })).await;
+        let refused = call_on(&hub, "livedemo", "action", json!({ "id": "setup" })).await;
+        let log = service_log(&base);
+        stop_services(&base);
+        assert_eq!(ok.unwrap(), json!(true));
+        assert!(refused.is_err());
+        assert!(!log.iter().any(|l| l.contains("setup")), "{log:?}");
     }
 }
