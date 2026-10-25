@@ -1,0 +1,56 @@
+{
+  "actions": [
+    {
+      "id": "toggle",
+      "label": "Pause or resume muting"
+    }
+  ],
+  "sections": [
+    {
+      "fields": [
+        {
+          "default": true,
+          "help": "Pause or resume muting",
+          "key": "enabled",
+          "label": "Enabled",
+          "type": "toggle"
+        },
+        {
+          "default": "hold",
+          "key": "mode",
+          "label": "Mode",
+          "options": [
+            {
+              "label": "Muted while the key is held",
+              "value": "hold"
+            },
+            {
+              "label": "Each press switches",
+              "value": "toggle"
+            }
+          ],
+          "type": "select"
+        },
+        {
+          "default": 150,
+          "help": "Time the voice chat stays muted after the key is released",
+          "key": "release_delay_ms",
+          "label": "Release delay",
+          "max": 2000,
+          "min": 0,
+          "step": 10,
+          "type": "number",
+          "unit": "ms"
+        },
+        {
+          "default": true,
+          "key": "start_at_login",
+          "label": "Start at login",
+          "type": "toggle"
+        }
+      ],
+      "id": "general",
+      "label": "General"
+    }
+  ]
+}

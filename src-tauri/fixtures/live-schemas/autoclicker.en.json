@@ -1,0 +1,120 @@
+{
+  "actions": [
+    {
+      "id": "toggle",
+      "label": "Start or stop clicking"
+    },
+    {
+      "id": "panic",
+      "label": "Stop everything"
+    },
+    {
+      "id": "setup",
+      "label": "Set up input device access"
+    }
+  ],
+  "sections": [
+    {
+      "fields": [
+        {
+          "default": 100,
+          "help": "Time between two clicks",
+          "key": "interval_ms",
+          "label": "Interval",
+          "max": 60000,
+          "min": 1,
+          "step": 1,
+          "type": "number",
+          "unit": "ms"
+        },
+        {
+          "default": 0,
+          "help": "Varies the interval by up to this share",
+          "key": "jitter_pct",
+          "label": "Random variation",
+          "max": 50,
+          "min": 0,
+          "step": 1,
+          "type": "number",
+          "unit": "%"
+        },
+        {
+          "default": "left",
+          "key": "button",
+          "label": "Mouse button",
+          "options": [
+            {
+              "label": "Left",
+              "value": "left"
+            },
+            {
+              "label": "Right",
+              "value": "right"
+            },
+            {
+              "label": "Middle",
+              "value": "middle"
+            }
+          ],
+          "type": "select"
+        },
+        {
+          "default": "click",
+          "key": "mode",
+          "label": "Mode",
+          "options": [
+            {
+              "label": "Single clicks",
+              "value": "click"
+            },
+            {
+              "label": "Double clicks",
+              "value": "double"
+            },
+            {
+              "label": "Hold the button",
+              "value": "hold"
+            }
+          ],
+          "type": "select"
+        },
+        {
+          "default": 0,
+          "help": "0 means until stopped",
+          "key": "limit",
+          "label": "Number of clicks",
+          "max": 1000000,
+          "min": 0,
+          "step": 1,
+          "type": "number"
+        },
+        {
+          "default": 3,
+          "help": "Time to move the pointer before clicking starts",
+          "key": "start_delay_s",
+          "label": "Start delay",
+          "max": 30,
+          "min": 0,
+          "step": 1,
+          "type": "number",
+          "unit": "s"
+        }
+      ],
+      "id": "clicking",
+      "label": "Clicking"
+    },
+    {
+      "fields": [
+        {
+          "default": true,
+          "help": "Otherwise only keys, clicks and the wheel",
+          "key": "record_moves",
+          "label": "Record mouse movements",
+          "type": "toggle"
+        }
+      ],
+      "id": "macros",
+      "label": "Macros"
+    }
+  ]
+}

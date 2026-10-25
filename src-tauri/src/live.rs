@@ -2051,4 +2051,45 @@ mod conn_tests {
         }
         assert!(bridge_method(&"a".repeat(64)).is_ok());
     }
+
+    /// Edge case 7: the schemas of the own tools, as they answer `schema`,
+    /// pass the checks without left-out entries.
+    #[test]
+    fn schemas_of_the_own_tools_are_accepted_completely() {
+        for (name, text) in [
+            (
+                "autoclicker.de",
+                include_str!("../fixtures/live-schemas/autoclicker.de.json"),
+            ),
+            (
+                "autoclicker.en",
+                include_str!("../fixtures/live-schemas/autoclicker.en.json"),
+            ),
+            (
+                "push-to-mute.de",
+                include_str!("../fixtures/live-schemas/push-to-mute.de.json"),
+            ),
+            (
+                "push-to-mute.en",
+                include_str!("../fixtures/live-schemas/push-to-mute.en.json"),
+            ),
+        ] {
+            let raw: Value = serde_json::from_str(text).unwrap();
+            let schema = parse_schema(&raw).unwrap();
+            assert!(schema.invalid.is_empty(), "{name}: {:?}", schema.invalid);
+            let fields: usize = schema.sections.iter().map(|s| s.fields.len()).sum();
+            let raw_fields: usize = raw["sections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s["fields"].as_array().unwrap().len())
+                .sum();
+            assert_eq!(fields, raw_fields, "{name}");
+            assert_eq!(
+                schema.actions.len(),
+                raw["actions"].as_array().unwrap().len(),
+                "{name}"
+            );
+        }
+    }
 }

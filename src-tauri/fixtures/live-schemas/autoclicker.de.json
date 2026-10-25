@@ -1,0 +1,120 @@
+{
+  "actions": [
+    {
+      "id": "toggle",
+      "label": "Klicken starten oder stoppen"
+    },
+    {
+      "id": "panic",
+      "label": "Alles stoppen"
+    },
+    {
+      "id": "setup",
+      "label": "Zugriff auf Eingabegeräte einrichten"
+    }
+  ],
+  "sections": [
+    {
+      "fields": [
+        {
+          "default": 100,
+          "help": "Zeit zwischen zwei Klicks",
+          "key": "interval_ms",
+          "label": "Intervall",
+          "max": 60000,
+          "min": 1,
+          "step": 1,
+          "type": "number",
+          "unit": "ms"
+        },
+        {
+          "default": 0,
+          "help": "Ändert das Intervall um bis zu diesen Anteil",
+          "key": "jitter_pct",
+          "label": "Zufällige Abweichung",
+          "max": 50,
+          "min": 0,
+          "step": 1,
+          "type": "number",
+          "unit": "%"
+        },
+        {
+          "default": "left",
+          "key": "button",
+          "label": "Maustaste",
+          "options": [
+            {
+              "label": "Links",
+              "value": "left"
+            },
+            {
+              "label": "Rechts",
+              "value": "right"
+            },
+            {
+              "label": "Mitte",
+              "value": "middle"
+            }
+          ],
+          "type": "select"
+        },
+        {
+          "default": "click",
+          "key": "mode",
+          "label": "Modus",
+          "options": [
+            {
+              "label": "Einzelklicks",
+              "value": "click"
+            },
+            {
+              "label": "Doppelklicks",
+              "value": "double"
+            },
+            {
+              "label": "Taste gedrückt halten",
+              "value": "hold"
+            }
+          ],
+          "type": "select"
+        },
+        {
+          "default": 0,
+          "help": "0 heißt bis zum Stoppen",
+          "key": "limit",
+          "label": "Anzahl der Klicks",
+          "max": 1000000,
+          "min": 0,
+          "step": 1,
+          "type": "number"
+        },
+        {
+          "default": 3,
+          "help": "Zeit, um den Zeiger vor dem Klicken zu bewegen",
+          "key": "start_delay_s",
+          "label": "Startverzögerung",
+          "max": 30,
+          "min": 0,
+          "step": 1,
+          "type": "number",
+          "unit": "s"
+        }
+      ],
+      "id": "clicking",
+      "label": "Klicken"
+    },
+    {
+      "fields": [
+        {
+          "default": true,
+          "help": "Sonst nur Tasten, Klicks und das Mausrad",
+          "key": "record_moves",
+          "label": "Mausbewegungen aufnehmen",
+          "type": "toggle"
+        }
+      ],
+      "id": "macros",
+      "label": "Makros"
+    }
+  ]
+}

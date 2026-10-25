@@ -1,0 +1,56 @@
+{
+  "actions": [
+    {
+      "id": "toggle",
+      "label": "Stummschalten pausieren oder fortsetzen"
+    }
+  ],
+  "sections": [
+    {
+      "fields": [
+        {
+          "default": true,
+          "help": "Stummschalten pausieren oder fortsetzen",
+          "key": "enabled",
+          "label": "Aktiv",
+          "type": "toggle"
+        },
+        {
+          "default": "hold",
+          "key": "mode",
+          "label": "Modus",
+          "options": [
+            {
+              "label": "Stumm, solange die Taste gedrückt ist",
+              "value": "hold"
+            },
+            {
+              "label": "Jeder Druck schaltet um",
+              "value": "toggle"
+            }
+          ],
+          "type": "select"
+        },
+        {
+          "default": 150,
+          "help": "So lange bleibt der Sprachchat nach dem Loslassen stumm",
+          "key": "release_delay_ms",
+          "label": "Verzögerung beim Loslassen",
+          "max": 2000,
+          "min": 0,
+          "step": 10,
+          "type": "number",
+          "unit": "ms"
+        },
+        {
+          "default": true,
+          "key": "start_at_login",
+          "label": "Bei der Anmeldung starten",
+          "type": "toggle"
+        }
+      ],
+      "id": "general",
+      "label": "Allgemein"
+    }
+  ]
+}
