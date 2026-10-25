@@ -247,14 +247,20 @@
     const v = values[f.key] ?? f.default;
     return typeof v === "string" ? v : "";
   };
+  /** Most colors of one option of a select. */
+  const swatchSlots = (f: LiveField) =>
+    f.type === "select" ? Math.max(0, ...f.options.map((o) => o.colors?.length ?? 0)) : 0;
   /** Colors of the chosen option, shown in the closed select. */
   const selectedColors = (f: LiveField) =>
     (f.type === "select" && f.options.find((o) => o.value === textValue(f))?.colors) || [];
 </script>
 
-{#snippet swatches(colors: string[])}
+<!-- `slots` keeps options with fewer colors aligned with the others. -->
+{#snippet swatches(colors: string[], slots: number)}
   <span class="swatches" aria-hidden="true">
-    {#each colors as c, i (i)}<span class="swatch" style:background={c}></span>{/each}
+    {#each { length: slots }, i (i)}
+      {#if colors[i]}<span class="swatch" style:background={colors[i]}></span>{:else}<span class="swatch empty"></span>{/if}
+    {/each}
   </span>
 {/snippet}
 
@@ -348,13 +354,13 @@
           <span slot="label">{f.label}</span>
           {#if f.help}<span slot="hint">{f.help}</span>{/if}
           {#if selectedColors(f).length}
-            <span slot="start">{@render swatches(selectedColors(f))}</span>
+            <span slot="start">{@render swatches(selectedColors(f), selectedColors(f).length)}</span>
           {/if}
           {#each f.options as o (o.value)}
             <!-- `label` keeps the closed select to the name; the list shows
                  the colors and the description as well. -->
             <wa-option value={o.value} label={o.label}>
-              {#if o.colors?.length}<span slot="start">{@render swatches(o.colors)}</span>{/if}
+              {#if swatchSlots(f)}<span slot="start">{@render swatches(o.colors ?? [], swatchSlots(f))}</span>{/if}
               <span class="option">
                 <span>{o.label}</span>
                 {#if o.description}<span class="option-description">{o.description}</span>{/if}
@@ -605,12 +611,17 @@
     border-radius: var(--wa-border-radius-s);
     border: var(--wa-border-width-s) solid var(--wa-color-neutral-border-loud);
   }
+  .swatch.empty {
+    border-color: transparent;
+  }
   .option {
     display: grid;
   }
+  /* Follows the color of the option, so it stays readable on the
+     highlighted one. */
   .option-description {
     font-size: var(--wa-font-size-s);
-    color: var(--wa-color-text-quiet);
+    opacity: 0.85;
     white-space: normal;
   }
   .slider-label {
