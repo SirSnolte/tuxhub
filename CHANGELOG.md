@@ -4,6 +4,20 @@ All notable changes to tuxhub are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Live interface (level 3): a running application describes its settings
+  and actions over the Unix socket `$XDG_RUNTIME_DIR/tuxhub/<id>.sock`, and
+  its page in tuxhub shows them with tuxhub's own components. Changes take
+  effect at once, in both directions. Manifest: `live = true`. Protocol and
+  checklist for publishers in the developer documentation.
+- `examples/live-demo`: reference application for the live interface in
+  Python, standard library only.
+- Quitting a live application sends `quit` first and ends the process only
+  when it is still running after three seconds.
+
 ## [0.4.0] - 2026-10-25
 
 ### Added
