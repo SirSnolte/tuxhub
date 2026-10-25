@@ -4,7 +4,7 @@ All notable changes to tuxhub are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [0.6.0] - unreleased
+## [0.7.0] - unreleased
 
 ### Added
 
@@ -21,6 +21,25 @@ All notable changes to tuxhub are documented in this file. The format follows
 
 - Hotkeys of live tools send `action` over the live socket instead of an
   RPC process.
+## [0.6.0] - 2026-10-25
+
+### Added
+
+- Live interface 1.1: optional additions to protocol 1 for section icons
+  and descriptions, `advanced` fields, `visible_if` conditions, and options
+  with descriptions and color swatches. `hello` lists them in `features`.
+  Applications without them keep working unchanged.
+- Live settings pages: one tab per section (the last tab is remembered), a
+  folded "Advanced" part and a reset button for fields that differ from
+  their default.
+
+### Changed
+
+- The page of a running live application shows only its settings, without
+  the start card and the README. While it is stopped, the page shows the
+  README with a Start button above it. Quit and the application's actions
+  are in the tool menu of the sidebar.
+- `examples/live-demo` 0.2.0 uses every addition of protocol 1.1.
 
 ## [0.5.0] - 2026-10-25
 
@@ -121,6 +140,7 @@ First public release.
 - System tray, autostart and single-instance behavior.
 - English and German user interface.
 
+[0.6.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.6.0
 [0.5.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.5.0
 [0.4.1]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.4.1
 [0.4.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.4.0

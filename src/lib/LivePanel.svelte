@@ -7,6 +7,7 @@
     type LiveError,
     type LiveField,
     type LiveSchema,
+    type LiveSection,
     type LiveStatus,
     type Tool,
   } from "./api";
@@ -14,13 +15,22 @@
   import { onLiveEvent, toast } from "./state.svelte";
   import { checkedOf, valueOf } from "./wa";
   import { afterStatus, delayFor, keepKnown, mergeChanged, Sender } from "./live";
+  import { differsFromDefault, fieldIndex, groupFields, iconFor, pickTab, tabsOf } from "./live-logic";
+  import { SECTION_ICONS } from "./live-icons";
+  import { RotateCcw } from "@lucide/svelte";
+
+  type Action = LiveSchema["actions"][number];
 
   // Settings of a running application with a live interface (level 3). The
   // application describes its fields and texts itself; everything it sends is
-  // shown as plain text, never as HTML.
-  let { tool, onclosed }: { tool: Tool; onclosed: () => void } = $props();
-
-  type Action = LiveSchema["actions"][number];
+  // shown as plain text, never as HTML. Its actions are offered in the tool
+  // menu of the sidebar, which runs them through `runAction`.
+  let {
+    tool,
+    onclosed,
+    actions = $bindable([]),
+    acting = $bindable(false),
+  }: { tool: Tool; onclosed: () => void; actions?: Action[]; acting?: boolean } = $props();
 
   const id = $derived(tool.entry.id);
   const name = $derived(tool.entry.name);
@@ -39,6 +49,38 @@
   let retry: ReturnType<typeof setTimeout> | undefined;
   let confirming = $state<Action | null>(null);
   let running = $state<string | null>(null);
+
+  const tabs = $derived(schema ? tabsOf(schema) : []);
+  const fields = $derived(schema ? fieldIndex(schema) : new Map<string, LiveField>());
+  /** Tab shown; remembered per tool. */
+  let activeTab = $state<string | null>(null);
+  const tabKey = $derived(`live-tab.${id}`);
+
+  function storedTab(): string | null {
+    try {
+      return localStorage.getItem(tabKey);
+    } catch {
+      return null;
+    }
+  }
+
+  function ontabshow(e: Event) {
+    if (e.target !== e.currentTarget) return;
+    const name = (e as CustomEvent<{ name: string }>).detail.name;
+    activeTab = name;
+    try {
+      localStorage.setItem(tabKey, name);
+    } catch {
+      // Without storage the first tab is shown next time.
+    }
+  }
+
+  $effect(() => {
+    actions = schema?.actions ?? [];
+  });
+  $effect(() => {
+    acting = running !== null;
+  });
 
   const sender = new Sender((key, value) => send(key, value));
   const editing = (key: string) => sender.editing(key);
@@ -98,6 +140,7 @@
       const current = await api.liveGet(tool);
       if (tool !== id) return;
       schema = next;
+      activeTab = pickTab(tabsOf(next), activeTab ?? storedTab());
       confirmed = { ...current };
       values = mergeChanged(keepKnown(values, next), current, editing);
     } catch (e) {
@@ -132,6 +175,7 @@
   });
 
   onDestroy(() => {
+    actions = [];
     off();
     sender.cancel();
     clearTimeout(retry);
@@ -172,11 +216,27 @@
     if ((errors[key] || unfinished) && !editing(key)) values[key] = confirmed[key];
   }
 
+  /** Sends the default at once; the reset button never has focus while typing. */
+  function reset(f: LiveField) {
+    values[f.key] = f.default;
+    delete errors[f.key];
+    sender.input(f.key, f.default, 0);
+  }
+
+  /** Runs an action from the tool menu, after the application's question if it has one. */
+  export function runAction(actionId: string) {
+    const a = schema?.actions.find((x) => x.id === actionId);
+    if (!a || running) return;
+    if (a.confirm) confirming = a;
+    else act(a);
+  }
+
   async function act(a: Action) {
     confirming = null;
     running = a.id;
     try {
       await api.liveAction(id, a.id);
+      toast(t("live.actionDone", { label: a.label }), "info");
     } catch (e) {
       if (isLiveError(e) && e.code === "closed") return onclosed();
       toast(errorText(e));
@@ -193,7 +253,196 @@
     const v = values[f.key] ?? f.default;
     return typeof v === "string" ? v : "";
   };
+  /** Most colors of one option of a select. */
+  const swatchSlots = (f: LiveField) =>
+    f.type === "select" ? Math.max(0, ...f.options.map((o) => o.colors?.length ?? 0)) : 0;
+  /** Colors of the chosen option, shown in the closed select. */
+  const selectedColors = (f: LiveField) =>
+    (f.type === "select" && f.options.find((o) => o.value === textValue(f))?.colors) || [];
 </script>
+
+<!-- `slots` keeps options with fewer colors aligned with the others. -->
+{#snippet swatches(colors: string[], slots: number)}
+  <span class="swatches" aria-hidden="true">
+    {#each { length: slots }, i (i)}
+      {#if colors[i]}<span class="swatch" style:background={colors[i]}></span>{:else}<span class="swatch empty"></span>{/if}
+    {/each}
+  </span>
+{/snippet}
+
+{#snippet sectionBody(section: LiveSection, heading: boolean)}
+  {@const group = groupFields(section, values, fields)}
+  <div class="section">
+    {#if section.description}<p class="muted description">{section.description}</p>{/if}
+    <wa-card>
+      {#if heading}<h3>{section.label}</h3>{/if}
+      {#if group.main.length}
+        <div class="fields">
+          {#each group.main as f (f.key)}
+            {@render fieldRow(f)}
+          {/each}
+        </div>
+      {/if}
+      {#if group.advanced.length}
+        <wa-details
+          class="advanced"
+          class:alone={!group.main.length}
+          summary={t("live.advanced")}
+          appearance="plain"
+          open={group.open}
+        >
+          <div class="fields">
+            {#each group.advanced as f (f.key)}
+              {@render fieldRow(f)}
+            {/each}
+          </div>
+        </wa-details>
+      {/if}
+    </wa-card>
+  </div>
+{/snippet}
+
+{#snippet fieldRow(f: LiveField)}
+  <div class="field">
+    <div class="control">
+      {#if f.type === "toggle"}
+        <wa-switch
+          class="setting"
+          checked={Boolean(values[f.key] ?? f.default)}
+          disabled={f.disabled}
+          onchange={(e: Event) => input(f, checkedOf(e))}
+        >
+          {f.label}
+          {#if f.help}<span slot="hint">{f.help}</span>{/if}
+        </wa-switch>
+      {:else if f.type === "number" && f.slider}
+        <wa-slider
+          min={f.min ?? 0}
+          max={f.max ?? 100}
+          step={f.step ?? 1}
+          value={numberValue(f)}
+          disabled={f.disabled}
+          oninput={(e: Event) => inputNumber(f, valueOf(e))}
+          onfocus={() => sender.focus(f.key)}
+          onblur={() => blur(f.key)}
+        >
+          <span slot="label" class="slider-label">
+            <span>{f.label}</span>
+            <span class="muted">{numberValue(f)}{f.unit ? ` ${f.unit}` : ""}</span>
+          </span>
+          {#if f.help}<span slot="hint">{f.help}</span>{/if}
+        </wa-slider>
+      {:else if f.type === "number"}
+        <wa-input
+          class="setting"
+          type="number"
+          without-spin-buttons
+          min={f.min}
+          max={f.max}
+          step={f.step ?? "any"}
+          value={String(values[f.key] ?? f.default ?? "")}
+          disabled={f.disabled}
+          oninput={(e: Event) => inputNumber(f, valueOf(e))}
+          onfocus={() => sender.focus(f.key)}
+          onblur={() => blur(f.key)}
+        >
+          <span slot="label">{f.label}</span>
+          {#if f.help}<span slot="hint">{f.help}</span>{/if}
+          {#if f.unit}<span slot="end" class="muted">{f.unit}</span>{/if}
+        </wa-input>
+      {:else if f.type === "select"}
+        <wa-select
+          class="setting"
+          value={textValue(f)}
+          disabled={f.disabled}
+          onchange={(e: Event) => input(f, valueOf(e))}
+        >
+          <span slot="label">{f.label}</span>
+          {#if f.help}<span slot="hint">{f.help}</span>{/if}
+          {#if selectedColors(f).length}
+            <span slot="start">{@render swatches(selectedColors(f), selectedColors(f).length)}</span>
+          {/if}
+          {#each f.options as o (o.value)}
+            <!-- `label` keeps the closed select to the name; the list shows
+                 the colors and the description as well. -->
+            <wa-option value={o.value} label={o.label}>
+              {#if swatchSlots(f)}<span slot="start">{@render swatches(o.colors ?? [], swatchSlots(f))}</span>{/if}
+              <span class="option">
+                <span>{o.label}</span>
+                {#if o.description}<span class="option-description">{o.description}</span>{/if}
+              </span>
+            </wa-option>
+          {/each}
+        </wa-select>
+      {:else if f.type === "text" && f.multiline}
+        <wa-textarea
+          value={textValue(f)}
+          placeholder={f.placeholder}
+          maxlength={f.max_length}
+          disabled={f.disabled}
+          resize="auto"
+          oninput={(e: Event) => input(f, valueOf(e))}
+          onfocus={() => sender.focus(f.key)}
+          onblur={() => blur(f.key)}
+        >
+          <span slot="label">{f.label}</span>
+          {#if f.help}<span slot="hint">{f.help}</span>{/if}
+        </wa-textarea>
+      {:else if f.type === "text"}
+        <wa-input
+          class="setting text"
+          value={textValue(f)}
+          placeholder={f.placeholder}
+          maxlength={f.max_length}
+          disabled={f.disabled}
+          oninput={(e: Event) => input(f, valueOf(e))}
+          onfocus={() => sender.focus(f.key)}
+          onblur={() => blur(f.key)}
+        >
+          <span slot="label">{f.label}</span>
+          {#if f.help}<span slot="hint">{f.help}</span>{/if}
+        </wa-input>
+      {:else if f.type === "color"}
+        <wa-color-picker
+          value={textValue(f)}
+          format="hex"
+          opacity={f.alpha}
+          without-format-toggle
+          disabled={f.disabled}
+          onchange={(e: Event) => input(f, valueOf(e))}
+        >
+          <span slot="label">{f.label}</span>
+          {#if f.help}<span slot="hint">{f.help}</span>{/if}
+        </wa-color-picker>
+      {:else}
+        <div class="unsupported">
+          <span>{f.label}</span>
+          <span class="muted small">{t("live.unsupported")}</span>
+        </div>
+      {/if}
+      {#if f.default !== undefined && f.type !== "unsupported"}
+        <!-- The place is kept while the value matches, so the row does not jump. -->
+        <div class="reset">
+          {#if differsFromDefault(f, values[f.key])}
+            <wa-button
+              size="s"
+              appearance="plain"
+              disabled={f.disabled}
+              title={t("live.reset", { label: f.label })}
+              onclick={() => reset(f)}
+            >
+              <RotateCcw size={16} aria-hidden="true" />
+              <span class="wa-visually-hidden">{t("live.reset", { label: f.label })}</span>
+            </wa-button>
+          {/if}
+        </div>
+      {/if}
+    </div>
+    {#if errors[f.key]}
+      <p class="field-error small" role="alert">{errors[f.key]}</p>
+    {/if}
+  </div>
+{/snippet}
 
 {#if unreachable}
   <wa-callout variant="neutral">
@@ -237,145 +486,29 @@
     </wa-callout>
   {/if}
 
-  {#if !schema.sections.some((s) => s.fields.length) && !schema.actions.length}
+  {#if !tabs.length}
     <wa-card><p class="muted">{t("live.empty", { name })}</p></wa-card>
-  {/if}
-
-  {#each schema.sections.filter((s) => s.fields.length) as section (section.id)}
-    <wa-card>
-      <h3>{section.label}</h3>
-      <div class="fields">
-        {#each section.fields as f (f.key)}
-          <div class="field">
-            {#if f.type === "toggle"}
-              <wa-switch
-                class="setting"
-                checked={Boolean(values[f.key] ?? f.default)}
-                disabled={f.disabled}
-                onchange={(e: Event) => input(f, checkedOf(e))}
-              >
-                {f.label}
-                {#if f.help}<span slot="hint">{f.help}</span>{/if}
-              </wa-switch>
-            {:else if f.type === "number" && f.slider}
-              <wa-slider
-                min={f.min ?? 0}
-                max={f.max ?? 100}
-                step={f.step ?? 1}
-                value={numberValue(f)}
-                disabled={f.disabled}
-                oninput={(e: Event) => inputNumber(f, valueOf(e))}
-                onfocus={() => sender.focus(f.key)}
-                onblur={() => blur(f.key)}
-              >
-                <span slot="label" class="slider-label">
-                  <span>{f.label}</span>
-                  <span class="muted">{numberValue(f)}{f.unit ? ` ${f.unit}` : ""}</span>
-                </span>
-                {#if f.help}<span slot="hint">{f.help}</span>{/if}
-              </wa-slider>
-            {:else if f.type === "number"}
-              <wa-input
-                class="setting"
-                type="number"
-                without-spin-buttons
-                min={f.min}
-                max={f.max}
-                step={f.step ?? "any"}
-                value={String(values[f.key] ?? f.default ?? "")}
-                disabled={f.disabled}
-                oninput={(e: Event) => inputNumber(f, valueOf(e))}
-                onfocus={() => sender.focus(f.key)}
-                onblur={() => blur(f.key)}
-              >
-                <span slot="label">{f.label}</span>
-                {#if f.help}<span slot="hint">{f.help}</span>{/if}
-                {#if f.unit}<span slot="end" class="muted">{f.unit}</span>{/if}
-              </wa-input>
-            {:else if f.type === "select"}
-              <wa-select
-                class="setting"
-                value={textValue(f)}
-                disabled={f.disabled}
-                onchange={(e: Event) => input(f, valueOf(e))}
-              >
-                <span slot="label">{f.label}</span>
-                {#if f.help}<span slot="hint">{f.help}</span>{/if}
-                {#each f.options as o (o.value)}
-                  <wa-option value={o.value}>{o.label}</wa-option>
-                {/each}
-              </wa-select>
-            {:else if f.type === "text" && f.multiline}
-              <wa-textarea
-                value={textValue(f)}
-                placeholder={f.placeholder}
-                maxlength={f.max_length}
-                disabled={f.disabled}
-                resize="auto"
-                oninput={(e: Event) => input(f, valueOf(e))}
-                onfocus={() => sender.focus(f.key)}
-                onblur={() => blur(f.key)}
-              >
-                <span slot="label">{f.label}</span>
-                {#if f.help}<span slot="hint">{f.help}</span>{/if}
-              </wa-textarea>
-            {:else if f.type === "text"}
-              <wa-input
-                class="setting text"
-                value={textValue(f)}
-                placeholder={f.placeholder}
-                maxlength={f.max_length}
-                disabled={f.disabled}
-                oninput={(e: Event) => input(f, valueOf(e))}
-                onfocus={() => sender.focus(f.key)}
-                onblur={() => blur(f.key)}
-              >
-                <span slot="label">{f.label}</span>
-                {#if f.help}<span slot="hint">{f.help}</span>{/if}
-              </wa-input>
-            {:else if f.type === "color"}
-              <wa-color-picker
-                value={textValue(f)}
-                format="hex"
-                opacity={f.alpha}
-                without-format-toggle
-                disabled={f.disabled}
-                onchange={(e: Event) => input(f, valueOf(e))}
-              >
-                <span slot="label">{f.label}</span>
-                {#if f.help}<span slot="hint">{f.help}</span>{/if}
-              </wa-color-picker>
-            {:else}
-              <div class="unsupported">
-                <span>{f.label}</span>
-                <span class="muted small">{t("live.unsupported")}</span>
-              </div>
-            {/if}
-            {#if errors[f.key]}
-              <p class="field-error small" role="alert">{errors[f.key]}</p>
-            {/if}
-          </div>
-        {/each}
-      </div>
-    </wa-card>
-  {/each}
-
-  {#if schema.actions.length}
-    <wa-card>
-      <h3>{t("live.actions")}</h3>
-      <div class="actions">
-        {#each schema.actions as a (a.id)}
-          <wa-button
-            variant={a.danger ? "danger" : "neutral"}
-            appearance="outlined"
-            loading={running === a.id}
-            onclick={() => (a.confirm ? (confirming = a) : act(a))}
-          >
-            {a.label}
-          </wa-button>
-        {/each}
-      </div>
-    </wa-card>
+  {:else if tabs.length === 1}
+    {@render sectionBody(tabs[0], true)}
+  {:else}
+    <!-- One tab per section; on a narrow window the tabs scroll instead of
+         wrapping. -->
+    <wa-tab-group active={activeTab ?? tabs[0].id} onwa-tab-show={ontabshow}>
+      {#each tabs as section (section.id)}
+        {@const Icon = iconFor(section.icon, SECTION_ICONS)}
+        <wa-tab slot="nav" panel={section.id}>
+          <span class="tab">
+            {#if Icon}<Icon size={16} aria-hidden="true" />{/if}
+            {section.label}
+          </span>
+        </wa-tab>
+      {/each}
+      {#each tabs as section (section.id)}
+        <wa-tab-panel name={section.id}>
+          {@render sectionBody(section, false)}
+        </wa-tab-panel>
+      {/each}
+    </wa-tab-group>
   {/if}
 {/if}
 
@@ -429,8 +562,73 @@
   .field + .field {
     border-top: var(--wa-border-width-s) solid var(--wa-color-surface-border);
   }
-  .field > .setting {
+  .control {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
+  }
+  .control > :first-child {
+    flex: 1;
+    min-width: 0;
+  }
+  .control > .setting {
     padding-block: 0;
+  }
+  /* Room for the reset button, kept while it is hidden. */
+  .reset {
+    flex: none;
+    width: var(--wa-form-control-height);
+    display: flex;
+    justify-content: center;
+  }
+  .section {
+    display: grid;
+    gap: var(--wa-space-s);
+  }
+  .description {
+    margin: 0;
+  }
+  .tab {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--wa-space-2xs);
+    white-space: nowrap;
+  }
+  wa-tab-panel::part(base) {
+    padding-block: var(--wa-space-m) 0;
+  }
+  .advanced:not(.alone) {
+    margin-top: var(--wa-space-2xs);
+    border-top: var(--wa-border-width-s) solid var(--wa-color-surface-border);
+  }
+  .advanced::part(header) {
+    padding-inline: 0;
+  }
+  .advanced::part(content) {
+    padding: 0;
+  }
+  .swatches {
+    display: inline-flex;
+    gap: var(--wa-space-3xs);
+  }
+  .swatch {
+    width: 0.875rem;
+    height: 0.875rem;
+    border-radius: var(--wa-border-radius-s);
+    border: var(--wa-border-width-s) solid var(--wa-color-neutral-border-loud);
+  }
+  .swatch.empty {
+    border-color: transparent;
+  }
+  .option {
+    display: grid;
+  }
+  /* Follows the color of the option, so it stays readable on the
+     highlighted one. */
+  .option-description {
+    font-size: var(--wa-font-size-s);
+    opacity: 0.85;
+    white-space: normal;
   }
   .slider-label {
     display: flex;
@@ -472,12 +670,6 @@
   .field-error {
     margin-top: var(--wa-space-xs);
     color: var(--wa-color-danger-on-quiet);
-  }
-  .actions {
-    display: flex;
-    gap: var(--wa-space-xs);
-    flex-wrap: wrap;
-    margin-top: var(--wa-space-s);
   }
   .dialog-buttons {
     display: flex;

@@ -107,7 +107,9 @@ can do much more than start and stop:
 - **Live settings:** a running application describes its settings and
   actions over a local socket. tuxhub shows them as a native settings page,
   in its own design, in English and German, and every change takes effect
-  immediately in the application.
+  immediately in the application. Tabs with icons, presets with color
+  swatches, fields that appear only when they matter, a folded "Advanced"
+  part and a reset per field are all part of the description.
 - **Update-proof:** the application describes its settings itself, at
   runtime. When you add, rename or remove a setting in a new release, the
   page in tuxhub follows without any change on our side.
@@ -127,7 +129,8 @@ How an application gets into tuxhub:
    application. From then on, every release of your application is picked
    up by tuxhub automatically.
 
-The live interface is available from tuxhub 0.5.0.
+The live interface is available from tuxhub 0.5.0, its optional additions
+(protocol 1.1) from tuxhub 0.6.0.
 
 ## Security
 

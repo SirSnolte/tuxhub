@@ -1,7 +1,19 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { AppWindow, CircleStop, ExternalLink, RefreshCw, RotateCw, Trash, Unlink, X } from "@lucide/svelte";
-  import { api, describe, errText, type LiveNote, type ShortcutStatus, type Tool } from "./api";
+  import {
+    AppWindow,
+    CircleStop,
+    ExternalLink,
+    Play,
+    RefreshCw,
+    RotateCw,
+    Trash,
+    TriangleAlert,
+    Unlink,
+    X,
+    Zap,
+  } from "@lucide/svelte";
+  import { api, describe, errText, type LiveNote, type LiveSchema, type ShortcutStatus, type Tool } from "./api";
   import { hub, onLiveEvent, onToolEvent, progressText, toast } from "./state.svelte";
   import { i18n, t, type Key } from "./i18n.svelte";
   import Readme from "./Readme.svelte";
@@ -43,12 +55,22 @@
   const plainApp = $derived(tool.level === 0 && tool.can_launch);
   /** Runs on its own and offers its settings over the live interface. */
   const liveApp = $derived(m.live === true || (typeof m.live === "object" && m.live !== null));
+  /** Live tool without its own interface: tuxhub shows the generic settings page. */
+  const livePage = $derived(liveApp && !m.ui);
   let liveRunning = $state(false);
+  /** Actions the running live application offers, shown in the tool menu. */
+  let liveActions = $state<LiveSchema["actions"]>([]);
+  let livePanel = $state<LivePanel>();
+  /** An action of the live application is running. */
+  let liveActing = $state(false);
   // Before rendering, so the page of another tool never starts with the
   // state of the previous one.
   $effect.pre(() => {
     liveRunning = tool.app_running;
   });
+  /** Starts and quits a live application and notices when that happens elsewhere. */
+  let launcher = $state<LaunchPanel>();
+  let liveBusy = $state(false);
   /** Belongs on the desktop: tuxhub only starts and stops it. */
   const launchOnly = $derived(plainApp && m.embed === false);
 
@@ -110,12 +132,41 @@
   /** The tool's menu, which the sidebar shows next to the tool's name. */
   export function menu(): { title: string[]; items: MenuItem[] } {
     const items: MenuItem[] = [];
-    if (tool.can_launch && !plainApp) {
+    const appActions = livePage && liveRunning ? liveActions : [];
+    for (const a of appActions.filter((a) => !a.danger)) {
+      items.push({ value: `live:${a.id}`, label: a.label, icon: Zap, disabled: liveActing });
+    }
+    if (livePage && liveRunning) {
+      items.push({
+        value: "quit",
+        label: t("app.quit"),
+        icon: CircleStop,
+        disabled: liveBusy,
+        separated: items.length > 0,
+      });
+    }
+    const ownStart = items.length;
+    // A live application is started from the bar above its README.
+    if (tool.can_launch && !plainApp && !livePage) {
       items.push({ value: "launch", label: t("tool.openWindow"), icon: AppWindow, disabled: busy });
     }
     if (canCheck) items.push({ value: "check", label: t("tool.checkUpdates"), icon: RefreshCw, disabled: busy });
     if (canReconnect) items.push({ value: "reconnect", label: t("tool.reconnect"), icon: RotateCw });
     if (tool.running) items.push({ value: "stop", label: t("tool.stopProcess"), icon: CircleStop, disabled: busy });
+    // The divider sits above the first entry of tuxhub's own, if any follows the app's.
+    if (ownStart > 0 && items.length > ownStart) items[ownStart].separated = true;
+    appActions
+      .filter((a) => a.danger)
+      .forEach((a, i) =>
+        items.push({
+          value: `live:${a.id}`,
+          label: a.label,
+          icon: TriangleAlert,
+          danger: true,
+          disabled: liveActing,
+          separated: i === 0 && items.length > 0,
+        }),
+      );
     if (removable) {
       items.push({
         value: "remove",
@@ -123,7 +174,7 @@
         icon: isLocal ? Unlink : Trash,
         danger: true,
         disabled: busy,
-        separated: items.length > 0,
+        separated: items.length > 0 && !items.at(-1)?.danger,
       });
     }
     // The header shows the state and version first, then where the tool comes from.
@@ -135,7 +186,9 @@
   }
 
   export function select(value: string) {
-    if (value === "launch") run(() => api.launch(id), t("tool.started", { name: tool.entry.name }));
+    if (value.startsWith("live:")) livePanel?.runAction(value.slice(5));
+    else if (value === "quit") launcher?.quit();
+    else if (value === "launch") run(() => api.launch(id), t("tool.started", { name: tool.entry.name }));
     else if (value === "check") checkUpdate();
     else if (value === "reconnect") (webTool ? webPanel?.reconnect() : embedPanel?.reconnect());
     else if (value === "stop") run(() => api.stop(id));
@@ -209,8 +262,14 @@
        that need to be at hand get a slim bar. The heading stays for screen
        readers. -->
   <h1 class="wa-visually-hidden">{tool.entry.name}</h1>
-  {#if (updatable && update) || (plainApp && !launchOnly) || webTool}
+  {#if (updatable && update) || (plainApp && !launchOnly) || webTool || (livePage && !liveRunning)}
     <div class="buttons">
+      {#if livePage && !liveRunning}
+        <wa-button size="s" variant="brand" loading={liveBusy} onclick={() => launcher?.start()}>
+          <span slot="start"><Play size={14} aria-hidden="true" /></span>
+          {t("app.start")}
+        </wa-button>
+      {/if}
       {#if updatable && update}
         <wa-button
           size="s"
@@ -263,12 +322,22 @@
     <p class="status">{String(status.text)}</p>
   {/if}
 
-  {#if liveApp && !m.ui}
-    <LaunchPanel {tool} {onchanged} bind:running={liveRunning} />
+  {#if livePage}
+    <!-- Running: only the settings. Stopped: the README below, started from
+         the bar above; quitting is in the tool menu. -->
+    <LaunchPanel {tool} {onchanged} bind:this={launcher} bind:running={liveRunning} bind:busy={liveBusy} hidden />
     {#if liveRunning}
       {#key id}
-        <LivePanel {tool} onclosed={() => (liveRunning = false)} />
+        <LivePanel
+          {tool}
+          bind:this={livePanel}
+          bind:actions={liveActions}
+          bind:acting={liveActing}
+          onclosed={() => (liveRunning = false)}
+        />
       {/key}
+    {:else if !tool.entry.repo}
+      <wa-card><p class="muted">{t("app.startToChange", { name: tool.entry.name })}</p></wa-card>
     {/if}
   {:else if m.ui}
     <!--
@@ -320,7 +389,7 @@
     </wa-card>
   {/if}
 
-  {#if tool.entry.repo && !m.ui && !m.web_url && !embedded}
+  {#if tool.entry.repo && !m.ui && !m.web_url && !embedded && !(livePage && liveRunning)}
     <wa-card>
       <Readme repo={tool.entry.repo} />
     </wa-card>

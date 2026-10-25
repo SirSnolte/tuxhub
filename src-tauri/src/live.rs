@@ -36,6 +36,19 @@ const MAX_KEY: usize = 64;
 const MAX_LABEL: usize = 120;
 const MAX_HELP: usize = 500;
 const MAX_OPTION_VALUE: usize = 500;
+const MAX_SECTION_TEXT: usize = 300;
+const MAX_OPTION_TEXT: usize = 200;
+const MAX_OPTION_COLORS: usize = 6;
+const MAX_CONDITION_VALUES: usize = 50;
+/// What this tuxhub shows of protocol 1.1, sent with `hello`.
+const FEATURES: [&str; 6] = [
+    "tabs",
+    "visible_if",
+    "advanced",
+    "reset",
+    "option_colors",
+    "confirm",
+];
 /// Text values without their own `max_length`.
 const MAX_TEXT: usize = 65_536;
 
@@ -60,6 +73,27 @@ impl LiveError {
 pub struct Choice {
     pub value: String,
     pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Color swatches next to the option, for example of a theme.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub colors: Vec<String>,
+}
+
+/// When a field is shown: the value of another field equals one value or one
+/// of several. Values are strings, numbers or booleans.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(untagged)]
+pub enum Condition {
+    Equals {
+        key: String,
+        equals: Value,
+    },
+    In {
+        key: String,
+        #[serde(rename = "in")]
+        values: Vec<Value>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -105,6 +139,10 @@ pub struct Field {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<Value>,
     pub disabled: bool,
+    /// Shown in the folded "Advanced" part of its section.
+    pub advanced: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visible_if: Option<Condition>,
     #[serde(flatten)]
     pub kind: Kind,
 }
@@ -113,6 +151,11 @@ pub struct Field {
 pub struct Section {
     pub id: String,
     pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Name from the icon list of tuxhub; the interface skips unknown names.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     pub fields: Vec<Field>,
 }
 
@@ -166,7 +209,7 @@ pub fn parse_schema(v: &Value) -> Result<Schema, LiveError> {
             });
             break;
         }
-        let (mut section, fields) = match parse_section(sv) {
+        let (mut section, fields) = match parse_section(sv, &mut out.invalid) {
             Ok(x) => x,
             Err(reason) => {
                 out.invalid.push(Invalid {
@@ -184,12 +227,17 @@ pub fn parse_schema(v: &Value) -> Result<Schema, LiveError> {
                 });
                 break;
             }
-            match parse_field(fv) {
+            // Left-out additions count only for a field that stays.
+            let mut dropped = Vec::new();
+            match parse_field(fv, &mut dropped) {
                 Ok(f) if !keys.insert(f.key.clone()) => out.invalid.push(Invalid {
                     key: f.key,
                     reason: "duplicate key".into(),
                 }),
-                Ok(f) => section.fields.push(f),
+                Ok(f) => {
+                    section.fields.push(f);
+                    out.invalid.append(&mut dropped);
+                }
                 Err(reason) => out.invalid.push(Invalid {
                     key: name_of(fv, "key", j),
                     reason,
@@ -291,17 +339,95 @@ fn number(o: &Map<String, Value>, name: &str) -> Result<Option<f64>, String> {
     }
 }
 
-fn parse_section(v: &Value) -> Result<(Section, &[Value]), String> {
-    let o = v.as_object().ok_or("not an object")?;
-    let section = Section {
-        id: ident(o, "id")?,
-        label: required(o, "label", MAX_LABEL)?,
-        fields: Vec::new(),
-    };
-    Ok((section, list(o, "fields")?))
+/// An optional addition of protocol 1.1: an invalid one is left out and
+/// listed under `key`, the entry it belongs to stays.
+fn addition<T: Default>(r: Result<T, String>, key: &str, invalid: &mut Vec<Invalid>) -> T {
+    r.unwrap_or_else(|reason| {
+        invalid.push(Invalid {
+            key: key.to_string(),
+            reason,
+        });
+        T::default()
+    })
 }
 
-fn parse_field(v: &Value) -> Result<Field, String> {
+fn parse_section<'a>(
+    v: &'a Value,
+    invalid: &mut Vec<Invalid>,
+) -> Result<(Section, &'a [Value]), String> {
+    let o = v.as_object().ok_or("not an object")?;
+    let id = ident(o, "id")?;
+    let label = required(o, "label", MAX_LABEL)?;
+    let fields = list(o, "fields")?;
+    let description = addition(text(o, "description", MAX_SECTION_TEXT), &id, invalid);
+    let icon = addition(icon(o), &id, invalid);
+    let section = Section {
+        id,
+        label,
+        description,
+        icon,
+        fields: Vec::new(),
+    };
+    Ok((section, fields))
+}
+
+fn icon(o: &Map<String, Value>) -> Result<Option<String>, String> {
+    match o.get("icon") {
+        None | Some(Value::Null) => Ok(None),
+        Some(_) => ident(o, "icon").map(Some),
+    }
+}
+
+/// `visible_if`: `{"key": k, "equals": v}` or `{"key": k, "in": [v, …]}`.
+fn condition(o: &Map<String, Value>) -> Result<Option<Condition>, String> {
+    let c = match o.get("visible_if") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::Object(c)) => c,
+        Some(_) => return Err("`visible_if` is not an object".into()),
+    };
+    let key = ident(c, "key").map_err(|e| format!("visible_if: {e}"))?;
+    let scalar = |v: &Value| match v {
+        Value::String(s) => s.chars().count() <= MAX_OPTION_VALUE,
+        Value::Number(_) | Value::Bool(_) => true,
+        _ => false,
+    };
+    let not_scalar = "visible_if: values must be strings, numbers or booleans";
+    match (c.get("equals"), c.get("in")) {
+        (Some(v), None) if scalar(v) => Ok(Some(Condition::Equals {
+            key,
+            equals: v.clone(),
+        })),
+        (None, Some(Value::Array(a))) if a.len() > MAX_CONDITION_VALUES => Err(format!(
+            "visible_if: `in` has more than {MAX_CONDITION_VALUES} entries"
+        )),
+        (None, Some(Value::Array(a))) if a.iter().all(scalar) => Ok(Some(Condition::In {
+            key,
+            values: a.clone(),
+        })),
+        (Some(_), None) | (None, Some(Value::Array(_))) => Err(not_scalar.into()),
+        (None, Some(_)) => Err("visible_if: `in` is not a list".into()),
+        _ => Err("visible_if: needs either `equals` or `in`".into()),
+    }
+}
+
+/// Color swatches of an option: at most six colors `#rrggbb[aa]`.
+fn swatches(o: &Map<String, Value>) -> Result<Vec<String>, String> {
+    let entries = list(o, "colors")?;
+    if entries.len() > MAX_OPTION_COLORS {
+        return Err(format!(
+            "`colors` has more than {MAX_OPTION_COLORS} entries"
+        ));
+    }
+    entries
+        .iter()
+        .map(|c| match c.as_str() {
+            Some(s) if color(s, true) => Ok(s.to_string()),
+            _ => Err(format!("{c} in `colors` is not a color")),
+        })
+        .collect()
+}
+
+fn parse_field(v: &Value, invalid: &mut Vec<Invalid>) -> Result<Field, String> {
     let o = v.as_object().ok_or("not an object")?;
     let key = ident(o, "key")?;
     let label = required(o, "label", MAX_LABEL)?;
@@ -339,6 +465,8 @@ fn parse_field(v: &Value) -> Result<Field, String> {
                 return Err(format!("`options` needs 1 to {MAX_OPTIONS} entries"));
             }
             let mut options: Vec<Choice> = Vec::with_capacity(entries.len());
+            // Left-out additions of options, listed once the field is valid.
+            let mut dropped = Vec::new();
             for ov in entries {
                 let oo = ov.as_object().ok_or("an option is not an object")?;
                 let value = required(oo, "value", MAX_OPTION_VALUE)?;
@@ -346,8 +474,17 @@ fn parse_field(v: &Value) -> Result<Field, String> {
                 if options.iter().any(|c| c.value == value) {
                     return Err(format!("option {value:?} appears twice"));
                 }
-                options.push(Choice { value, label });
+                let description = text(oo, "description", MAX_OPTION_TEXT)
+                    .map_err(|e| format!("option {value:?}: {e}"));
+                let colors = swatches(oo).map_err(|e| format!("option {value:?}: {e}"));
+                options.push(Choice {
+                    value,
+                    label,
+                    description: addition(description, &key, &mut dropped),
+                    colors: addition(colors, &key, &mut dropped),
+                });
             }
+            invalid.append(&mut dropped);
             Kind::Select { options }
         }
         "text" => {
@@ -375,12 +512,16 @@ fn parse_field(v: &Value) -> Result<Field, String> {
     };
     // A default that does not fit is ignored, not the field.
     let default = o.get("default").filter(|d| fits(&kind, d)).cloned();
+    let advanced = addition(flag(o, "advanced"), &key, invalid);
+    let visible_if = addition(condition(o), &key, invalid);
     Ok(Field {
         key,
         label,
         help,
         default,
         disabled,
+        advanced,
+        visible_if,
         kind,
     })
 }
@@ -855,6 +996,7 @@ impl Live {
             "client": "tuxhub",
             "version": env!("CARGO_PKG_VERSION"),
             "locale": locale,
+            "features": FEATURES,
         });
         let hello = match conn.request("hello", params, self.timeout).await {
             Ok(v) => parse_hello(&v, locale),
@@ -1221,6 +1363,133 @@ mod tests {
         );
     }
 
+    /// Protocol 1.1: section texts and icons, advanced fields, conditions,
+    /// option descriptions and colors.
+    #[test]
+    fn reads_the_additions_of_1_1() {
+        let s = parse_schema(&json!({
+            "sections": [{
+                "id": "look", "label": "Look", "icon": "palette",
+                "description": "Colors of the clock",
+                "fields": [
+                    { "key": "theme", "type": "select", "label": "Theme", "options": [
+                        { "value": "dark", "label": "Dark", "description": "Default",
+                          "colors": ["#000000", "#FFFFFF80"] },
+                        { "value": "custom", "label": "Own" }
+                    ]},
+                    { "key": "gap", "type": "number", "label": "Gap", "advanced": true },
+                    { "key": "format", "type": "text", "label": "Format",
+                      "visible_if": { "key": "preset", "equals": "custom" } },
+                    { "key": "size", "type": "number", "label": "Size",
+                      "visible_if": { "key": "mode", "in": ["a", 2, true] } }
+                ]
+            }]
+        }))
+        .unwrap();
+        assert!(s.invalid.is_empty(), "{:?}", s.invalid);
+        let out = serde_json::to_value(&s).unwrap();
+        let section = &out["sections"][0];
+        assert_eq!(section["icon"], "palette");
+        assert_eq!(section["description"], "Colors of the clock");
+        let theme = &section["fields"][0];
+        assert_eq!(theme["options"][0]["description"], "Default");
+        assert_eq!(
+            theme["options"][0]["colors"],
+            json!(["#000000", "#FFFFFF80"])
+        );
+        // Options without the additions stay as in protocol 1.
+        assert_eq!(
+            theme["options"][1],
+            json!({ "value": "custom", "label": "Own" })
+        );
+        assert_eq!(theme["advanced"], false);
+        assert_eq!(section["fields"][1]["advanced"], true);
+        assert_eq!(
+            section["fields"][2]["visible_if"],
+            json!({ "key": "preset", "equals": "custom" })
+        );
+        assert_eq!(
+            section["fields"][3]["visible_if"],
+            json!({ "key": "mode", "in": ["a", 2, true] })
+        );
+        assert!(theme.get("visible_if").is_none());
+    }
+
+    /// Randfälle 2 and 10: an invalid addition is left out and listed, the
+    /// field, section or option stays usable.
+    #[test]
+    fn invalid_additions_drop_only_the_addition() {
+        let many: Vec<Value> = (0..51).map(|i| json!(i)).collect();
+        let seven = vec!["#000000"; 7];
+        let s = parse_schema(&json!({
+            "sections": [{
+                "id": "main", "label": "Main", "icon": "Bad Icon",
+                "description": "x".repeat(301),
+                "fields": [
+                    { "key": "many", "type": "toggle", "label": "Many",
+                      "visible_if": { "key": "mode", "in": many } },
+                    { "key": "badkey", "type": "toggle", "label": "Bad key",
+                      "visible_if": { "key": "bad key", "equals": 1 } },
+                    { "key": "nothing", "type": "toggle", "label": "Neither",
+                      "visible_if": { "key": "mode" } },
+                    { "key": "both", "type": "toggle", "label": "Both",
+                      "visible_if": { "key": "mode", "equals": 1, "in": [1] } },
+                    { "key": "deep", "type": "toggle", "label": "Object",
+                      "visible_if": { "key": "mode", "equals": { "a": 1 } } },
+                    { "key": "adv", "type": "toggle", "label": "Advanced", "advanced": "yes" },
+                    { "key": "pick", "type": "select", "label": "Pick", "options": [
+                        { "value": "seven", "label": "Seven", "colors": seven },
+                        { "value": "red", "label": "Red", "colors": ["red"] },
+                        { "value": "long", "label": "Long", "description": "y".repeat(201) },
+                        { "value": "ok", "label": "Ok", "colors": ["#123456"] }
+                    ]}
+                ]
+            }]
+        }))
+        .unwrap();
+        let section = &s.sections[0];
+        assert_eq!(section.icon, None);
+        assert_eq!(section.description, None);
+        assert_eq!(section.fields.len(), 7, "every field stays");
+        for f in &section.fields[..5] {
+            assert_eq!(f.visible_if, None, "{}", f.key);
+        }
+        assert!(!field(&s, "adv").advanced);
+        let Kind::Select { options } = &field(&s, "pick").kind else {
+            panic!("pick is a select");
+        };
+        assert_eq!(options.len(), 4, "every option stays");
+        assert!(options[0].colors.is_empty());
+        assert!(options[1].colors.is_empty());
+        assert_eq!(options[2].description, None);
+        assert_eq!(options[3].colors, ["#123456"]);
+        let keys: Vec<&str> = s.invalid.iter().map(|i| i.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                "main", "main", "many", "badkey", "nothing", "both", "deep", "adv", "pick", "pick",
+                "pick"
+            ]
+        );
+        assert!(s.invalid.iter().all(|i| !i.reason.is_empty()));
+    }
+
+    /// A field dropped as a duplicate lists only that, not its additions.
+    #[test]
+    fn a_dropped_duplicate_lists_no_additions() {
+        let s = schema(json!([
+            { "key": "size", "type": "toggle", "label": "First" },
+            { "key": "size", "type": "toggle", "label": "Second", "advanced": "yes" }
+        ]));
+        assert_eq!(
+            s.invalid,
+            [Invalid {
+                key: "size".into(),
+                reason: "duplicate key".into()
+            }]
+        );
+    }
+
     /// 7.9: values that do not fit the field are refused with a reason.
     #[test]
     fn refuses_values_that_do_not_fit() {
@@ -1517,6 +1786,17 @@ mod conn_tests {
         assert_eq!(received[0].1["protocol"], 1);
         assert_eq!(received[0].1["client"], "tuxhub");
         assert_eq!(received[0].1["locale"], "de");
+        assert_eq!(
+            received[0].1["features"],
+            json!([
+                "tabs",
+                "visible_if",
+                "advanced",
+                "reset",
+                "option_colors",
+                "confirm"
+            ])
+        );
         assert_eq!(received[1].1, json!({ "locale": "de" }));
         assert_eq!(received[3].1, json!({ "key": "size", "value": 40 }));
     }
