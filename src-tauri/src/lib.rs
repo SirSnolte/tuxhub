@@ -347,17 +347,25 @@ async fn quit_app(
 ) -> Result<(), String> {
     let id = inst.id();
     let program = tools::app_program(&hub.tools_dir, inst);
-    if inst.manifest(&hub.tools_dir).live == Some(true)
-        && hub.live.running(id).await
-        && !hub.live.quit(id, wait).await
-        && program.is_none()
+    let deadline = tokio::time::Instant::now() + wait;
+    let asked = inst.manifest(&hub.tools_dir).live == Some(true) && hub.live.running(id).await;
+    let quitting = asked && hub.live.quit(id, wait).await;
+    let Some(program) = program else {
+        return if asked && !quitting {
+            Err(format!("{} did not quit", inst.entry.name))
+        } else {
+            Ok(())
+        };
+    };
+    // The application stops listening first and may still save its settings:
+    // give it the rest of the time before ending it.
+    while quitting
+        && !tools::processes(&program).is_empty()
+        && tokio::time::Instant::now() < deadline
     {
-        return Err(format!("{} did not quit", inst.entry.name));
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-    match program {
-        Some(p) => tools::quit(&p).await,
-        None => Ok(()),
-    }
+    tools::quit(&program).await
 }
 
 #[tauri::command]
@@ -959,6 +967,58 @@ mod tests {
             .unwrap();
         assert!(exits_soon(&mut child).await, "the program still runs");
         assert!(started.elapsed() >= std::time::Duration::from_millis(300));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 7.15: an application that follows `quit` but needs a moment to exit
+    /// (saving its settings) is not ended with SIGTERM.
+    #[tokio::test]
+    async fn quit_leaves_an_exiting_application_alone() {
+        use std::io::{BufRead, Write};
+        use std::os::unix::process::ExitStatusExt;
+        let (hub, base, tool) = hub_with_tool(
+            "quit-graceful",
+            json!({ "embed": false, "live": true, "run": { "command": "app" } }),
+        );
+        let path = base.join("run/tuxhub/livedemo.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let mut out = stream.try_clone().unwrap();
+                    for line in std::io::BufReader::new(stream)
+                        .lines()
+                        .map_while(Result::ok)
+                    {
+                        let msg: Value = serde_json::from_str(&line).unwrap();
+                        let result = match msg["method"].as_str() {
+                            Some("hello") => json!({ "protocol": 1 }),
+                            _ => json!(true),
+                        };
+                        let _ = writeln!(out, "{}", json!({ "id": msg["id"], "result": result }));
+                        if msg["method"] == "quit" {
+                            // Stops listening and closes the connection; the
+                            // process itself exits a second later.
+                            let _ = std::fs::remove_file(&path);
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        // `sleep 1` stands for the application that is still shutting down.
+        let mut child = tools::spawn_copied(&tool.join("app"), &["1"]).await;
+        let inst = tools::load(&hub.tools_dir, "livedemo").unwrap();
+        assert!(app_is_running(&hub, &inst).await);
+
+        quit_app(&hub, &inst, std::time::Duration::from_secs(3))
+            .await
+            .unwrap();
+        assert!(exits_soon(&mut child).await, "the program still runs");
+        let status = child.wait().unwrap();
+        assert_eq!(status.signal(), None, "ended by a signal: {status:?}");
+        assert!(status.success());
         let _ = std::fs::remove_dir_all(&base);
     }
 

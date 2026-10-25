@@ -958,12 +958,12 @@ impl Live {
 
     /// Whether the application listens on its socket.
     pub async fn running(&self, id: &str) -> bool {
+        // While a connection waits for `hello`, the slot is busy; the socket
+        // answers the question without waiting for it.
         let open = self
             .slot(id)
-            .lock()
-            .await
-            .as_ref()
-            .is_some_and(|c| !c.is_closed());
+            .try_lock()
+            .is_ok_and(|c| c.as_ref().is_some_and(|c| !c.is_closed()));
         open || self.dial(id).await.is_some()
     }
 }
@@ -1555,6 +1555,30 @@ mod conn_tests {
         assert!(started.elapsed() < Duration::from_secs(2));
         assert_eq!(live.values("demo").await.unwrap()["size"], json!(26));
         assert!(live.status("demo", "en").await.running);
+    }
+
+    /// Checking whether the application runs does not wait for a connection
+    /// that is still waiting for `hello`.
+    #[tokio::test]
+    async fn running_does_not_wait_for_hello() {
+        let app = TestApp::start(|_, _| Do::Silent).await;
+        let live = Arc::new(Live::for_test(
+            Some(app.dir.clone()),
+            own_uid(),
+            Duration::from_secs(3),
+            Arc::new(|_| {}),
+        ));
+        let connecting = live.clone();
+        let status = tokio::spawn(async move { connecting.status("demo", "en").await });
+        wait_until("hello sent", || app.methods() == ["hello"]).await;
+        let started = std::time::Instant::now();
+        assert!(live.running("demo").await);
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "{:?}",
+            started.elapsed()
+        );
+        status.abort();
     }
 
     /// The application does not answer `hello`: it runs, but with an error.
