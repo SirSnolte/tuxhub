@@ -421,7 +421,7 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: var(--wa-space-m);
+    gap: var(--tuxhub-card-gap);
     min-height: 0;
   }
   .buttons {
@@ -447,10 +447,13 @@
   .actions kbd {
     margin-inline-start: var(--wa-space-2xs);
   }
+  /* The page of a tool keeps room for card shadows around its content: pull
+     the frame out by that much, so its cards line up with the hub's own. */
   .tool-ui {
     flex: 1;
     min-height: 320px;
-    width: 100%;
+    margin: calc(-1 * var(--wa-space-2xs));
+    width: calc(100% + 2 * var(--wa-space-2xs));
     border: 0;
     background: transparent;
   }

@@ -250,7 +250,7 @@
   .tile {
     display: grid;
     gap: var(--wa-space-xs);
-    padding: var(--wa-space-m);
+    padding: var(--tuxhub-card-padding);
     align-content: start;
     transition:
       border-color var(--wa-transition-fast),
@@ -320,7 +320,7 @@
     display: grid;
     gap: var(--wa-space-m);
     align-content: start;
-    padding: var(--wa-space-l);
+    padding: var(--tuxhub-card-padding);
     position: sticky;
     top: 0;
     max-height: calc(100vh - 2 * var(--wa-space-xl));

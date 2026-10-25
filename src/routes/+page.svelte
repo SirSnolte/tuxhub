@@ -299,22 +299,20 @@
   main {
     display: flex;
     flex-direction: column;
-    padding: var(--wa-space-xl) var(--wa-space-2xl);
+    padding: var(--tuxhub-page-margin);
     overflow-y: auto;
   }
   /* Tool pages leave as much room as possible to the tool's own interface. */
   main.tool {
-    padding: var(--wa-space-m) var(--wa-space-l) var(--wa-space-l);
+    padding: var(--tuxhub-page-margin);
   }
   @media (max-width: 900px) {
     .app {
       grid-template-columns: 220px minmax(0, 1fr);
     }
-    main {
-      padding: var(--wa-space-l);
-    }
+    main,
     main.tool {
-      padding: var(--wa-space-s) var(--wa-space-m) var(--wa-space-m);
+      padding: var(--wa-space-m);
     }
   }
   .toasts {
