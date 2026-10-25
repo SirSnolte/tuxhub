@@ -24,6 +24,8 @@ const WORKSHOP_PATH: &str = "registry/index.json";
 const WORKSHOP_BUNDLED: &str = include_str!("../../registry/index.json");
 /// JavaScript bridge that tool interfaces load with `<script src="/__tuxhub/bridge.js">`.
 const BRIDGE_JS: &str = include_str!("bridge.js");
+/// Time a live service started by tuxhub has to open its socket.
+const LIVE_START_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 /// Time a live application has to quit before it is ended with SIGTERM.
 const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 
@@ -42,6 +44,9 @@ pub struct Hub {
     updated_from: std::sync::Mutex<Option<String>>,
     /// Connections to applications with a live interface
     live: live::Live,
+    /// Tool id -> lock held while tuxhub starts its live service
+    live_starts:
+        std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl Hub {
@@ -58,6 +63,7 @@ impl Hub {
             embeds: Default::default(),
             updated_from: Default::default(),
             live: live::Live::new(None, std::sync::Arc::new(|_| {})),
+            live_starts: Default::default(),
         }
     }
 
@@ -177,18 +183,24 @@ pub(crate) struct DynShortcut {
 /// `{"method":"shortcuts","params":[{id,label,shortcut}]}`. Hotkeys are
 /// registered again when the list changes.
 pub(crate) fn tool_shortcuts_changed(app: &AppHandle, id: &str, params: &Value) {
+    if save_dyn_shortcuts(&app.state::<Hub>(), id, params) {
+        shortcuts::rebind(app.clone());
+    }
+}
+
+/// Saves the runtime hotkeys of a tool. `true` when they changed.
+fn save_dyn_shortcuts(hub: &Hub, id: &str, params: &Value) -> bool {
     let Ok(list) = serde_json::from_value::<Vec<DynShortcut>>(params.clone()) else {
         eprintln!("{id}: invalid shortcuts notification");
-        return;
+        return false;
     };
     let list: Vec<DynShortcut> = list
         .into_iter()
         .filter(|s| !s.id.is_empty() && !s.id.contains("::") && !s.shortcut.trim().is_empty())
         .take(64)
         .collect();
-    let hub = app.state::<Hub>();
     if hub.dyn_shortcuts(id) == list {
-        return;
+        return false;
     }
     let path = hub.dyn_shortcuts_path(id);
     let res = if list.is_empty() {
@@ -198,20 +210,117 @@ pub(crate) fn tool_shortcuts_changed(app: &AppHandle, id: &str, params: &Value) 
     };
     if let Err(e) = res {
         eprintln!("{id}: could not save hotkeys: {e}");
-        return;
+        return false;
     }
-    shortcuts::rebind(app.clone());
+    true
+}
+
+/// Checks that `action` is declared in the manifest or reported as a runtime
+/// hotkey. `true` for a live tool.
+fn known_action(hub: &Hub, id: &str, action: &str) -> Result<bool, String> {
+    let (_, m) = hub.load(id)?;
+    if !m.actions.iter().any(|a| a.id == action)
+        && !hub.dyn_shortcuts(id).iter().any(|s| s.id == action)
+    {
+        return Err(format!("{id} has no action {action:?}"));
+    }
+    Ok(m.is_live())
+}
+
+/// Runs an action of a live tool, after starting its service if needed.
+async fn action_on(hub: &Hub, id: &str, action: &str) -> Result<Value, String> {
+    if !known_action(hub, id, action)? {
+        return Err(format!("{id} has no live interface"));
+    }
+    ensure_live(hub, id).await?;
+    hub.live
+        .call(id, "action", json!({ "id": action }))
+        .await
+        .map_err(|e| e.message)
+}
+
+/// Request of a tool page to its live service.
+async fn call_on(hub: &Hub, id: &str, method: &str, params: Value) -> Result<Value, String> {
+    live::bridge_method(method).map_err(|e| e.message)?;
+    ensure_live(hub, id).await?;
+    hub.live
+        .call(id, method, params)
+        .await
+        .map_err(|e| e.message)
+}
+
+/// Makes sure the live service of tool `id` listens: starts it from the
+/// `[live]` section when its socket is missing.
+async fn ensure_live(hub: &Hub, id: &str) -> Result<(), String> {
+    ensure_live_within(hub, id, LIVE_START_WAIT).await
+}
+
+async fn ensure_live_within(hub: &Hub, id: &str, wait: std::time::Duration) -> Result<(), String> {
+    let (inst, m) = hub.load(id)?;
+    if !m.is_live() {
+        return Err(format!("{id} has no live interface"));
+    }
+    if hub.live.running(id).await {
+        return Ok(());
+    }
+    let name = &inst.entry.name;
+    let Some(start) = m.live_start() else {
+        return Err(format!("{name} is not running"));
+    };
+    // One start at a time; whoever waited finds the service running.
+    let lock = hub
+        .live_starts
+        .lock()
+        .unwrap()
+        .entry(id.to_string())
+        .or_default()
+        .clone();
+    let _starting = lock.lock().await;
+    if hub.live.running(id).await {
+        return Ok(());
+    }
+    let root = inst
+        .root_dir(&hub.tools_dir)
+        .ok_or("the tool has no folder")?;
+    let exe = root.join(&start.command);
+    if !exe.is_file() {
+        return Err(format!("{} is missing", exe.display()));
+    }
+    // Without a shell, in its own process group: the service keeps running
+    // when tuxhub exits.
+    let mut child = tokio::process::Command::new(&exe)
+        .args(&start.args)
+        .current_dir(&root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map_err(|e| format!("{name} does not start: {e}"))?;
+    let deadline = tokio::time::Instant::now() + wait;
+    let result = loop {
+        if hub.live.running(id).await {
+            break Ok(());
+        }
+        // A service that ended without listening will not come.
+        if matches!(child.try_wait(), Ok(Some(_))) && !hub.live.running(id).await {
+            break Err(format!("{name} does not start"));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            break Err(format!("{name} does not start"));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    };
+    // Collect the exit status whenever the service ends.
+    tokio::spawn(async move {
+        let _ = child.wait().await;
+    });
+    result
 }
 
 pub(crate) async fn run_action(app: &AppHandle, id: &str, action: &str) -> Result<Value, String> {
-    {
-        let hub = app.state::<Hub>();
-        let (_, m) = hub.load(id)?;
-        if !m.actions.iter().any(|a| a.id == action)
-            && !hub.dyn_shortcuts(id).iter().any(|s| s.id == action)
-        {
-            return Err(format!("{id} has no action {action:?}"));
-        }
+    if known_action(&app.state::<Hub>(), id, action)? {
+        return action_on(&app.state::<Hub>(), id, action).await;
     }
     ensure_rpc(app, id).await?;
     app.state::<Hub>()
@@ -480,8 +589,12 @@ async fn tool_call(
     method: String,
     params: Value,
 ) -> Result<Value, String> {
+    let hub = app.state::<Hub>();
+    if hub.load(&id)?.1.is_live() {
+        return call_on(&hub, &id, &method, params).await;
+    }
     ensure_rpc(&app, &id).await?;
-    app.state::<Hub>().runtime.call(&id, &method, params).await
+    hub.runtime.call(&id, &method, params).await
 }
 
 #[tauri::command]
@@ -771,7 +884,10 @@ pub fn run() {
                 std::env::var_os("XDG_RUNTIME_DIR")
                     .map(PathBuf::from)
                     .filter(|p| p.is_absolute()),
-                std::sync::Arc::new(move |event| {
+                std::sync::Arc::new(move |event: live::LiveEvent| {
+                    if event.method == "shortcuts" {
+                        tool_shortcuts_changed(&handle, &event.tool, &event.params);
+                    }
                     let _ = handle.emit("live-event", event);
                 }),
             );
@@ -786,6 +902,7 @@ pub fn run() {
                 embeds: Default::default(),
                 updated_from: std::sync::Mutex::new(updated_from.clone()),
                 live,
+                live_starts: Default::default(),
             });
 
             if let Err(e) = system::setup_tray(app.handle()) {
@@ -1067,5 +1184,230 @@ mod tests {
         let (hub, base, _) = hub_with_tool("islive", json!({ "live": true }));
         assert!(live_tool(&hub, "livedemo").is_ok());
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Live service for the tests: answers every request with `true` (and
+    /// `hello`), reports a runtime hotkey after `hello`, and logs `start <pid>`
+    /// and each method to `argv[2]`.
+    const TEST_SERVICE: &str = r#"#!/usr/bin/env python3
+import json, os, socket, sys, threading
+sock, log = sys.argv[1], sys.argv[2]
+def note(line):
+    with open(log, "a") as f:
+        f.write(line + "\n")
+note("start %d" % os.getpid())
+s = socket.socket(socket.AF_UNIX)
+s.bind(sock)
+s.listen()
+def serve(c):
+    f = c.makefile("rw")
+    for line in f:
+        m = json.loads(line)
+        note(m["method"] + " " + json.dumps(m["params"], sort_keys=True))
+        res = {"protocol": 1, "name": "Demo"} if m["method"] == "hello" else True
+        f.write(json.dumps({"id": m["id"], "result": res}) + "\n")
+        if m["method"] == "hello":
+            f.write(json.dumps({"method": "shortcuts", "params": [{"id": "macro:a", "label": "A", "shortcut": "F7"}]}) + "\n")
+        f.flush()
+while True:
+    c, _ = s.accept()
+    threading.Thread(target=serve, args=(c,), daemon=True).start()
+"#;
+
+    /// A live tool whose `[live]` section starts `script` with the socket
+    /// path and a log file.
+    fn hub_with_service(name: &str, script: &str) -> (Hub, PathBuf) {
+        let base = std::env::temp_dir().join(format!("tuxhub-{name}-{}", std::process::id()));
+        let sock = base.join("run/tuxhub/livedemo.sock");
+        let log = base.join("service.log");
+        let (hub, base, tool) = hub_with_tool(
+            name,
+            json!({
+                "embed": false,
+                "actions": [{ "id": "toggle", "label": "Toggle" }],
+                "live": { "command": "service", "args": [sock, log] }
+            }),
+        );
+        let exe = tool.join("service");
+        std::fs::write(&exe, script).unwrap();
+        std::fs::set_permissions(&exe, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        (hub, base)
+    }
+
+    fn service_log(base: &Path) -> Vec<String> {
+        std::fs::read_to_string(base.join("service.log"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Ends the services the test started.
+    fn stop_services(base: &Path) {
+        for line in service_log(base) {
+            if let Some(pid) = line.strip_prefix("start ") {
+                let _ = std::process::Command::new("kill").arg(pid).status();
+            }
+        }
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// Edge case 12: parallel requests start the service exactly once.
+    #[tokio::test]
+    async fn ensure_live_starts_the_service_once() {
+        let (hub, base) = hub_with_service("ensure-once", TEST_SERVICE);
+        let (a, b) = tokio::join!(ensure_live(&hub, "livedemo"), ensure_live(&hub, "livedemo"));
+        let starts = service_log(&base)
+            .iter()
+            .filter(|l| l.starts_with("start "))
+            .count();
+        stop_services(&base);
+        a.unwrap();
+        b.unwrap();
+        assert_eq!(starts, 1);
+    }
+
+    #[tokio::test]
+    async fn ensure_live_leaves_a_running_service_alone() {
+        let (hub, base) = hub_with_service("ensure-running", TEST_SERVICE);
+        ensure_live(&hub, "livedemo").await.unwrap();
+        ensure_live(&hub, "livedemo").await.unwrap();
+        let starts = service_log(&base)
+            .iter()
+            .filter(|l| l.starts_with("start "))
+            .count();
+        stop_services(&base);
+        assert_eq!(starts, 1);
+    }
+
+    /// Edge case 13: a service that ends at once, or never listens, gives an
+    /// error instead of hanging.
+    #[tokio::test]
+    async fn ensure_live_reports_a_service_that_does_not_start() {
+        let wait = std::time::Duration::from_millis(500);
+        for (name, script) in [
+            ("ensure-exit", "#!/bin/sh\nexit 1\n"),
+            ("ensure-silent", "#!/bin/sh\nexec sleep 3\n"),
+        ] {
+            let (hub, base) = hub_with_service(name, script);
+            let started = std::time::Instant::now();
+            let e = ensure_live_within(&hub, "livedemo", wait)
+                .await
+                .unwrap_err();
+            let took = started.elapsed();
+            let _ = std::fs::remove_dir_all(&base);
+            assert_eq!(e, "Live Demo does not start", "{name}");
+            assert!(
+                took < std::time::Duration::from_secs(2),
+                "{name} took {took:?}"
+            );
+        }
+        // A missing program is reported as well.
+        let (hub, base) = hub_with_service("ensure-missing", TEST_SERVICE);
+        std::fs::remove_file(base.join("tool/service")).unwrap();
+        let e = ensure_live(&hub, "livedemo").await.unwrap_err();
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(e.contains("is missing"), "{e}");
+    }
+
+    /// Without `[live]` tuxhub cannot start the application.
+    #[tokio::test]
+    async fn ensure_live_without_start_command_is_not_running() {
+        let (hub, base, _) =
+            hub_with_tool("ensure-nostart", json!({ "embed": false, "live": true }));
+        let e = ensure_live(&hub, "livedemo").await.unwrap_err();
+        let _ = std::fs::remove_dir_all(&base);
+        assert_eq!(e, "Live Demo is not running");
+    }
+
+    /// Edge case 15: a hotkey of a live tool starts the service, and the
+    /// action arrives, also a runtime hotkey that is not in the schema.
+    #[tokio::test]
+    async fn hotkey_action_starts_the_live_service() {
+        let (hub, base) = hub_with_service("hotkey", TEST_SERVICE);
+        std::fs::create_dir_all(&hub.settings_dir).unwrap();
+        std::fs::write(
+            hub.dyn_shortcuts_path("livedemo"),
+            json!([{ "id": "macro:a", "label": "A", "shortcut": "F7" }]).to_string(),
+        )
+        .unwrap();
+        let toggle = action_on(&hub, "livedemo", "toggle").await;
+        let dynamic = action_on(&hub, "livedemo", "macro:a").await;
+        let unknown = action_on(&hub, "livedemo", "nope").await;
+        let log = service_log(&base);
+        stop_services(&base);
+        assert_eq!(toggle.unwrap(), json!(true));
+        assert_eq!(dynamic.unwrap(), json!(true));
+        assert!(unknown.is_err());
+        assert!(
+            log.contains(&r#"action {"id": "toggle"}"#.to_string()),
+            "{log:?}"
+        );
+        assert!(
+            log.contains(&r#"action {"id": "macro:a"}"#.to_string()),
+            "{log:?}"
+        );
+        assert!(!log.iter().any(|l| l.contains("nope")));
+    }
+
+    /// Edge case 11 (backend): a tool page's `call` goes over the socket,
+    /// reserved methods do not.
+    #[tokio::test]
+    async fn bridge_call_goes_over_the_live_socket() {
+        let (hub, base) = hub_with_service("bridge", TEST_SERVICE);
+        let ok = call_on(&hub, "livedemo", "macros.list", json!({ "n": 1 })).await;
+        let refused = call_on(&hub, "livedemo", "quit", json!({})).await;
+        let log = service_log(&base);
+        stop_services(&base);
+        assert_eq!(ok.unwrap(), json!(true));
+        assert!(refused.unwrap_err().contains("not allowed"));
+        assert!(
+            log.contains(&r#"macros.list {"n": 1}"#.to_string()),
+            "{log:?}"
+        );
+        assert!(!log.iter().any(|l| l.starts_with("quit")));
+    }
+
+    /// Edge case 16: `shortcuts` from a live application sets the runtime
+    /// hotkeys.
+    #[tokio::test]
+    async fn shortcuts_over_live_set_the_runtime_hotkeys() {
+        let (mut hub, base) = hub_with_service("shortcuts", TEST_SERVICE);
+        std::fs::create_dir_all(&hub.settings_dir).unwrap();
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<live::LiveEvent>::new()));
+        let sink = events.clone();
+        hub.live = live::Live::new(
+            Some(base.join("run")),
+            std::sync::Arc::new(move |e| sink.lock().unwrap().push(e)),
+        );
+        ensure_live(&hub, "livedemo").await.unwrap();
+        hub.live
+            .call("livedemo", "status", json!({}))
+            .await
+            .unwrap();
+        let mut changed = false;
+        for _ in 0..100 {
+            let evs = events.lock().unwrap().clone();
+            if let Some(e) = evs.iter().find(|e| e.method == "shortcuts") {
+                changed = save_dyn_shortcuts(&hub, &e.tool, &e.params);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let saved = hub.dyn_shortcuts("livedemo");
+        stop_services(&base);
+        assert!(changed);
+        assert_eq!(saved.len(), 1);
+        assert_eq!(
+            (saved[0].id.as_str(), saved[0].shortcut.as_str()),
+            ("macro:a", "F7")
+        );
+        // The same list again changes nothing.
+        assert!(!save_dyn_shortcuts(
+            &hub,
+            "livedemo",
+            &json!([{ "id": "macro:a", "label": "A", "shortcut": "F7" }])
+        ));
     }
 }
