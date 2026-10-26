@@ -212,6 +212,8 @@
 
   // Bridge for tool-provided interfaces (iframe, see bridge.js).
   let frame = $state<HTMLIFrameElement>();
+  /** The frame stays hidden until its page has loaded, so it never flashes white. */
+  let frameLoaded = $state(false);
 
   function post(msg: Record<string, unknown>) {
     frame?.contentWindow?.postMessage({ tuxhub: 1, ...msg }, "*");
@@ -348,8 +350,10 @@
     <iframe
       bind:this={frame}
       class="tool-ui"
+      class:loading={!frameLoaded}
       title={tool.entry.name}
       src={`tool://${id}/${m.ui}`}
+      onload={() => (frameLoaded = true)}
       sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
     ></iframe>
   {:else if m.web_url}
@@ -456,6 +460,11 @@
     width: calc(100% + 2 * var(--wa-space-2xs));
     border: 0;
     background: transparent;
+  }
+  /* Until the page has applied its styles and theme, WebKitGTK paints the
+     frame with a light default background. */
+  .tool-ui.loading {
+    visibility: hidden;
   }
   .dialog-buttons {
     display: flex;
