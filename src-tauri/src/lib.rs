@@ -463,6 +463,17 @@ async fn app_is_running(hub: &Hub, inst: &tools::Installed) -> bool {
         || (inst.manifest(&hub.tools_dir).is_live() && hub.live.running(inst.id()).await)
 }
 
+/// Whether the tool's own window already runs, so "Open own window" has
+/// nothing to start. A service from the `[live]` section runs without a
+/// window, so only `live = true` counts its socket as the open app.
+async fn window_is_open(hub: &Hub, inst: &tools::Installed) -> bool {
+    let manifest = inst.manifest(&hub.tools_dir);
+    tools::app_running(&hub.tools_dir, inst)
+        || (manifest.is_live()
+            && manifest.live_start().is_none()
+            && hub.live.running(inst.id()).await)
+}
+
 /// Quits the application: a live application with `quit` first, and with
 /// SIGTERM when it is still running after `wait`.
 async fn quit_app(
@@ -498,7 +509,7 @@ async fn tool_launch(app: AppHandle, id: String) -> Result<(), String> {
     let hub = app.state::<Hub>();
     let inst = tools::load(&hub.tools_dir, &id)?;
     // An application that tuxhub only starts and stops runs once.
-    if app_is_running(&hub, &inst).await {
+    if window_is_open(&hub, &inst).await {
         return Ok(());
     }
     tools::launch(&hub.tools_dir, &inst)
@@ -1185,6 +1196,43 @@ mod tests {
         assert!(exits_soon(&mut child).await, "the program still runs");
         assert!(!app_is_running(&hub, &inst).await);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A running `[live]` service is not the tool's window: "Open own window"
+    /// still starts `[run]`. With `live = true` the live socket is the app.
+    #[tokio::test]
+    async fn running_service_does_not_block_the_window() {
+        use std::io::{BufRead, Write};
+        for (name, live, blocked) in [
+            ("win-service", json!({ "command": "app", "args": ["daemon"] }), false),
+            ("win-app", json!(true), true),
+        ] {
+            let (hub, base, _) =
+                hub_with_tool(name, json!({ "live": live, "run": { "command": "app" } }));
+            let listener =
+                std::os::unix::net::UnixListener::bind(base.join("run/tuxhub/livedemo.sock"))
+                    .unwrap();
+            std::thread::spawn(move || {
+                for stream in listener.incoming().flatten() {
+                    std::thread::spawn(move || {
+                        let mut out = stream.try_clone().unwrap();
+                        for line in std::io::BufReader::new(stream)
+                            .lines()
+                            .map_while(Result::ok)
+                        {
+                            let msg: Value = serde_json::from_str(&line).unwrap();
+                            let result = json!({ "protocol": 1 });
+                            let _ =
+                                writeln!(out, "{}", json!({ "id": msg["id"], "result": result }));
+                        }
+                    });
+                }
+            });
+            let inst = tools::load(&hub.tools_dir, "livedemo").unwrap();
+            assert!(app_is_running(&hub, &inst).await, "{name}");
+            assert_eq!(window_is_open(&hub, &inst).await, blocked, "{name}");
+            let _ = std::fs::remove_dir_all(&base);
+        }
     }
 
     /// The live commands only talk to tools that declare `live = true`.
