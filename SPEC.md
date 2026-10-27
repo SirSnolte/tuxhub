@@ -89,7 +89,15 @@ hinzufügen“, nichts wird installiert (Schutz auch gegen alte Oberflächen).
 - Starten: `flatpak run --<installation> <id>` bzw. das Programm des Pakets.
 - Updates prüfen/ausführen über die Quelle: Flatpak mit
   `--<installation>` (systemweit fragt Polkit nach dem Passwort),
-  Systempaket wie heute über pkexec.
+  Systempaket wie heute über pkexec. Flatpak-Updates sind neu (bisher prüfte
+  tuxhub sie nicht): Prüfen mit `flatpak remote-ls --updates --app
+  --<installation> --columns=application,version`; steht die ID dort, gibt es
+  ein Update auf diese Version (leer → „neu“). Ausführen über „Aktualisieren“
+  (`tool_install` eines Eintrags in tuxhub) mit `flatpak update
+  --<installation> -y --noninteractive <id>`.
+- `tool_install` prüft `detect` nur für Apps, die noch nicht in tuxhub sind;
+  für Einträge in tuxhub ist es das Update (Systempakete meldet `rpm -q`
+  immer als vorhanden).
 - Deinstallieren, eigene Installation: wie heute, Flatpak mit
   `--<installation>`.
 - Deinstallieren, übernommene Installation: Dialog mit zwei Wegen:
@@ -119,6 +127,11 @@ Seite „<Name> ist nicht mehr installiert“ mit „Installieren“ und „Aus
 tuxhub entfernen“. Der Eintrag bleibt, bis der Benutzer wählt.
 „Installieren“ legt eine eigene Installation an (`adopted = false`,
 `installation = "user"`).
+
+Ist nur die gespeicherte Flatpak-Installation weg, die andere aber da (z. B.
+die `user`-Kopie außerhalb entfernt, `system` noch vorhanden), stellt das
+Laden der Seitenleiste den Eintrag still auf die vorhandene Installation um
+(`adopted = true`). So entsteht nie eine zweite Installation.
 
 ## 6. Dateien
 
@@ -151,7 +164,9 @@ tuxhub entfernen“. Der Eintrag bleibt, bis der Benutzer wählt.
 15. Deinstallieren, App schon weg → Erfolg, Eintrag weg.
 16. App außerhalb deinstalliert → Seite „nicht mehr installiert“; „Installieren“ → eigene `user`-Installation.
 17. Alte tool.json ohne neue Felder → `user`, nicht übernommen; alles wie bisher.
-18. UI 760 px, hell und dunkel: Workshop-Karte mit Tag + Knopf, beide Hinweise, Dialog.
+18. Flatpak-Update vorhanden (`remote-ls --updates` listet die ID) → Update auf die Version; nicht gelistet → kein Update; Ausführen ruft `flatpak update --<installation>`.
+19. Gespeicherte `user`-Installation weg, `system` da → Eintrag steht danach auf `system`/`adopted`, kein „nicht mehr installiert“.
+20. UI 760 px, hell und dunkel: Workshop-Karte mit Tag + Knopf, beide Hinweise, Dialog.
 
 ## 8. Sicherheit
 
