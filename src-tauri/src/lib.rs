@@ -434,26 +434,48 @@ async fn install_entry<R: tauri::Runtime>(
     hub: &Hub,
     entry: &Entry,
 ) -> Result<Installed, String> {
-    match tools::load(&hub.tools_dir, &entry.id) {
-        Err(_) if tools::detect(entry, &hub.programs).await.any() => {
+    let previous = tools::load(&hub.tools_dir, &entry.id).ok();
+    let found = tools::detect(previous.as_ref().map_or(entry, |p| &p.entry), &hub.programs).await;
+    match &previous {
+        None if found.any() => {
             return Err(format!(
                 "{} is already on this computer; add it to the sidebar",
                 entry.name
             ));
         }
-        // A Flatpak in tuxhub is updated where it is installed.
-        Ok(inst)
-            if matches!(inst.entry.source, Source::Flatpak { .. })
-                && tools::detect(&inst.entry, &hub.programs)
-                    .await
-                    .flatpak
-                    .contains(&inst.installation) =>
+        // A Flatpak in tuxhub is updated where it is installed, never
+        // installed a second time.
+        Some(inst)
+            if matches!(inst.entry.source, Source::Flatpak { .. }) && !found.flatpak.is_empty() =>
         {
+            let mut inst = inst.clone();
+            if !found.flatpak.contains(&inst.installation) {
+                inst.installation = found.flatpak[0];
+                inst.adopted = true;
+            }
             return tools::update_flatpak(app, &hub.tools_dir, &hub.programs, &inst, entry).await;
         }
         _ => {}
     }
-    tools::install(app, &hub.tools_dir, &hub.programs, entry).await
+    let inst = tools::install(app, &hub.tools_dir, &hub.programs, entry).await?;
+    let inst = carry_over(previous.as_ref(), found.package, inst);
+    if inst.adopted {
+        tools::save(&hub.tools_dir, &inst)?;
+    }
+    Ok(inst)
+}
+
+/// The record after installing over `previous`: the update of a system
+/// package that was on the computer before tuxhub stays adopted.
+fn carry_over(previous: Option<&Installed>, present: bool, mut new: Installed) -> Installed {
+    if let Some(p) = previous
+        && p.adopted
+        && present
+        && matches!(new.entry.source, Source::SystemPackage { .. })
+    {
+        new.adopted = true;
+    }
+    new
 }
 
 /// Adds a workshop app that is already on this computer to the sidebar.
@@ -2167,5 +2189,82 @@ while True:
         let saved = recorded(&hub, "demo").unwrap();
         assert!(saved.adopted);
         assert_eq!(saved.installation, tools::Installation::System);
+    }
+
+    /// The recorded installation is gone, the other one has the app: an
+    /// update goes there instead of installing a second copy.
+    #[tokio::test]
+    async fn updating_a_moved_flatpak_never_installs_a_second_copy() {
+        let (hub, f) = hub_with_fakes("update-moved");
+        flatpak_with_updates(&f, &[tools::Installation::System], "");
+        record(&hub, &Installed::new(flatpak_app("demo")));
+        let app = tauri::test::mock_app();
+        install_entry(app.handle(), &hub, &flatpak_app("demo"))
+            .await
+            .unwrap();
+        let changes: Vec<String> = f
+            .calls()
+            .into_iter()
+            .filter(|c| !c.starts_with("flatpak info "))
+            .collect();
+        assert_eq!(
+            changes,
+            ["flatpak update --system -y --noninteractive net.example.demo"]
+        );
+        let saved = recorded(&hub, "demo").unwrap();
+        assert_eq!(saved.installation, tools::Installation::System);
+        assert!(saved.adopted);
+    }
+
+    /// A query that hangs says nothing about the installation: the record
+    /// keeps pointing where it did.
+    #[tokio::test]
+    async fn a_hanging_query_does_not_move_a_flatpak() {
+        let (mut hub, f) = hub_with_fakes("hang-no-move");
+        hub.programs.timeout = std::time::Duration::from_millis(300);
+        f.set(
+            "flatpak",
+            "case \"$2\" in --user) exec sleep 30;; --system) exit 0;; esac\nexit 1",
+        );
+        record(&hub, &Installed::new(flatpak_app("demo")));
+        assert_eq!(sidebar_state(&hub, "demo").await, (false, false));
+        let saved = recorded(&hub, "demo").unwrap();
+        assert_eq!(saved.installation, tools::Installation::User);
+        assert!(!saved.adopted);
+    }
+
+    /// The update of an adopted system package keeps it adopted; installing
+    /// a missing one makes it tuxhub's own.
+    #[test]
+    fn updates_keep_an_adopted_package_adopted() {
+        let previous = Installed {
+            adopted: true,
+            ..Installed::new(package_app("clock"))
+        };
+        let new = Installed {
+            version: Some("v2".into()),
+            ..Installed::new(package_app("clock"))
+        };
+        assert!(carry_over(Some(&previous), true, new.clone()).adopted);
+        assert!(!carry_over(Some(&previous), false, new.clone()).adopted);
+        assert!(!carry_over(None, true, new).adopted);
+    }
+
+    /// A workshop entry that no longer is the same Flatpak does not replace
+    /// the record of the installed one.
+    #[tokio::test]
+    async fn a_flatpak_update_keeps_the_entry_of_the_installed_app() {
+        let (hub, f) = hub_with_fakes("update-other-entry");
+        flatpak_with_updates(&f, &[tools::Installation::User], "");
+        record(&hub, &Installed::new(flatpak_app("demo")));
+        let release = workshop_entry("demo", json!({ "type": "github-release", "asset": "*" }));
+        let app = tauri::test::mock_app();
+        install_entry(app.handle(), &hub, &release).await.unwrap();
+        let saved = recorded(&hub, "demo").unwrap();
+        assert!(
+            matches!(saved.entry.source, Source::Flatpak { .. }),
+            "{:?}",
+            saved.entry.source
+        );
     }
 }

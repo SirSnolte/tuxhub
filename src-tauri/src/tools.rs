@@ -450,6 +450,8 @@ pub struct Programs {
     pub dpkg_query: PathBuf,
     /// Longest time a query may take before it counts as "not installed".
     pub timeout: Duration,
+    /// Longest time a query of a remote may take.
+    pub network_timeout: Duration,
 }
 
 impl Default for Programs {
@@ -459,6 +461,7 @@ impl Default for Programs {
             rpm: "rpm".into(),
             dpkg_query: "dpkg-query".into(),
             timeout: Duration::from_secs(5),
+            network_timeout: Duration::from_secs(60),
         }
     }
 }
@@ -475,10 +478,16 @@ impl Programs {
         tokio::time::timeout(self.timeout, out).await.ok()?.ok()
     }
 
-    async fn flatpak_installed(&self, flatpak_id: &str, installation: Installation) -> bool {
+    /// Whether the installation has the app, or `None` when flatpak did not
+    /// answer in time or could not run.
+    async fn flatpak_answer(&self, flatpak_id: &str, installation: Installation) -> Option<bool> {
         self.query(&self.flatpak, &["info", installation.flag(), flatpak_id])
             .await
-            .is_some_and(|o| o.status.success())
+            .map(|o| o.status.success())
+    }
+
+    async fn flatpak_installed(&self, flatpak_id: &str, installation: Installation) -> bool {
+        self.flatpak_answer(flatpak_id, installation).await == Some(true)
     }
 
     async fn rpm_installed(&self, package: &str) -> bool {
@@ -629,7 +638,7 @@ pub async fn check_installation(
     inst: &mut Installed,
 ) -> InstallState {
     match &inst.entry.source {
-        Source::Flatpak { .. } => {
+        Source::Flatpak { flatpak_id, .. } => {
             let found = detect(&inst.entry, programs).await.flatpak;
             let Some(&other) = found.first() else {
                 return InstallState {
@@ -637,7 +646,11 @@ pub async fn check_installation(
                     duplicate: false,
                 };
             };
-            if !found.contains(&inst.installation) {
+            // Only a clear "not installed" moves the record, not a query
+            // that hung or failed.
+            if !found.contains(&inst.installation)
+                && programs.flatpak_answer(flatpak_id, inst.installation).await == Some(false)
+            {
                 inst.installation = other;
                 inst.adopted = true;
                 if let Err(e) = save(tools_dir, inst) {
@@ -1437,8 +1450,11 @@ async fn flatpak_update(
             "--columns=application,version,commit",
         ])
         .stdin(Stdio::null())
-        .output()
+        .kill_on_drop(true)
+        .output();
+    let out = tokio::time::timeout(programs.network_timeout, out)
         .await
+        .map_err(|_| "flatpak did not answer in time".to_string())?
         .map_err(|e| format!("could not run flatpak: {e}"))?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
@@ -1480,9 +1496,16 @@ pub async fn update_flatpak<R: Runtime>(
         ],
     )
     .await?;
-    // The workshop may have changed the entry, for example its icon.
+    // The workshop may have changed the entry, for example its icon. An
+    // entry for another app or source does not describe this installation.
+    let same_app =
+        matches!(&entry.source, Source::Flatpak { flatpak_id: id, .. } if id == flatpak_id);
     let updated = Installed {
-        entry: entry.clone(),
+        entry: if same_app {
+            entry.clone()
+        } else {
+            inst.entry.clone()
+        },
         ..inst.clone()
     };
     save(tools_dir, &updated)?;
@@ -1525,6 +1548,7 @@ impl Fakes {
             rpm: dir.join("rpm"),
             dpkg_query: dir.join("dpkg-query"),
             timeout: Duration::from_secs(5),
+            network_timeout: Duration::from_secs(5),
         };
         Self { dir, programs }
     }
@@ -1927,6 +1951,22 @@ mod tests {
             detect(&package_entry(false, true), &f.programs)
                 .await
                 .package
+        );
+    }
+
+    /// `remote-ls` talks to the network and gets a timeout of its own.
+    #[tokio::test]
+    async fn a_hanging_update_check_fails() {
+        let mut f = Fakes::new("update-hang");
+        f.programs.network_timeout = Duration::from_millis(300);
+        f.set("flatpak", "exec sleep 30");
+        let inst = Installed::new(flatpak_entry());
+        let start = std::time::Instant::now();
+        assert!(check_update(&inst, &f.programs).await.is_err());
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
         );
     }
 

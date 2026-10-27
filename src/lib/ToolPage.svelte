@@ -111,7 +111,8 @@
     update = knownUpdate;
   });
 
-  const canCheck = $derived(updatable && !update);
+  // A missing app has nothing to start or update until it is installed again.
+  const canCheck = $derived(updatable && !update && !tool.missing);
   const canReconnect = $derived((plainApp && embedded) || webTool);
 
   async function run(fn: () => Promise<unknown>, ok?: string) {
@@ -135,7 +136,7 @@
   }
 
   /** Whether the tool can open a window of its own. */
-  const canOpenWindow = $derived(tool.can_launch || webTool);
+  const canOpenWindow = $derived((tool.can_launch || webTool) && !tool.missing);
   /** Whether something of the tool is running that "Quit" can end. */
   const canQuit = $derived((liveApp && liveRunning) || tool.running || (launchOnly && tool.app_running));
 
