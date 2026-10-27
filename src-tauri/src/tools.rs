@@ -423,12 +423,13 @@ fn write_record(dir: &Path, inst: &Installed) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
-async fn run(cmd: &str, args: &[&str]) -> Result<(), String> {
+async fn run(cmd: impl AsRef<Path>, args: &[&str]) -> Result<(), String> {
+    let cmd = cmd.as_ref();
     let out = Command::new(cmd)
         .args(args)
         .output()
         .await
-        .map_err(|e| format!("could not run {cmd}: {e}"))?;
+        .map_err(|e| format!("could not run {}: {e}", cmd.display()))?;
     if out.status.success() {
         Ok(())
     } else {
@@ -436,9 +437,109 @@ async fn run(cmd: &str, args: &[&str]) -> Result<(), String> {
     }
 }
 
+/// Programs that tell and change where an app is installed.
+#[derive(Debug, Clone)]
+pub struct Programs {
+    pub flatpak: PathBuf,
+    pub rpm: PathBuf,
+    pub dpkg_query: PathBuf,
+    /// Longest time a query may take before it counts as "not installed".
+    pub timeout: Duration,
+}
+
+impl Default for Programs {
+    fn default() -> Self {
+        Self {
+            flatpak: "flatpak".into(),
+            rpm: "rpm".into(),
+            dpkg_query: "dpkg-query".into(),
+            timeout: Duration::from_secs(5),
+        }
+    }
+}
+
+impl Programs {
+    /// Output of a query, or `None` when the program is missing, cannot run
+    /// or takes longer than the timeout. A late program is killed.
+    async fn query(&self, program: &Path, args: &[&str]) -> Option<std::process::Output> {
+        let out = Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output();
+        tokio::time::timeout(self.timeout, out).await.ok()?.ok()
+    }
+
+    async fn flatpak_installed(&self, flatpak_id: &str, installation: Installation) -> bool {
+        self.query(&self.flatpak, &["info", installation.flag(), flatpak_id])
+            .await
+            .is_some_and(|o| o.status.success())
+    }
+
+    async fn rpm_installed(&self, package: &str) -> bool {
+        self.query(&self.rpm, &["-q", "--quiet", package])
+            .await
+            .is_some_and(|o| o.status.success())
+    }
+
+    async fn deb_installed(&self, package: &str) -> bool {
+        // A removed package can leave its configuration: "deinstall ok config-files".
+        self.query(&self.dpkg_query, &["-W", "-f=${Status}", package])
+            .await
+            .is_some_and(|o| o.status.success() && o.stdout.ends_with(b" installed"))
+    }
+}
+
+/// Where the app of a workshop entry is installed on this computer.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Detected {
+    /// Flatpak installations that contain the app.
+    pub flatpak: Vec<Installation>,
+    /// The system package is installed.
+    pub package: bool,
+}
+
+impl Detected {
+    pub fn any(&self) -> bool {
+        !self.flatpak.is_empty() || self.package
+    }
+}
+
+/// Looks for the app of a Flatpak or system package entry. Queries that
+/// fail, hang or whose program is missing count as "not installed".
+pub async fn detect(entry: &Entry, programs: &Programs) -> Detected {
+    if entry.validate().is_err() {
+        return Detected::default();
+    }
+    match &entry.source {
+        Source::Flatpak { flatpak_id, .. } => {
+            let (user, system) = tokio::join!(
+                programs.flatpak_installed(flatpak_id, Installation::User),
+                programs.flatpak_installed(flatpak_id, Installation::System),
+            );
+            Detected {
+                flatpak: [(user, Installation::User), (system, Installation::System)]
+                    .into_iter()
+                    .filter_map(|(found, i)| found.then_some(i))
+                    .collect(),
+                package: false,
+            }
+        }
+        Source::SystemPackage {
+            package, rpm, deb, ..
+        } => Detected {
+            flatpak: vec![],
+            package: (rpm.is_some() && programs.rpm_installed(package).await)
+                || (deb.is_some() && programs.deb_installed(package).await),
+        },
+        _ => Detected::default(),
+    }
+}
+
 pub async fn install<R: Runtime>(
     app: &AppHandle<R>,
     tools_dir: &Path,
+    programs: &Programs,
     entry: &Entry,
 ) -> Result<Installed, String> {
     entry.validate()?;
@@ -452,7 +553,7 @@ pub async fn install<R: Runtime>(
             if remote == "flathub" {
                 progress(app, stage(&entry.id, "flathub", None));
                 run(
-                    "flatpak",
+                    &programs.flatpak,
                     &[
                         "remote-add",
                         "--user",
@@ -465,7 +566,7 @@ pub async fn install<R: Runtime>(
             }
             progress(app, stage(&entry.id, "flatpak", Some(flatpak_id)));
             run(
-                "flatpak",
+                &programs.flatpak,
                 &[
                     "install",
                     "--user",
@@ -1197,6 +1298,85 @@ pub(crate) async fn spawn_copied(program: &Path, args: &[&str]) -> std::process:
     panic!("{} stays busy", program.display());
 }
 
+/// Stand-ins for flatpak, rpm and dpkg-query: shell scripts that log each
+/// call to `<dir>/calls` and then run the body a test gives them. A program
+/// a test does not set is missing.
+#[cfg(test)]
+pub(crate) struct Fakes {
+    pub dir: PathBuf,
+    pub programs: Programs,
+}
+
+#[cfg(test)]
+impl Fakes {
+    pub fn new(name: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("tuxhub-fakes-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let programs = Programs {
+            flatpak: dir.join("flatpak"),
+            rpm: dir.join("rpm"),
+            dpkg_query: dir.join("dpkg-query"),
+            timeout: Duration::from_secs(5),
+        };
+        Self { dir, programs }
+    }
+
+    /// Makes `program` run `body` after logging its arguments. The file is
+    /// written by a child process: a file this process held open for writing
+    /// would be inherited by other tests' forks and fail with "Text file busy".
+    pub fn set(&self, program: &str, body: &str) {
+        let script = format!(
+            "#!/bin/sh\necho \"$(basename \"$0\") $*\" >> '{}'\n{body}\n",
+            self.dir.join("calls").display()
+        );
+        let path = self.dir.join(program);
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+            .arg(&path)
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        use std::io::Write;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(script.as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+    }
+
+    /// A flatpak that finds the app in the given installations and accepts
+    /// every other command.
+    pub fn flatpak_with(&self, installed: &[Installation]) {
+        let flags: Vec<&str> = installed.iter().map(|i| i.flag()).collect();
+        self.set(
+            "flatpak",
+            &format!(
+                "if [ \"$1\" = info ]; then case \" {} \" in *\" $2 \"*) exit 0;; esac; exit 1; fi\nexit 0",
+                flags.join(" ")
+            ),
+        );
+    }
+
+    /// The logged calls, one line per call: program and arguments.
+    pub fn calls(&self) -> Vec<String> {
+        std::fs::read_to_string(self.dir.join("calls"))
+            .unwrap_or_default()
+            .lines()
+            .map(String::from)
+            .collect()
+    }
+}
+
+#[cfg(test)]
+impl Drop for Fakes {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1260,7 +1440,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
-        let inst = install(app.handle(), &tmp, &entry).await.unwrap();
+        let programs = Programs::default();
+        let inst = install(app.handle(), &tmp, &programs, &entry)
+            .await
+            .unwrap();
         assert!(inst.version.as_deref().unwrap().starts_with('v'));
         assert_eq!(
             inst.detected_run, None,
@@ -1274,7 +1457,9 @@ mod tests {
             assert!(root.join(ui).is_file(), "UI {ui} missing from the release");
         }
         // Installing again exercises the update path.
-        install(app.handle(), &tmp, &entry).await.unwrap();
+        install(app.handle(), &tmp, &programs, &entry)
+            .await
+            .unwrap();
         assert_eq!(load_all(&tmp).len(), 1);
         std::fs::remove_dir_all(&tmp).unwrap();
     }
@@ -1475,6 +1660,103 @@ mod tests {
             remote: "flathub".into(),
         };
         assert!(e.validate().is_err());
+    }
+
+    fn flatpak_entry() -> Entry {
+        serde_json::from_value(flatpak_record("user")["entry"].clone()).unwrap()
+    }
+
+    fn package_entry(rpm: bool, deb: bool) -> Entry {
+        system_package(serde_json::json!({
+            "type": "system-package",
+            "package": "clock",
+            "rpm": rpm.then_some("*.rpm"),
+            "deb": deb.then_some("*.deb"),
+            "command": "/usr/bin/clock",
+        }))
+    }
+
+    #[tokio::test]
+    async fn detects_flatpak_installations() {
+        use Installation::*;
+        let f = Fakes::new("detect-flatpak");
+        for found in [vec![], vec![System], vec![User], vec![User, System]] {
+            f.flatpak_with(&found);
+            let d = detect(&flatpak_entry(), &f.programs).await;
+            assert_eq!(d.flatpak, found);
+            assert!(!d.package);
+            assert_eq!(d.any(), !found.is_empty());
+        }
+        let calls = f.calls();
+        assert!(calls.contains(&"flatpak info --user net.example.App".to_string()));
+        assert!(calls.contains(&"flatpak info --system net.example.App".to_string()));
+    }
+
+    #[tokio::test]
+    async fn detects_system_packages() {
+        let f = Fakes::new("detect-package");
+        f.set("rpm", "exit 0");
+        let d = detect(&package_entry(true, false), &f.programs).await;
+        assert!(d.package);
+        assert!(d.flatpak.is_empty());
+        assert_eq!(f.calls(), ["rpm -q --quiet clock"]);
+
+        f.set("rpm", "exit 1");
+        assert!(
+            !detect(&package_entry(true, false), &f.programs)
+                .await
+                .package
+        );
+
+        // A removed package can leave its configuration behind.
+        f.set("dpkg-query", "printf 'deinstall ok config-files'");
+        assert!(
+            !detect(&package_entry(false, true), &f.programs)
+                .await
+                .package
+        );
+        f.set("dpkg-query", "printf 'install ok installed'");
+        assert!(
+            detect(&package_entry(false, true), &f.programs)
+                .await
+                .package
+        );
+    }
+
+    /// Without flatpak, rpm or dpkg-query nothing is installed, and no error.
+    #[tokio::test]
+    async fn missing_programs_find_nothing() {
+        let f = Fakes::new("detect-missing");
+        assert!(!detect(&flatpak_entry(), &f.programs).await.any());
+        assert!(!detect(&package_entry(true, true), &f.programs).await.any());
+    }
+
+    #[tokio::test]
+    async fn a_hanging_query_finds_nothing() {
+        let mut f = Fakes::new("detect-hang");
+        f.programs.timeout = Duration::from_millis(300);
+        f.set("flatpak", "exec sleep 30");
+        let start = std::time::Instant::now();
+        assert!(!detect(&flatpak_entry(), &f.programs).await.any());
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
+        );
+    }
+
+    /// Ids from the catalog are only passed on after validation.
+    #[tokio::test]
+    async fn invalid_entries_are_not_queried() {
+        let f = Fakes::new("detect-invalid");
+        f.flatpak_with(&[Installation::User]);
+        let mut e = flatpak_entry();
+        e.source = Source::Flatpak {
+            flatpak_id: "--help".into(),
+            remote: "flathub".into(),
+        };
+        assert!(!detect(&e, &f.programs).await.any());
+        assert!(f.calls().is_empty());
     }
 
     fn flatpak_record(installation: &str) -> Value {

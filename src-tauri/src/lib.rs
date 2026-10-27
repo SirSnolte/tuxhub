@@ -49,6 +49,8 @@ pub struct Hub {
     /// Tool id -> lock held while tuxhub starts its live service
     live_starts:
         std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+    /// flatpak, rpm and dpkg-query, which tell where apps are installed
+    programs: tools::Programs,
 }
 
 impl Hub {
@@ -66,6 +68,7 @@ impl Hub {
             updated_from: Default::default(),
             live: live::Live::new(None, std::sync::Arc::new(|_| {})),
             live_starts: Default::default(),
+            programs: Default::default(),
         }
     }
 
@@ -354,24 +357,37 @@ struct WorkshopView {
 struct WorkshopItem {
     entry: Entry,
     installed: bool,
+    /// On this computer, but not in tuxhub: it can be added to the sidebar.
+    present: bool,
+}
+
+/// The workshop entries with their state. Installations are looked for side
+/// by side, so a hanging query delays the list by the timeout at most.
+async fn workshop_items(hub: &Hub, entries: Vec<Entry>) -> Vec<WorkshopItem> {
+    let installed: Vec<String> = tools::load_all(&hub.tools_dir)
+        .into_iter()
+        .map(|t| t.entry.id)
+        .collect();
+    let present = futures_util::future::join_all(entries.iter().map(|e| async {
+        !installed.contains(&e.id) && tools::detect(e, &hub.programs).await.any()
+    }))
+    .await;
+    entries
+        .into_iter()
+        .zip(present)
+        .map(|(entry, present)| WorkshopItem {
+            installed: installed.contains(&entry.id),
+            present,
+            entry,
+        })
+        .collect()
 }
 
 #[tauri::command]
 async fn workshop_list(app: AppHandle) -> WorkshopView {
     let (entries, live) = workshop_entries().await;
-    let hub = app.state::<Hub>();
-    let installed: Vec<String> = tools::load_all(&hub.tools_dir)
-        .into_iter()
-        .map(|t| t.entry.id)
-        .collect();
     WorkshopView {
-        entries: entries
-            .into_iter()
-            .map(|entry| WorkshopItem {
-                installed: installed.contains(&entry.id),
-                entry,
-            })
-            .collect(),
+        entries: workshop_items(&app.state::<Hub>(), entries).await,
         live,
     }
 }
@@ -404,11 +420,29 @@ async fn tool_install(app: AppHandle, id: String) -> Result<(), String> {
     // Stop the running process before an update.
     hub.runtime.stop(&id).await;
     embed::stop(&app, &id).await;
-    tools::install(&app, &hub.tools_dir, &entry).await?;
+    install_entry(&app, &hub, &entry).await?;
     updates::forget(&app, &id);
     shortcuts::rebind(app.clone());
     start_background_tools(app).await;
     Ok(())
+}
+
+/// Installs or updates a workshop entry. An app that is already on this
+/// computer but not in tuxhub is never installed a second time.
+async fn install_entry<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    hub: &Hub,
+    entry: &Entry,
+) -> Result<Installed, String> {
+    if tools::load(&hub.tools_dir, &entry.id).is_err()
+        && tools::detect(entry, &hub.programs).await.any()
+    {
+        return Err(format!(
+            "{} is already on this computer; add it to the sidebar",
+            entry.name
+        ));
+    }
+    tools::install(app, &hub.tools_dir, &hub.programs, entry).await
 }
 
 // ------------------------------------------------------------------- Tools
@@ -927,6 +961,7 @@ pub fn run() {
                 updated_from: std::sync::Mutex::new(updated_from.clone()),
                 live,
                 live_starts: Default::default(),
+                programs: Default::default(),
             });
 
             if let Err(e) = system::setup_tray(app.handle()) {
@@ -1502,5 +1537,136 @@ while True:
         assert_eq!(ok.unwrap(), json!(true));
         assert!(refused.is_err());
         assert!(!log.iter().any(|l| l.contains("setup")), "{log:?}");
+    }
+
+    /// A hub that asks fake flatpak, rpm and dpkg-query where apps are.
+    fn hub_with_fakes(name: &str) -> (Hub, tools::Fakes) {
+        let f = tools::Fakes::new(name);
+        let mut hub = Hub::for_test(f.dir.join("tools"), f.dir.join("settings"));
+        hub.programs = f.programs.clone();
+        (hub, f)
+    }
+
+    fn workshop_entry(id: &str, source: Value) -> Entry {
+        serde_json::from_value(json!({
+            "id": id,
+            "name": format!("App {id}"),
+            "repo": "owner/app",
+            "source": source,
+        }))
+        .unwrap()
+    }
+
+    fn flatpak_app(id: &str) -> Entry {
+        workshop_entry(
+            id,
+            json!({ "type": "flatpak", "flatpak_id": format!("net.example.{id}") }),
+        )
+    }
+
+    fn package_app(id: &str) -> Entry {
+        workshop_entry(
+            id,
+            json!({ "type": "system-package", "package": id, "rpm": "*.rpm", "command": "/usr/bin/true" }),
+        )
+    }
+
+    /// Writes the tool.json of a tool in tuxhub.
+    fn record(hub: &Hub, inst: &Installed) {
+        let dir = hub.tools_dir.join(inst.id());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("tool.json"), serde_json::to_string(inst).unwrap()).unwrap();
+    }
+
+    fn workshop_state(items: &[WorkshopItem]) -> Vec<(&str, bool, bool)> {
+        items
+            .iter()
+            .map(|i| (i.entry.id.as_str(), i.installed, i.present))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn workshop_marks_apps_on_this_computer() {
+        let (hub, f) = hub_with_fakes("workshop-present");
+        f.flatpak_with(&[tools::Installation::System]);
+        f.set("rpm", "exit 0");
+        let own = flatpak_app("own");
+        record(&hub, &Installed::new(own.clone()));
+        let release = workshop_entry("release", json!({ "type": "github-release", "asset": "*" }));
+        let items = workshop_items(
+            &hub,
+            vec![flatpak_app("sys"), own, package_app("clock"), release],
+        )
+        .await;
+        assert_eq!(
+            workshop_state(&items),
+            [
+                ("sys", false, true),
+                ("own", true, false),
+                ("clock", false, true),
+                ("release", false, false)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn workshop_without_flatpak_marks_nothing() {
+        let (hub, _f) = hub_with_fakes("workshop-no-flatpak");
+        let items = workshop_items(&hub, vec![flatpak_app("a"), package_app("b")]).await;
+        assert_eq!(
+            workshop_state(&items),
+            [("a", false, false), ("b", false, false)]
+        );
+    }
+
+    /// Hanging queries run side by side and end at the timeout.
+    #[tokio::test]
+    async fn workshop_loads_while_flatpak_hangs() {
+        let (mut hub, f) = hub_with_fakes("workshop-hang");
+        hub.programs.timeout = std::time::Duration::from_millis(500);
+        f.set("flatpak", "exec sleep 30");
+        let entries: Vec<Entry> = (0..6).map(|i| flatpak_app(&format!("app{i}"))).collect();
+        let start = std::time::Instant::now();
+        let items = workshop_items(&hub, entries).await;
+        assert_eq!(items.len(), 6);
+        assert!(items.iter().all(|i| !i.present));
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn install_refuses_an_app_already_on_this_computer() {
+        let (hub, f) = hub_with_fakes("install-present");
+        f.flatpak_with(&[tools::Installation::System]);
+        let app = tauri::test::mock_app();
+        let err = install_entry(app.handle(), &hub, &flatpak_app("demo"))
+            .await
+            .unwrap_err();
+        assert!(err.contains("already on this computer"), "{err}");
+        assert!(
+            f.calls().iter().all(|c| c.starts_with("flatpak info ")),
+            "{:?}",
+            f.calls()
+        );
+        assert!(!hub.tools_dir.join("demo").exists());
+    }
+
+    #[tokio::test]
+    async fn install_puts_a_new_flatpak_into_the_user_installation() {
+        let (hub, f) = hub_with_fakes("install-new");
+        f.flatpak_with(&[]);
+        let app = tauri::test::mock_app();
+        let inst = install_entry(app.handle(), &hub, &flatpak_app("demo"))
+            .await
+            .unwrap();
+        assert!(!inst.adopted);
+        assert_eq!(inst.installation, tools::Installation::User);
+        assert!(f.calls().contains(
+            &"flatpak install --user -y --noninteractive flathub net.example.demo".to_string()
+        ));
+        assert!(hub.tools_dir.join("demo/tool.json").is_file());
     }
 }
