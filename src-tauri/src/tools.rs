@@ -1400,8 +1400,12 @@ async fn signal(name: &str, pids: &[u32]) -> Result<(), String> {
         .map_err(|e| format!("could not run kill: {e}"))
 }
 
-/// Returns the latest release tag if it differs from the installed one.
-pub async fn check_update(inst: &Installed) -> Result<Option<String>, String> {
+/// Returns the latest release tag if it differs from the installed one; for
+/// a Flatpak the version its remote offers in the installation tuxhub uses.
+pub async fn check_update(inst: &Installed, programs: &Programs) -> Result<Option<String>, String> {
+    if let Source::Flatpak { flatpak_id, .. } = &inst.entry.source {
+        return flatpak_update(programs, flatpak_id, inst.installation).await;
+    }
     let updatable = match &inst.entry.source {
         Source::GithubRelease { .. } | Source::SystemPackage { .. } => true,
         Source::External { asset, user, .. } => *user && asset.is_some(),
@@ -1415,6 +1419,74 @@ pub async fn check_update(inst: &Installed) -> Result<Option<String>, String> {
     let norm = |v: &str| v.trim_start_matches('v').to_string();
     let newer = inst.version.as_deref().map(norm) != Some(norm(&rel.tag_name));
     Ok(newer.then_some(rel.tag_name))
+}
+
+/// The version of a pending Flatpak update, or its short commit when the app
+/// has no version.
+async fn flatpak_update(
+    programs: &Programs,
+    flatpak_id: &str,
+    installation: Installation,
+) -> Result<Option<String>, String> {
+    let out = Command::new(&programs.flatpak)
+        .args([
+            "remote-ls",
+            "--updates",
+            "--app",
+            installation.flag(),
+            "--columns=application,version,commit",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .map_err(|e| format!("could not run flatpak: {e}"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|line| {
+            let mut cols = line.split('\t').map(str::trim);
+            if cols.next() != Some(flatpak_id) {
+                return None;
+            }
+            let version = cols.next().unwrap_or_default();
+            let commit = cols.next().unwrap_or_default();
+            Some(if version.is_empty() { commit } else { version }.to_string())
+        }))
+}
+
+/// Updates a Flatpak in the installation tuxhub uses. A system-wide
+/// installation asks for the password through Polkit.
+pub async fn update_flatpak<R: Runtime>(
+    app: &AppHandle<R>,
+    tools_dir: &Path,
+    programs: &Programs,
+    inst: &Installed,
+    entry: &Entry,
+) -> Result<Installed, String> {
+    let Source::Flatpak { flatpak_id, .. } = &inst.entry.source else {
+        return Err(format!("{} is not a Flatpak", inst.entry.name));
+    };
+    progress(app, stage(inst.id(), "flatpak", Some(flatpak_id)));
+    run(
+        &programs.flatpak,
+        &[
+            "update",
+            inst.installation.flag(),
+            "-y",
+            "--noninteractive",
+            flatpak_id,
+        ],
+    )
+    .await?;
+    // The workshop may have changed the entry, for example its icon.
+    let updated = Installed {
+        entry: entry.clone(),
+        ..inst.clone()
+    };
+    save(tools_dir, &updated)?;
+    Ok(updated)
 }
 
 /// Starts a program the test just copied. Another test may fork while the

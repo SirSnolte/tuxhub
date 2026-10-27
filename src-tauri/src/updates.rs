@@ -22,12 +22,13 @@ pub fn spawn_checker(app: AppHandle) {
     });
 }
 
-/// Checks all GitHub-based tools and returns `tool id -> new tag`.
+/// Checks all GitHub-based tools and Flatpaks and returns `tool id -> new tag`.
 pub async fn check_all(app: &AppHandle) -> BTreeMap<String, String> {
-    let installed = tools::load_all(&app.state::<Hub>().tools_dir);
+    let hub = app.state::<Hub>();
+    let installed = tools::load_all(&hub.tools_dir);
     let mut found = BTreeMap::new();
     for inst in installed {
-        match tools::check_update(&inst).await {
+        match tools::check_update(&inst, &hub.programs).await {
             Ok(Some(tag)) => {
                 found.insert(inst.entry.id.clone(), tag);
             }

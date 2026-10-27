@@ -434,13 +434,24 @@ async fn install_entry<R: tauri::Runtime>(
     hub: &Hub,
     entry: &Entry,
 ) -> Result<Installed, String> {
-    if tools::load(&hub.tools_dir, &entry.id).is_err()
-        && tools::detect(entry, &hub.programs).await.any()
-    {
-        return Err(format!(
-            "{} is already on this computer; add it to the sidebar",
-            entry.name
-        ));
+    match tools::load(&hub.tools_dir, &entry.id) {
+        Err(_) if tools::detect(entry, &hub.programs).await.any() => {
+            return Err(format!(
+                "{} is already on this computer; add it to the sidebar",
+                entry.name
+            ));
+        }
+        // A Flatpak in tuxhub is updated where it is installed.
+        Ok(inst)
+            if matches!(inst.entry.source, Source::Flatpak { .. })
+                && tools::detect(&inst.entry, &hub.programs)
+                    .await
+                    .flatpak
+                    .contains(&inst.installation) =>
+        {
+            return tools::update_flatpak(app, &hub.tools_dir, &hub.programs, &inst, entry).await;
+        }
+        _ => {}
     }
     tools::install(app, &hub.tools_dir, &hub.programs, entry).await
 }
@@ -707,8 +718,9 @@ fn tool_dismiss_duplicate(app: AppHandle, id: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn tool_check_update(app: AppHandle, id: String) -> Result<Option<String>, String> {
-    let inst = tools::load(&app.state::<Hub>().tools_dir, &id)?;
-    tools::check_update(&inst).await
+    let hub = app.state::<Hub>();
+    let inst = tools::load(&hub.tools_dir, &id)?;
+    tools::check_update(&inst, &hub.programs).await
 }
 
 #[tauri::command]
@@ -2062,5 +2074,92 @@ while True:
         let saved = recorded(&hub, "demo").unwrap();
         assert!(!saved.adopted);
         assert_eq!(saved.installation, tools::Installation::User);
+    }
+
+    /// A flatpak that has the app in the given installations and lists
+    /// `updates` for `remote-ls --updates`.
+    fn flatpak_with_updates(f: &tools::Fakes, installed: &[tools::Installation], updates: &str) {
+        let flags: Vec<&str> = installed.iter().map(|i| i.flag()).collect();
+        f.set(
+            "flatpak",
+            &format!(
+                "case \"$1\" in\n info) case \" {} \" in *\" $2 \"*) exit 0;; esac; exit 1;;\n remote-ls) printf '{updates}';;\nesac\nexit 0",
+                flags.join(" ")
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn finds_flatpak_updates_in_the_used_installation() {
+        let (hub, f) = hub_with_fakes("flatpak-update-check");
+        let inst = adopted_system_flatpak(&hub);
+        flatpak_with_updates(
+            &f,
+            &[tools::Installation::System],
+            "net.example.other\\t1.0\\tabc\\nnet.example.demo\\t2.3.0\\t0123456789ab\\n",
+        );
+        assert_eq!(
+            tools::check_update(&inst, &hub.programs)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("2.3.0")
+        );
+        assert!(
+            f.calls().contains(
+                &"flatpak remote-ls --updates --app --system --columns=application,version,commit"
+                    .to_string()
+            ),
+            "{:?}",
+            f.calls()
+        );
+
+        // Without a version the commit tells the update apart.
+        flatpak_with_updates(
+            &f,
+            &[tools::Installation::System],
+            "net.example.demo\\t\\t0123456789ab\\n",
+        );
+        assert_eq!(
+            tools::check_update(&inst, &hub.programs)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("0123456789ab")
+        );
+
+        flatpak_with_updates(
+            &f,
+            &[tools::Installation::System],
+            "net.example.other\\t1.0\\tabc\\n",
+        );
+        assert_eq!(
+            tools::check_update(&inst, &hub.programs).await.unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn updates_a_flatpak_in_its_installation() {
+        let (hub, f) = hub_with_fakes("flatpak-update");
+        flatpak_with_updates(&f, &[tools::Installation::System], "");
+        adopted_system_flatpak(&hub);
+        let app = tauri::test::mock_app();
+        let inst = install_entry(app.handle(), &hub, &flatpak_app("demo"))
+            .await
+            .unwrap();
+        let changes: Vec<String> = f
+            .calls()
+            .into_iter()
+            .filter(|c| !c.starts_with("flatpak info "))
+            .collect();
+        assert_eq!(
+            changes,
+            ["flatpak update --system -y --noninteractive net.example.demo"]
+        );
+        assert!(inst.adopted);
+        let saved = recorded(&hub, "demo").unwrap();
+        assert!(saved.adopted);
+        assert_eq!(saved.installation, tools::Installation::System);
     }
 }

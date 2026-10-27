@@ -91,8 +91,8 @@ hinzufügen“, nichts wird installiert (Schutz auch gegen alte Oberflächen).
   `--<installation>` (systemweit fragt Polkit nach dem Passwort),
   Systempaket wie heute über pkexec. Flatpak-Updates sind neu (bisher prüfte
   tuxhub sie nicht): Prüfen mit `flatpak remote-ls --updates --app
-  --<installation> --columns=application,version`; steht die ID dort, gibt es
-  ein Update auf diese Version (leer → „neu“). Ausführen über „Aktualisieren“
+  --<installation> --columns=application,version,commit`; steht die ID dort,
+  gibt es ein Update auf diese Version (leer → der kurze Commit). Ausführen über „Aktualisieren“
   (`tool_install` eines Eintrags in tuxhub) mit `flatpak update
   --<installation> -y --noninteractive <id>`.
 - `tool_install` prüft `detect` nur für Apps, die noch nicht in tuxhub sind;
