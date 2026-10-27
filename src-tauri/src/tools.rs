@@ -149,6 +149,27 @@ impl Entry {
     }
 }
 
+/// The Flatpak installation an app lives in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Installation {
+    /// The user's own installation, where tuxhub installs Flatpaks.
+    #[default]
+    User,
+    /// The system-wide installation; changes need the password.
+    System,
+}
+
+impl Installation {
+    /// The flatpak option that selects this installation.
+    pub fn flag(self) -> &'static str {
+        match self {
+            Self::User => "--user",
+            Self::System => "--system",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Installed {
     pub entry: Entry,
@@ -161,6 +182,15 @@ pub struct Installed {
     /// Detected executable when the manifest does not name one.
     #[serde(default)]
     pub detected_run: Option<String>,
+    /// The app was installed before; tuxhub only added it to the sidebar.
+    #[serde(default)]
+    pub adopted: bool,
+    /// The Flatpak installation tuxhub uses (Flatpaks only).
+    #[serde(default)]
+    pub installation: Installation,
+    /// The user keeps both Flatpak installations: no hint about the copy.
+    #[serde(default)]
+    pub duplicate_dismissed: bool,
 }
 
 /// Installation progress; the user interface turns `stage` into text.
@@ -188,6 +218,19 @@ fn stage<'a>(id: &'a str, stage: &'static str, detail: Option<&'a str>) -> Progr
 }
 
 impl Installed {
+    /// A record of an own installation, without version or files.
+    pub fn new(entry: Entry) -> Self {
+        Self {
+            entry,
+            version: None,
+            root: None,
+            detected_run: None,
+            adopted: false,
+            installation: Installation::User,
+            duplicate_dismissed: false,
+        }
+    }
+
     pub fn id(&self) -> &str {
         &self.entry.id
     }
@@ -368,9 +411,7 @@ fn announced(file: &Path, user: bool) -> Result<Installed, String> {
     entry.validate()?;
     Ok(Installed {
         version: m.version.clone(),
-        entry,
-        root: None,
-        detected_run: None,
+        ..Installed::new(entry)
     })
 }
 
@@ -437,12 +478,7 @@ pub async fn install<R: Runtime>(
             .await?;
             let dir = tools_dir.join(&entry.id);
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            let inst = Installed {
-                entry: entry.clone(),
-                version: None,
-                root: None,
-                detected_run: None,
-            };
+            let inst = Installed::new(entry.clone());
             write_record(&dir, &inst)?;
             Ok(inst)
         }
@@ -730,10 +766,8 @@ async fn install_system_package<R: Runtime>(
         let dir = tools_dir.join(id);
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let inst = Installed {
-            entry: entry.clone(),
             version: Some(tag),
-            root: None,
-            detected_run: None,
+            ..Installed::new(entry.clone())
         };
         write_record(&dir, &inst)?;
         Ok(inst)
@@ -768,10 +802,9 @@ async fn install_github<R: Runtime>(
     let (tag, root) = fetch_release(app, &staging, id, repo, pattern).await?;
 
     let mut inst = Installed {
-        entry: entry.clone(),
         version: Some(tag),
         root: Some(root),
-        detected_run: None,
+        ..Installed::new(entry.clone())
     };
     let root_dir = staging.join(inst.root.as_deref().unwrap());
     // Only guess an executable when there is no manifest at all. A manifest
@@ -906,18 +939,21 @@ pub fn link_local(tools_dir: &Path, path: &Path) -> Result<Installed, String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let inst = Installed {
         version: m.version.clone(),
-        entry,
-        root: None,
-        detected_run: None,
+        ..Installed::new(entry)
     };
     write_record(&dir, &inst)?;
     Ok(inst)
 }
 
-/// Removes the Flatpak from the user installation, where tuxhub installs it.
-/// A system installation of the same app is left alone.
-fn flatpak_uninstall_args(flatpak_id: &str) -> [&str; 5] {
-    ["uninstall", "--user", "-y", "--noninteractive", flatpak_id]
+/// Removes the Flatpak from one installation; the other one is left alone.
+fn flatpak_uninstall_args(flatpak_id: &str, installation: Installation) -> [&str; 5] {
+    [
+        "uninstall",
+        installation.flag(),
+        "-y",
+        "--noninteractive",
+        flatpak_id,
+    ]
 }
 
 /// Whether flatpak failed only because the app is no longer installed.
@@ -961,7 +997,12 @@ pub async fn uninstall(tools_dir: &Path, inst: &Installed) -> Result<(), String>
         return Ok(());
     }
     if let Source::Flatpak { flatpak_id, .. } = &inst.entry.source {
-        match run("flatpak", &flatpak_uninstall_args(flatpak_id)).await {
+        match run(
+            "flatpak",
+            &flatpak_uninstall_args(flatpak_id, inst.installation),
+        )
+        .await
+        {
             Err(e) if !flatpak_already_gone(&e) => return Err(e),
             _ => {}
         }
@@ -988,7 +1029,11 @@ pub fn launch_cmd(tools_dir: &Path, inst: &Installed) -> Result<LaunchCmd, Strin
     match &inst.entry.source {
         Source::Flatpak { flatpak_id, .. } => Ok(LaunchCmd {
             program: "flatpak".into(),
-            args: vec!["run".into(), flatpak_id.clone()],
+            args: vec![
+                "run".into(),
+                inst.installation.flag().into(),
+                flatpak_id.clone(),
+            ],
             cwd: None,
             flatpak: true,
         }),
@@ -1350,12 +1395,7 @@ mod tests {
             "deb": "*.deb",
             "command": "/bin/sh",
         }));
-        let inst = Installed {
-            entry,
-            version: None,
-            root: None,
-            detected_run: None,
-        };
+        let inst = Installed::new(entry);
         assert!(inst.root_dir(Path::new("/tools")).is_none());
         let lc = launch_cmd(Path::new("/tools"), &inst).unwrap();
         assert_eq!(lc.program, PathBuf::from("/bin/sh"));
@@ -1437,12 +1477,58 @@ mod tests {
         assert!(e.validate().is_err());
     }
 
-    /// tuxhub removes only the Flatpak it installed itself (`--user`), and a
+    fn flatpak_record(installation: &str) -> Value {
+        serde_json::json!({
+            "entry": {
+                "id": "demo",
+                "name": "Demo",
+                "source": { "type": "flatpak", "flatpak_id": "net.example.App" },
+            },
+            "version": null,
+            "installation": installation,
+        })
+    }
+
+    /// tool.json written before installations were detected: tuxhub
+    /// installed every Flatpak for the user itself.
+    #[test]
+    fn old_records_are_own_user_installations() {
+        let inst: Installed = serde_json::from_value(serde_json::json!({
+            "entry": flatpak_record("user")["entry"],
+            "version": null,
+            "root": null,
+            "detected_run": null,
+        }))
+        .unwrap();
+        assert!(!inst.adopted);
+        assert_eq!(inst.installation, Installation::User);
+        assert!(!inst.duplicate_dismissed);
+    }
+
+    #[test]
+    fn rejects_an_unknown_installation() {
+        assert!(serde_json::from_value::<Installed>(flatpak_record("root")).is_err());
+        let inst: Installed = serde_json::from_value(flatpak_record("system")).unwrap();
+        assert_eq!(inst.installation, Installation::System);
+    }
+
+    #[test]
+    fn launches_a_flatpak_from_its_installation() {
+        for (installation, flag) in [("system", "--system"), ("user", "--user")] {
+            let inst: Installed = serde_json::from_value(flatpak_record(installation)).unwrap();
+            let lc = launch_cmd(Path::new("/tools"), &inst).unwrap();
+            assert_eq!(lc.program, PathBuf::from("flatpak"));
+            assert_eq!(lc.args, ["run", flag, "net.example.App"]);
+            assert!(lc.flatpak);
+        }
+    }
+
+    /// tuxhub removes the Flatpak from the installation it uses, and a
     /// Flatpak that is already gone does not keep the tool in the list.
     #[test]
-    fn flatpak_uninstall_targets_the_user_installation() {
+    fn flatpak_uninstall_targets_the_recorded_installation() {
         assert_eq!(
-            flatpak_uninstall_args("net.example.App"),
+            flatpak_uninstall_args("net.example.App", Installation::User),
             [
                 "uninstall",
                 "--user",
@@ -1450,6 +1536,10 @@ mod tests {
                 "--noninteractive",
                 "net.example.App"
             ]
+        );
+        assert_eq!(
+            flatpak_uninstall_args("net.example.App", Installation::System)[1],
+            "--system"
         );
         assert!(flatpak_already_gone(
             "error: No installed refs found for \u{2018}net.example.App\u{2019}"
