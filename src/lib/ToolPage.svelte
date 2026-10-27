@@ -21,6 +21,7 @@
   import EmbedPanel from "./EmbedPanel.svelte";
   import LaunchPanel from "./LaunchPanel.svelte";
   import LivePanel from "./LivePanel.svelte";
+  import { asksHowToRemove, installHint, needsPassword } from "./install-state";
   import type { MenuItem } from "./ToolMenu.svelte";
 
   let {
@@ -47,9 +48,14 @@
   const updatable = $derived(
     source.type === "github-release" ||
       source.type === "system-package" ||
+      source.type === "flatpak" ||
       (ownedExternal && source.type === "external" && !!source.asset && !!tool.entry.repo),
   );
   const removable = $derived(source.type !== "external" || (ownedExternal && !!m.uninstall));
+  /** The app is gone from the computer, or installed twice. */
+  const hint = $derived(installHint(tool));
+  /** Adopted apps can leave tuxhub without being uninstalled. */
+  const askHow = $derived(asksHowToRemove(tool));
   const webTool = $derived(!!m.web_url && !m.ui);
   const plainApp = $derived(tool.level === 0 && tool.can_launch);
   /** Runs on its own and offers its settings over the live interface. */
@@ -206,6 +212,12 @@
     run(() => api.uninstall(id), t("tool.removed", { name: tool.entry.name }));
   }
 
+  /** Removes the tool from tuxhub only; the app stays on the computer. */
+  function forget() {
+    confirming = false;
+    run(() => api.forget(id), t("tool.forgotten", { name: tool.entry.name }));
+  }
+
   function hotkeyFor(action: string) {
     return shortcuts?.bindings.find((b) => b.tool === id && b.action === action)?.trigger;
   }
@@ -303,6 +315,44 @@
     </div>
   {/if}
 
+  {#if hint === "missing"}
+    <wa-callout variant="warning">
+      <div class="hint">
+        <span>{t("tool.missing", { name: tool.entry.name })}</span>
+        <div class="hint-buttons">
+          <wa-button
+            size="s"
+            variant="brand"
+            loading={busy}
+            onclick={() => run(() => api.install(id), t("workshop.installedToast", { name: tool.entry.name }))}
+          >
+            {t("tool.install")}
+          </wa-button>
+          <wa-button size="s" appearance="outlined" disabled={busy} onclick={forget}>{t("tool.forget")}</wa-button>
+        </div>
+      </div>
+    </wa-callout>
+  {:else if hint === "duplicate"}
+    <wa-callout variant="brand">
+      <div class="hint">
+        <span>{t("tool.duplicate", { name: tool.entry.name })}</span>
+        <div class="hint-buttons">
+          <wa-button
+            size="s"
+            variant="brand"
+            loading={busy}
+            onclick={() => run(() => api.removeCopy(id), t("tool.copyRemoved", { name: tool.entry.name }))}
+          >
+            {t("tool.removeCopy")}
+          </wa-button>
+          <wa-button size="s" appearance="outlined" disabled={busy} onclick={() => run(() => api.dismissDuplicate(id))}>
+            {t("tool.keepBoth")}
+          </wa-button>
+        </div>
+      </div>
+    </wa-callout>
+  {/if}
+
   {#if m.notice && dismissedNotice !== m.notice}
     <wa-callout variant="warning">
       <div class="notice">
@@ -320,7 +370,9 @@
     <p class="status">{String(status.text)}</p>
   {/if}
 
-  {#if livePage}
+  {#if hint === "missing"}
+    <!-- Nothing to start or show until the app is installed again. -->
+  {:else if livePage}
     <!-- Running: only the settings. Stopped: the README below, started from
          the bar above; quitting is in the tool menu. -->
     <LaunchPanel {tool} {onchanged} bind:this={launcher} bind:running={liveRunning} bind:busy={liveBusy} hidden />
@@ -397,18 +449,32 @@
 </div>
 
 <wa-dialog
-  label={t(isLocal ? "tool.confirmUnlink" : "tool.confirmUninstall", { name: tool.entry.name })}
+  label={askHow
+    ? t("tool.confirmRemove", { name: tool.entry.name })
+    : t(isLocal ? "tool.confirmUnlink" : "tool.confirmUninstall", { name: tool.entry.name })}
   open={confirming}
   onwa-after-hide={(e: Event) => {
     if (e.target === e.currentTarget) confirming = false;
   }}
 >
-  <p>{t(isLocal ? "tool.unlinkHint" : "tool.uninstallHint")}</p>
+  {#if askHow}
+    <p>{t("tool.adoptedHint", { name: tool.entry.name })}</p>
+  {:else}
+    <p>{t(isLocal ? "tool.unlinkHint" : "tool.uninstallHint")}</p>
+  {/if}
+  {#if needsPassword(tool) && !tool.missing}
+    <p class="muted">{t("tool.passwordHint")}</p>
+  {/if}
   <div slot="footer" class="dialog-buttons">
     <wa-button appearance="outlined" onclick={() => (confirming = false)}>{t("common.cancel")}</wa-button>
-    <wa-button variant="danger" onclick={uninstall}>
-      {isLocal ? t("tool.unlink") : t("tool.uninstall")}
-    </wa-button>
+    {#if askHow}
+      <wa-button appearance="outlined" onclick={forget}>{t("tool.forgetOnly")}</wa-button>
+      <wa-button variant="danger" onclick={uninstall}>{t("tool.uninstallFromPc")}</wa-button>
+    {:else}
+      <wa-button variant="danger" onclick={uninstall}>
+        {isLocal ? t("tool.unlink") : t("tool.uninstall")}
+      </wa-button>
+    {/if}
   </div>
 </wa-dialog>
 
@@ -420,6 +486,20 @@
   }
   .notice span {
     flex: 1;
+  }
+  .hint {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-s);
+    flex-wrap: wrap;
+  }
+  .hint span {
+    flex: 1 1 16rem;
+  }
+  .hint-buttons {
+    display: flex;
+    gap: var(--wa-space-xs);
+    flex-wrap: wrap;
   }
   .page {
     flex: 1;
@@ -469,6 +549,7 @@
   .dialog-buttons {
     display: flex;
     justify-content: flex-end;
+    flex-wrap: wrap;
     gap: var(--wa-space-xs);
   }
 </style>

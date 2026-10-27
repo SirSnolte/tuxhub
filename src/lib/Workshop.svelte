@@ -5,6 +5,7 @@
   import { category as categoryLabel, t, type Key } from "./i18n.svelte";
   import Readme from "./Readme.svelte";
   import ToolIcon from "./ToolIcon.svelte";
+  import { workshopAction } from "./install-state";
   import { valueOf } from "./wa";
 
   let { onopen, onchanged }: { onopen: (id: string) => void; onchanged: () => void } = $props();
@@ -49,6 +50,21 @@
     try {
       await api.install(item.entry.id);
       toast(t("workshop.installedToast", { name: item.entry.name }), "info");
+      await load();
+      onchanged();
+    } catch (e) {
+      toast(`${item.entry.name}: ${errText(e)}`);
+    } finally {
+      installing = null;
+    }
+  }
+
+  /** Adds an app that is already on the computer, without installing it. */
+  async function adopt(item: WorkshopItem) {
+    installing = item.entry.id;
+    try {
+      await api.adopt(item.entry.id);
+      toast(t("workshop.adoptedToast", { name: item.entry.name }), "info");
       await load();
       onchanged();
     } catch (e) {
@@ -138,6 +154,9 @@
             {/if}
             {#if item.installed}
               <wa-tag size="s" appearance="filled" variant="success">{t("workshop.installed")}</wa-tag>
+            {:else if item.present}
+              <!-- Outlined: the brand colour is the green of "Installed". -->
+              <wa-tag size="s" appearance="outlined" variant="brand">{t("workshop.present")}</wa-tag>
             {/if}
           </span>
         </button>
@@ -155,6 +174,7 @@
 
     {#if selected}
       {@const e = selected.entry}
+      {@const action = workshopAction(selected)}
       <aside class="card detail">
         <div class="detail-head">
           <ToolIcon icon={e.icon} category={e.category} size={56} />
@@ -171,9 +191,21 @@
           </wa-button>
         </div>
         <p>{describe(e)}</p>
+        {#if action === "adopt"}
+          <p class="small muted">{t("workshop.presentHint", { name: e.name })}</p>
+        {/if}
         <div class="detail-actions">
-          {#if selected.installed}
+          {#if action === "open"}
             <wa-button variant="brand" onclick={() => onopen(e.id)}>{t("workshop.open")}</wa-button>
+          {:else if action === "adopt"}
+            <wa-button
+              variant="brand"
+              loading={installing === e.id}
+              disabled={installing !== null && installing !== e.id}
+              onclick={() => adopt(selected!)}
+            >
+              {installing === e.id ? t("workshop.adopting") : t("workshop.adopt")}
+            </wa-button>
           {:else}
             <wa-button
               variant="brand"

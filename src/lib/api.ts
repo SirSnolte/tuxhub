@@ -72,9 +72,18 @@ export type Tool = {
   app_running: boolean;
   can_launch: boolean;
   path: string | null;
+  /** The app was on the computer before; tuxhub only added it. */
+  adopted: boolean;
+  /** The Flatpak installation tuxhub uses. */
+  installation: "user" | "system";
+  /** The app is no longer installed on the computer. */
+  missing: boolean;
+  /** The Flatpak is installed for the user and system-wide. */
+  duplicate: boolean;
 };
 
-export type WorkshopItem = { entry: Entry; installed: boolean };
+/** `present`: on the computer, but not in tuxhub. */
+export type WorkshopItem = { entry: Entry; installed: boolean; present: boolean };
 export type Workshop = { entries: WorkshopItem[]; live: boolean };
 
 export type ShortcutStatus = {
@@ -158,6 +167,10 @@ export const api = {
   workshop: () => invoke<Workshop>("workshop_list"),
   readme: (repo: string) => invoke<string>("workshop_readme", { repo }),
   install: (id: string) => invoke<void>("tool_install", { id }),
+  adopt: (id: string) => invoke<void>("tool_adopt", { id }),
+  removeCopy: (id: string) => invoke<void>("tool_remove_copy", { id }),
+  dismissDuplicate: (id: string) => invoke<void>("tool_dismiss_duplicate", { id }),
+  forget: (id: string) => invoke<void>("tool_forget", { id }),
   tools: () => invoke<Tool[]>("tool_list"),
   launch: (id: string) => invoke<void>("tool_launch", { id }),
   appRunning: (id: string) => invoke<boolean>("tool_app_running", { id }),

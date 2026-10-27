@@ -492,6 +492,10 @@ struct ToolView {
     can_launch: bool,
     /// Folder of the tool on disk (not for Flatpaks)
     path: Option<String>,
+    /// The app was on this computer before; tuxhub only added it.
+    adopted: bool,
+    /// The Flatpak installation tuxhub uses.
+    installation: tools::Installation,
     /// The app is no longer installed on this computer.
     missing: bool,
     /// The Flatpak is installed for the user and system-wide, and the user
@@ -516,6 +520,8 @@ async fn tool_views(hub: &Hub) -> Vec<ToolView> {
     for (inst, state) in installed.into_iter().zip(states) {
         let manifest = inst.manifest(&hub.tools_dir);
         out.push(ToolView {
+            adopted: inst.adopted,
+            installation: inst.installation,
             missing: state.missing,
             duplicate: state.duplicate,
             running: hub.runtime.is_running(inst.id()).await,
