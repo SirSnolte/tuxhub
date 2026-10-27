@@ -615,9 +615,45 @@ async fn tool_uninstall(app: AppHandle, id: String) -> Result<(), String> {
     hub.runtime.stop(&id).await;
     embed::stop(&app, &id).await;
     quit_app(&hub, &inst, QUIT_WAIT).await?;
-    tools::uninstall(&hub.tools_dir, &inst).await?;
-    let _ = std::fs::remove_file(hub.settings_path(&id));
-    let _ = std::fs::remove_file(hub.dyn_shortcuts_path(&id));
+    tools::uninstall(&hub.tools_dir, &hub.programs, &inst).await?;
+    remove_tool_data(&hub, &id);
+    updates::forget(&app, &id);
+    shortcuts::rebind(app.clone());
+    Ok(())
+}
+
+/// Removes the settings and hotkeys tuxhub keeps for a tool.
+fn remove_tool_data(hub: &Hub, id: &str) {
+    let _ = std::fs::remove_file(hub.settings_path(id));
+    let _ = std::fs::remove_file(hub.dyn_shortcuts_path(id));
+}
+
+/// Removes a Flatpak or system package tool from tuxhub only: its app stays
+/// on this computer and nothing is run.
+fn forget(hub: &Hub, id: &str) -> Result<(), String> {
+    let inst = tools::load(&hub.tools_dir, id)?;
+    let dir = hub.tools_dir.join(id);
+    if !matches!(
+        inst.entry.source,
+        Source::Flatpak { .. } | Source::SystemPackage { .. }
+    ) || !dir.join("tool.json").is_file()
+    {
+        return Err(format!(
+            "{} can only be uninstalled, not just removed from tuxhub",
+            inst.entry.name
+        ));
+    }
+    std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+    remove_tool_data(hub, id);
+    Ok(())
+}
+
+#[tauri::command]
+async fn tool_forget(app: AppHandle, id: String) -> Result<(), String> {
+    let hub = app.state::<Hub>();
+    hub.runtime.stop(&id).await;
+    embed::stop(&app, &id).await;
+    forget(&hub, &id)?;
     updates::forget(&app, &id);
     shortcuts::rebind(app.clone());
     Ok(())
@@ -1089,6 +1125,7 @@ pub fn run() {
             tool_adopt,
             tool_remove_copy,
             tool_dismiss_duplicate,
+            tool_forget,
             tool_list,
             tool_launch,
             tool_app_running,
@@ -1942,5 +1979,88 @@ while True:
         assert_eq!(sidebar_state(&hub, "clock").await, (true, false));
         // The entry stays until the user decides.
         assert!(recorded(&hub, "demo").is_some());
+    }
+
+    fn adopted_system_flatpak(hub: &Hub) -> Installed {
+        let inst = Installed {
+            adopted: true,
+            installation: tools::Installation::System,
+            ..Installed::new(flatpak_app("demo"))
+        };
+        record(hub, &inst);
+        std::fs::create_dir_all(&hub.settings_dir).unwrap();
+        std::fs::write(hub.settings_path("demo"), "{}").unwrap();
+        std::fs::write(hub.dyn_shortcuts_path("demo"), "[]").unwrap();
+        inst
+    }
+
+    #[tokio::test]
+    async fn forgetting_an_adopted_app_runs_nothing() {
+        let (hub, f) = hub_with_fakes("forget");
+        f.flatpak_with(&[tools::Installation::System]);
+        adopted_system_flatpak(&hub);
+        forget(&hub, "demo").unwrap();
+        assert!(f.calls().is_empty(), "{:?}", f.calls());
+        assert!(recorded(&hub, "demo").is_none());
+        assert!(!hub.tools_dir.join("demo").exists());
+        assert!(!hub.settings_path("demo").exists());
+        assert!(!hub.dyn_shortcuts_path("demo").exists());
+    }
+
+    /// Only tools without files of their own can leave tuxhub without being
+    /// uninstalled.
+    #[test]
+    fn forget_leaves_tools_with_files_alone() {
+        let (hub, _f) = hub_with_fakes("forget-release");
+        let release = workshop_entry("release", json!({ "type": "github-release", "asset": "*" }));
+        record(&hub, &Installed::new(release));
+        assert!(forget(&hub, "release").is_err());
+        assert!(recorded(&hub, "release").is_some());
+    }
+
+    #[tokio::test]
+    async fn uninstalls_an_adopted_flatpak_from_its_installation() {
+        let (hub, f) = hub_with_fakes("uninstall-system");
+        f.flatpak_with(&[tools::Installation::System]);
+        let inst = adopted_system_flatpak(&hub);
+        tools::uninstall(&hub.tools_dir, &hub.programs, &inst)
+            .await
+            .unwrap();
+        assert_eq!(
+            f.calls(),
+            ["flatpak uninstall --system -y --noninteractive net.example.demo"]
+        );
+        assert!(recorded(&hub, "demo").is_none());
+    }
+
+    #[tokio::test]
+    async fn uninstalling_an_app_that_is_gone_succeeds() {
+        let (hub, f) = hub_with_fakes("uninstall-gone");
+        f.set(
+            "flatpak",
+            "echo \"error: No installed refs found for \u{2018}net.example.demo\u{2019}\" >&2\nexit 1",
+        );
+        let inst = adopted_system_flatpak(&hub);
+        tools::uninstall(&hub.tools_dir, &hub.programs, &inst)
+            .await
+            .unwrap();
+        assert!(recorded(&hub, "demo").is_none());
+    }
+
+    #[tokio::test]
+    async fn installing_a_missing_app_makes_an_own_user_installation() {
+        let (hub, f) = hub_with_fakes("reinstall");
+        f.flatpak_with(&[]);
+        adopted_system_flatpak(&hub);
+        let app = tauri::test::mock_app();
+        install_entry(app.handle(), &hub, &flatpak_app("demo"))
+            .await
+            .unwrap();
+        assert!(f.calls().contains(
+            &"flatpak install --user -y --noninteractive flathub net.example.demo".to_string()
+        ));
+        let saved = recorded(&hub, "demo").unwrap();
+        assert!(!saved.adopted);
+        assert_eq!(saved.installation, tools::Installation::User);
     }
 }

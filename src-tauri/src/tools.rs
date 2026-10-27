@@ -1204,7 +1204,11 @@ fn flatpak_already_gone(stderr: &str) -> bool {
 /// Removes a tool. The tool's own `uninstall` command runs first, so it can
 /// remove what it set up itself. Tools installed outside tuxhub are removed
 /// by that command alone.
-pub async fn uninstall(tools_dir: &Path, inst: &Installed) -> Result<(), String> {
+pub async fn uninstall(
+    tools_dir: &Path,
+    programs: &Programs,
+    inst: &Installed,
+) -> Result<(), String> {
     let hook = inst.manifest(tools_dir).uninstall;
     if let Source::External { user, .. } = &inst.entry.source
         && (!user || hook.is_none())
@@ -1237,15 +1241,7 @@ pub async fn uninstall(tools_dir: &Path, inst: &Installed) -> Result<(), String>
         return Ok(());
     }
     if let Source::Flatpak { flatpak_id, .. } = &inst.entry.source {
-        match run(
-            "flatpak",
-            &flatpak_uninstall_args(flatpak_id, inst.installation),
-        )
-        .await
-        {
-            Err(e) if !flatpak_already_gone(&e) => return Err(e),
-            _ => {}
-        }
+        flatpak_uninstall(programs, flatpak_id, inst.installation).await?;
     }
     if let Source::SystemPackage {
         package, rpm, deb, ..
