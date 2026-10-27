@@ -445,6 +445,27 @@ async fn install_entry<R: tauri::Runtime>(
     tools::install(app, &hub.tools_dir, &hub.programs, entry).await
 }
 
+/// Adds a workshop app that is already on this computer to the sidebar.
+async fn adopt_entry(hub: &Hub, entries: Vec<Entry>, id: &str) -> Result<Installed, String> {
+    let entry = entries
+        .into_iter()
+        .find(|e| e.id == id)
+        .ok_or_else(|| format!("{id} is not in the workshop"))?;
+    if tools::load(&hub.tools_dir, id).is_ok() {
+        return Err(format!("{} is already in tuxhub", entry.name));
+    }
+    tools::adopt(&hub.tools_dir, &hub.programs, &entry).await
+}
+
+#[tauri::command]
+async fn tool_adopt(app: AppHandle, id: String) -> Result<(), String> {
+    let (entries, _) = workshop_entries().await;
+    adopt_entry(&app.state::<Hub>(), entries, &id).await?;
+    shortcuts::rebind(app.clone());
+    start_background_tools(app).await;
+    Ok(())
+}
+
 // ------------------------------------------------------------------- Tools
 
 #[derive(Serialize)]
@@ -1002,6 +1023,7 @@ pub fn run() {
             workshop_list,
             workshop_readme,
             tool_install,
+            tool_adopt,
             tool_list,
             tool_launch,
             tool_app_running,
@@ -1668,5 +1690,94 @@ while True:
             &"flatpak install --user -y --noninteractive flathub net.example.demo".to_string()
         ));
         assert!(hub.tools_dir.join("demo/tool.json").is_file());
+    }
+
+    fn recorded(hub: &Hub, id: &str) -> Option<Installed> {
+        let s = std::fs::read_to_string(hub.tools_dir.join(id).join("tool.json")).ok()?;
+        Some(serde_json::from_str(&s).unwrap())
+    }
+
+    #[tokio::test]
+    async fn adopts_a_user_flatpak() {
+        let (hub, f) = hub_with_fakes("adopt-user");
+        f.flatpak_with(&[tools::Installation::User]);
+        let inst = adopt_entry(&hub, vec![flatpak_app("demo")], "demo")
+            .await
+            .unwrap();
+        assert!(inst.adopted);
+        assert_eq!(inst.installation, tools::Installation::User);
+        let saved = recorded(&hub, "demo").unwrap();
+        assert!(saved.adopted);
+        assert_eq!(saved.installation, tools::Installation::User);
+        // Adding never installs or removes anything.
+        assert!(
+            f.calls().iter().all(|c| c.starts_with("flatpak info ")),
+            "{:?}",
+            f.calls()
+        );
+    }
+
+    #[tokio::test]
+    async fn adopting_both_flatpaks_takes_the_system_one() {
+        let (hub, f) = hub_with_fakes("adopt-both");
+        f.flatpak_with(&[tools::Installation::User, tools::Installation::System]);
+        let inst = adopt_entry(&hub, vec![flatpak_app("demo")], "demo")
+            .await
+            .unwrap();
+        assert_eq!(inst.installation, tools::Installation::System);
+        assert!(recorded(&hub, "demo").unwrap().adopted);
+    }
+
+    #[tokio::test]
+    async fn adopts_a_system_package_with_its_version() {
+        let (hub, f) = hub_with_fakes("adopt-package");
+        f.set("rpm", "[ \"$2\" = --quiet ] && exit 0\nprintf 1.4.2");
+        let inst = adopt_entry(&hub, vec![package_app("clock")], "clock")
+            .await
+            .unwrap();
+        assert!(inst.adopted);
+        assert_eq!(inst.version.as_deref(), Some("1.4.2"));
+        assert!(
+            f.calls()
+                .contains(&"rpm -q --qf %{VERSION} clock".to_string()),
+            "{:?}",
+            f.calls()
+        );
+    }
+
+    #[tokio::test]
+    async fn adopt_needs_an_installation() {
+        let (hub, f) = hub_with_fakes("adopt-missing");
+        f.flatpak_with(&[]);
+        let err = adopt_entry(&hub, vec![flatpak_app("demo")], "demo")
+            .await
+            .unwrap_err();
+        assert!(err.contains("not installed on this computer"), "{err}");
+        assert!(!hub.tools_dir.join("demo").exists());
+    }
+
+    #[tokio::test]
+    async fn adopt_needs_a_workshop_entry() {
+        let (hub, f) = hub_with_fakes("adopt-unknown");
+        f.flatpak_with(&[tools::Installation::System]);
+        let err = adopt_entry(&hub, vec![flatpak_app("demo")], "other")
+            .await
+            .unwrap_err();
+        assert!(err.contains("not in the workshop"), "{err}");
+        assert!(f.calls().is_empty());
+        assert!(!hub.tools_dir.join("other").exists());
+    }
+
+    #[tokio::test]
+    async fn adopt_leaves_a_tool_in_tuxhub_alone() {
+        let (hub, f) = hub_with_fakes("adopt-twice");
+        f.flatpak_with(&[tools::Installation::System]);
+        let own = Installed::new(flatpak_app("demo"));
+        record(&hub, &own);
+        let err = adopt_entry(&hub, vec![flatpak_app("demo")], "demo")
+            .await
+            .unwrap_err();
+        assert!(err.contains("already in tuxhub"), "{err}");
+        assert!(!recorded(&hub, "demo").unwrap().adopted);
     }
 }

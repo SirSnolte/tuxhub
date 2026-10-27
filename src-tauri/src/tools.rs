@@ -482,6 +482,32 @@ impl Programs {
             .is_some_and(|o| o.status.success())
     }
 
+    /// Version of an installed system package, without Debian's epoch and
+    /// revision, so it compares with a release tag.
+    async fn package_version(&self, package: &str, rpm: bool, deb: bool) -> Option<String> {
+        let text = |o: std::process::Output| {
+            let v = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            (o.status.success() && !v.is_empty()).then_some(v)
+        };
+        if rpm
+            && let Some(v) = self
+                .query(&self.rpm, &["-q", "--qf", "%{VERSION}", package])
+                .await
+                .and_then(text)
+        {
+            return Some(v);
+        }
+        if !deb {
+            return None;
+        }
+        let v = self
+            .query(&self.dpkg_query, &["-W", "-f=${Version}", package])
+            .await
+            .and_then(text)?;
+        let v = v.split_once(':').map_or(v.as_str(), |(_, v)| v);
+        Some(v.rsplit_once('-').map_or(v, |(v, _)| v).to_string())
+    }
+
     async fn deb_installed(&self, package: &str) -> bool {
         // A removed package can leave its configuration: "deinstall ok config-files".
         self.query(&self.dpkg_query, &["-W", "-f=${Status}", package])
@@ -534,6 +560,50 @@ pub async fn detect(entry: &Entry, programs: &Programs) -> Detected {
         },
         _ => Detected::default(),
     }
+}
+
+/// Adds an app that is already on this computer to tuxhub, without
+/// installing anything. Of two Flatpak installations the system one is used.
+pub async fn adopt(
+    tools_dir: &Path,
+    programs: &Programs,
+    entry: &Entry,
+) -> Result<Installed, String> {
+    entry.validate()?;
+    let found = detect(entry, programs).await;
+    let missing = || format!("{} is not installed on this computer", entry.name);
+    let inst = match &entry.source {
+        Source::Flatpak { .. } => {
+            let installation = [Installation::System, Installation::User]
+                .into_iter()
+                .find(|i| found.flatpak.contains(i))
+                .ok_or_else(missing)?;
+            Installed {
+                adopted: true,
+                installation,
+                ..Installed::new(entry.clone())
+            }
+        }
+        Source::SystemPackage {
+            package, rpm, deb, ..
+        } => {
+            if !found.package {
+                return Err(missing());
+            }
+            Installed {
+                adopted: true,
+                version: programs
+                    .package_version(package, rpm.is_some(), deb.is_some())
+                    .await,
+                ..Installed::new(entry.clone())
+            }
+        }
+        _ => return Err(format!("{} cannot be added from this computer", entry.name)),
+    };
+    let dir = tools_dir.join(&entry.id);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    write_record(&dir, &inst)?;
+    Ok(inst)
 }
 
 pub async fn install<R: Runtime>(
@@ -1720,6 +1790,22 @@ mod tests {
             detect(&package_entry(false, true), &f.programs)
                 .await
                 .package
+        );
+    }
+
+    #[tokio::test]
+    async fn package_versions_compare_with_release_tags() {
+        let f = Fakes::new("package-version");
+        f.set("dpkg-query", "printf '1:1.4.2-1ubuntu1'");
+        let p = &f.programs;
+        assert_eq!(
+            p.package_version("clock", false, true).await.as_deref(),
+            Some("1.4.2")
+        );
+        f.set("rpm", "printf 2.0.1");
+        assert_eq!(
+            p.package_version("clock", true, true).await.as_deref(),
+            Some("2.0.1")
         );
     }
 
