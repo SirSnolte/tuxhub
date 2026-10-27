@@ -1204,7 +1204,11 @@ mod tests {
     async fn running_service_does_not_block_the_window() {
         use std::io::{BufRead, Write};
         for (name, live, blocked) in [
-            ("win-service", json!({ "command": "app", "args": ["daemon"] }), false),
+            (
+                "win-service",
+                json!({ "command": "app", "args": ["daemon"] }),
+                false,
+            ),
             ("win-app", json!(true), true),
         ] {
             let (hub, base, _) =
