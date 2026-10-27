@@ -481,17 +481,34 @@ struct ToolView {
     can_launch: bool,
     /// Folder of the tool on disk (not for Flatpaks)
     path: Option<String>,
+    /// The app is no longer installed on this computer.
+    missing: bool,
+    /// The Flatpak is installed for the user and system-wide, and the user
+    /// has not chosen to keep both.
+    duplicate: bool,
 }
 
 #[tauri::command]
 async fn tool_list(app: AppHandle) -> Vec<ToolView> {
-    let hub = app.state::<Hub>();
+    tool_views(&app.state::<Hub>()).await
+}
+
+async fn tool_views(hub: &Hub) -> Vec<ToolView> {
+    let mut installed = tools::load_all(&hub.tools_dir);
+    let states = futures_util::future::join_all(
+        installed
+            .iter_mut()
+            .map(|inst| tools::check_installation(&hub.tools_dir, &hub.programs, inst)),
+    )
+    .await;
     let mut out = Vec::new();
-    for inst in tools::load_all(&hub.tools_dir) {
+    for (inst, state) in installed.into_iter().zip(states) {
         let manifest = inst.manifest(&hub.tools_dir);
         out.push(ToolView {
+            missing: state.missing,
+            duplicate: state.duplicate,
             running: hub.runtime.is_running(inst.id()).await,
-            app_running: app_is_running(&hub, &inst).await,
+            app_running: app_is_running(hub, &inst).await,
             level: manifest.level(),
             can_launch: manifest.run.is_some()
                 || inst.detected_run.is_some()
@@ -604,6 +621,52 @@ async fn tool_uninstall(app: AppHandle, id: String) -> Result<(), String> {
     updates::forget(&app, &id);
     shortcuts::rebind(app.clone());
     Ok(())
+}
+
+/// Removes the user copy of a Flatpak that is also installed system-wide.
+/// tuxhub then uses the system installation; settings and hotkeys stay.
+async fn remove_copy(hub: &Hub, id: &str) -> Result<(), String> {
+    let mut inst = tools::load(&hub.tools_dir, id)?;
+    let Source::Flatpak { flatpak_id, .. } = &inst.entry.source else {
+        return Err(format!("{} is not a Flatpak", inst.entry.name));
+    };
+    let flatpak_id = flatpak_id.clone();
+    if tools::detect(&inst.entry, &hub.programs)
+        .await
+        .flatpak
+        .len()
+        < 2
+    {
+        return Err(format!("{} is installed only once", inst.entry.name));
+    }
+    tools::flatpak_uninstall(&hub.programs, &flatpak_id, tools::Installation::User).await?;
+    inst.installation = tools::Installation::System;
+    inst.adopted = true;
+    tools::save(&hub.tools_dir, &inst)
+}
+
+#[tauri::command]
+async fn tool_remove_copy(app: AppHandle, id: String) -> Result<(), String> {
+    let hub = app.state::<Hub>();
+    let inst = tools::load(&hub.tools_dir, &id)?;
+    embed::stop(&app, &id).await;
+    quit_app(&hub, &inst, QUIT_WAIT).await?;
+    remove_copy(&hub, &id).await
+}
+
+/// Keeps both Flatpak installations: the hint about the copy stays hidden.
+fn dismiss_duplicate(hub: &Hub, id: &str) -> Result<(), String> {
+    let mut inst = tools::load(&hub.tools_dir, id)?;
+    if !matches!(inst.entry.source, Source::Flatpak { .. }) {
+        return Err(format!("{} is not a Flatpak", inst.entry.name));
+    }
+    inst.duplicate_dismissed = true;
+    tools::save(&hub.tools_dir, &inst)
+}
+
+#[tauri::command]
+fn tool_dismiss_duplicate(app: AppHandle, id: String) -> Result<(), String> {
+    dismiss_duplicate(&app.state::<Hub>(), &id)
 }
 
 #[tauri::command]
@@ -1024,6 +1087,8 @@ pub fn run() {
             workshop_readme,
             tool_install,
             tool_adopt,
+            tool_remove_copy,
+            tool_dismiss_duplicate,
             tool_list,
             tool_launch,
             tool_app_running,
@@ -1779,5 +1844,103 @@ while True:
             .unwrap_err();
         assert!(err.contains("already in tuxhub"), "{err}");
         assert!(!recorded(&hub, "demo").unwrap().adopted);
+    }
+
+    /// (missing, duplicate) of a tool in the sidebar.
+    async fn sidebar_state(hub: &Hub, id: &str) -> (bool, bool) {
+        let views = tool_views(hub).await;
+        let v = views.iter().find(|v| v.entry.id == id).unwrap();
+        (v.missing, v.duplicate)
+    }
+
+    #[tokio::test]
+    async fn adopting_both_flatpaks_shows_the_duplicate_hint() {
+        let (hub, f) = hub_with_fakes("hint-adopted");
+        f.flatpak_with(&[tools::Installation::User, tools::Installation::System]);
+        adopt_entry(&hub, vec![flatpak_app("demo")], "demo")
+            .await
+            .unwrap();
+        assert_eq!(sidebar_state(&hub, "demo").await, (false, true));
+    }
+
+    /// The ProtonUp-Qt case: tuxhub installed a user copy of an app the
+    /// system already had. Removing the copy keeps the settings.
+    #[tokio::test]
+    async fn removes_the_own_user_copy_of_a_system_flatpak() {
+        let (hub, f) = hub_with_fakes("remove-copy");
+        f.flatpak_with(&[tools::Installation::User, tools::Installation::System]);
+        record(&hub, &Installed::new(flatpak_app("demo")));
+        std::fs::create_dir_all(&hub.settings_dir).unwrap();
+        std::fs::write(hub.settings_path("demo"), "{}").unwrap();
+        assert_eq!(sidebar_state(&hub, "demo").await, (false, true));
+
+        remove_copy(&hub, "demo").await.unwrap();
+        let uninstalls: Vec<String> = f
+            .calls()
+            .into_iter()
+            .filter(|c| c.contains("uninstall"))
+            .collect();
+        assert_eq!(
+            uninstalls,
+            ["flatpak uninstall --user -y --noninteractive net.example.demo"]
+        );
+        let saved = recorded(&hub, "demo").unwrap();
+        assert_eq!(saved.installation, tools::Installation::System);
+        assert!(saved.adopted);
+        assert!(hub.settings_path("demo").is_file());
+
+        f.flatpak_with(&[tools::Installation::System]);
+        assert_eq!(sidebar_state(&hub, "demo").await, (false, false));
+    }
+
+    #[tokio::test]
+    async fn remove_copy_needs_two_installations() {
+        let (hub, f) = hub_with_fakes("remove-copy-once");
+        f.flatpak_with(&[tools::Installation::User]);
+        record(&hub, &Installed::new(flatpak_app("demo")));
+        assert!(remove_copy(&hub, "demo").await.is_err());
+        assert!(!f.calls().iter().any(|c| c.contains("uninstall")));
+        assert_eq!(
+            recorded(&hub, "demo").unwrap().installation,
+            tools::Installation::User
+        );
+    }
+
+    #[tokio::test]
+    async fn keeping_both_installations_hides_the_hint_for_good() {
+        let (hub, f) = hub_with_fakes("keep-both");
+        f.flatpak_with(&[tools::Installation::User, tools::Installation::System]);
+        record(&hub, &Installed::new(flatpak_app("demo")));
+        dismiss_duplicate(&hub, "demo").unwrap();
+        assert!(recorded(&hub, "demo").unwrap().duplicate_dismissed);
+        // A new hub reads the same tool.json, as after a restart.
+        let mut again = Hub::for_test(hub.tools_dir.clone(), hub.settings_dir.clone());
+        again.programs = f.programs.clone();
+        assert_eq!(sidebar_state(&again, "demo").await, (false, false));
+        assert!(!f.calls().iter().any(|c| c.contains("uninstall")));
+    }
+
+    #[tokio::test]
+    async fn a_moved_flatpak_follows_the_remaining_installation() {
+        let (hub, f) = hub_with_fakes("moved");
+        f.flatpak_with(&[tools::Installation::System]);
+        record(&hub, &Installed::new(flatpak_app("demo")));
+        assert_eq!(sidebar_state(&hub, "demo").await, (false, false));
+        let saved = recorded(&hub, "demo").unwrap();
+        assert_eq!(saved.installation, tools::Installation::System);
+        assert!(saved.adopted);
+    }
+
+    #[tokio::test]
+    async fn an_app_removed_elsewhere_is_missing() {
+        let (hub, f) = hub_with_fakes("missing");
+        f.flatpak_with(&[]);
+        f.set("rpm", "exit 1");
+        record(&hub, &Installed::new(flatpak_app("demo")));
+        record(&hub, &Installed::new(package_app("clock")));
+        assert_eq!(sidebar_state(&hub, "demo").await, (true, false));
+        assert_eq!(sidebar_state(&hub, "clock").await, (true, false));
+        // The entry stays until the user decides.
+        assert!(recorded(&hub, "demo").is_some());
     }
 }

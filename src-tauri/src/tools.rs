@@ -415,6 +415,11 @@ fn announced(file: &Path, user: bool) -> Result<Installed, String> {
     })
 }
 
+/// Saves the changed record of a tool in tuxhub.
+pub fn save(tools_dir: &Path, inst: &Installed) -> Result<(), String> {
+    write_record(&tools_dir.join(inst.id()), inst)
+}
+
 fn write_record(dir: &Path, inst: &Installed) -> Result<(), String> {
     std::fs::write(
         dir.join("tool.json"),
@@ -604,6 +609,52 @@ pub async fn adopt(
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     write_record(&dir, &inst)?;
     Ok(inst)
+}
+
+/// What the sidebar tells about the installation of a tool.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct InstallState {
+    /// The app is no longer installed on this computer.
+    pub missing: bool,
+    /// The Flatpak is installed for the user and system-wide.
+    pub duplicate: bool,
+}
+
+/// Checks that the app of a Flatpak or system package tool is still
+/// installed. A Flatpak whose recorded installation is gone while the other
+/// one has it is switched over, so tuxhub never installs it a second time.
+pub async fn check_installation(
+    tools_dir: &Path,
+    programs: &Programs,
+    inst: &mut Installed,
+) -> InstallState {
+    match &inst.entry.source {
+        Source::Flatpak { .. } => {
+            let found = detect(&inst.entry, programs).await.flatpak;
+            let Some(&other) = found.first() else {
+                return InstallState {
+                    missing: true,
+                    duplicate: false,
+                };
+            };
+            if !found.contains(&inst.installation) {
+                inst.installation = other;
+                inst.adopted = true;
+                if let Err(e) = save(tools_dir, inst) {
+                    eprintln!("{}: {e}", inst.id());
+                }
+            }
+            InstallState {
+                missing: false,
+                duplicate: found.len() > 1 && !inst.duplicate_dismissed,
+            }
+        }
+        Source::SystemPackage { .. } => InstallState {
+            missing: !detect(&inst.entry, programs).await.package,
+            duplicate: false,
+        },
+        _ => InstallState::default(),
+    }
 }
 
 pub async fn install<R: Runtime>(
@@ -1125,6 +1176,24 @@ fn flatpak_uninstall_args(flatpak_id: &str, installation: Installation) -> [&str
         "--noninteractive",
         flatpak_id,
     ]
+}
+
+/// Removes a Flatpak from one installation; one that is already gone counts
+/// as removed.
+pub async fn flatpak_uninstall(
+    programs: &Programs,
+    flatpak_id: &str,
+    installation: Installation,
+) -> Result<(), String> {
+    match run(
+        &programs.flatpak,
+        &flatpak_uninstall_args(flatpak_id, installation),
+    )
+    .await
+    {
+        Err(e) if !flatpak_already_gone(&e) => Err(e),
+        _ => Ok(()),
+    }
 }
 
 /// Whether flatpak failed only because the app is no longer installed.
