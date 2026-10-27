@@ -914,6 +914,17 @@ pub fn link_local(tools_dir: &Path, path: &Path) -> Result<Installed, String> {
     Ok(inst)
 }
 
+/// Removes the Flatpak from the user installation, where tuxhub installs it.
+/// A system installation of the same app is left alone.
+fn flatpak_uninstall_args(flatpak_id: &str) -> [&str; 5] {
+    ["uninstall", "--user", "-y", "--noninteractive", flatpak_id]
+}
+
+/// Whether flatpak failed only because the app is no longer installed.
+fn flatpak_already_gone(stderr: &str) -> bool {
+    stderr.contains("No installed refs found")
+}
+
 /// Removes a tool. The tool's own `uninstall` command runs first, so it can
 /// remove what it set up itself. Tools installed outside tuxhub are removed
 /// by that command alone.
@@ -950,11 +961,10 @@ pub async fn uninstall(tools_dir: &Path, inst: &Installed) -> Result<(), String>
         return Ok(());
     }
     if let Source::Flatpak { flatpak_id, .. } = &inst.entry.source {
-        run(
-            "flatpak",
-            &["uninstall", "-y", "--noninteractive", flatpak_id],
-        )
-        .await?;
+        match run("flatpak", &flatpak_uninstall_args(flatpak_id)).await {
+            Err(e) if !flatpak_already_gone(&e) => return Err(e),
+            _ => {}
+        }
     }
     if let Source::SystemPackage {
         package, rpm, deb, ..
@@ -1425,5 +1435,27 @@ mod tests {
             remote: "flathub".into(),
         };
         assert!(e.validate().is_err());
+    }
+
+    /// tuxhub removes only the Flatpak it installed itself (`--user`), and a
+    /// Flatpak that is already gone does not keep the tool in the list.
+    #[test]
+    fn flatpak_uninstall_targets_the_user_installation() {
+        assert_eq!(
+            flatpak_uninstall_args("net.example.App"),
+            [
+                "uninstall",
+                "--user",
+                "-y",
+                "--noninteractive",
+                "net.example.App"
+            ]
+        );
+        assert!(flatpak_already_gone(
+            "error: No installed refs found for \u{2018}net.example.App\u{2019}"
+        ));
+        assert!(!flatpak_already_gone(
+            "error: Could not unmount revokefs-fuse"
+        ));
     }
 }
