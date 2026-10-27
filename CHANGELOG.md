@@ -4,6 +4,41 @@ All notable changes to tuxhub are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-10-27
+
+### Added
+
+- The workshop recognizes apps that are already on the computer (Flatpak
+  for the user or system-wide, RPM or DEB system package), marks them "On
+  this computer" and adds them to the sidebar instead of installing them a
+  second time. tuxhub starts, updates and removes them through their own
+  installation.
+- A tool page points out a Flatpak that is installed for the user and
+  system-wide and removes the user copy on request, or keeps both.
+- A tool page points out an app that was uninstalled outside tuxhub and
+  offers to install it again or to remove it from tuxhub.
+- Removing an app that was on the computer before asks whether to remove it
+  from tuxhub only or to uninstall it from the computer.
+- tuxhub checks Flatpaks for updates and updates them in the installation
+  it uses.
+- Every tool menu has the same entries in the same order; entries that do
+  not apply are greyed out.
+
+### Changed
+
+- The hub and the tools share one page margin, card gap and card padding.
+- Installing an app that is already on the computer fails instead of
+  creating a second installation.
+
+### Fixed
+
+- Uninstalling a Flatpak tool removes it from the user installation and
+  never touches a system-wide installation of the same app; a Flatpak that
+  is already gone no longer keeps the tool in the list.
+- "Open own window" works while a tool's live service runs.
+- A tool's page stays hidden until it has loaded, so it no longer flashes
+  white.
+
 ## [0.7.0] - 2026-10-25
 
 ### Added
@@ -140,6 +175,7 @@ First public release.
 - System tray, autostart and single-instance behavior.
 - English and German user interface.
 
+[0.8.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.8.0
 [0.6.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.6.0
 [0.5.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.5.0
 [0.4.1]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.4.1

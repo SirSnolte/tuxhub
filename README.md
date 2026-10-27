@@ -21,8 +21,11 @@ use it either in its own window or directly inside tuxhub.
 ## Features
 
 - **Workshop:** a curated list of tools, installed from GitHub releases,
-  distribution packages or Flathub with a single click.
-- **Updates:** tuxhub checks installed tools and itself for new releases.
+  distribution packages or Flathub with a single click. Apps that are already
+  on the computer (Flatpak or system package) are added to the sidebar
+  instead of being installed a second time.
+- **Updates:** tuxhub checks installed tools, Flatpaks and itself for new
+  releases.
   Updates of tuxhub are cryptographically signed and verified before they are
   installed.
 - **Run inside tuxhub:** standalone applications can run on a virtual display
