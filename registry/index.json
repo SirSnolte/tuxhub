@@ -23,6 +23,18 @@
     }
   },
   {
+    "id": "always-online",
+    "name": "Always Online",
+    "description": "Keeps Discord, Steam and other apps from setting you to away while you are at the computer. Optional schedule and longest run.",
+    "icon": "https://raw.githubusercontent.com/SirSnolte/tuxhub-always-online/HEAD/assets/icon.svg",
+    "category": "input",
+    "repo": "SirSnolte/tuxhub-always-online",
+    "source": { "type": "github-release", "asset": "*x86_64-linux.tar.gz" },
+    "translations": {
+      "de": { "description": "Hält Discord, Steam und andere Programme davon ab, dich auf Abwesend zu setzen, solange du am Computer bist. Mit optionalem Zeitplan und längster Laufzeit." }
+    }
+  },
+  {
     "id": "streamcontroller",
     "name": "StreamController",
     "description": "Control Elgato Stream Deck devices, with plugin support. The BetterVolumeMixer plugin by Dav1d-Fn adds per-application volume control.",
