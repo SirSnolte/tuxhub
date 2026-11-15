@@ -14,6 +14,12 @@ All notable changes to tuxhub are documented in this file. The format follows
   when the workshop opens.
 - Requests of a tool's own page no longer re-check every installed tool.
 
+### Removed
+
+- The workshop no longer lists third-party applications that tuxhub does not
+  integrate with: Piper, ProtonUp-Qt, ProtonPlus, Bottles, MangoJuice, Heroic
+  Games Launcher and Lutris.
+
 ## [0.8.0] - 2026-10-27
 
 ### Added

@@ -191,13 +191,16 @@ mod tests {
     fn globs() {
         assert!(glob_match(
             "*.AppImage",
-            "Heroic-2.18.1-linux-x86_64.AppImage"
+            "Example-2.18.1-linux-x86_64.AppImage"
         ));
         assert!(glob_match(
-            "Heroic-*-x86_64.AppImage",
-            "Heroic-2.18.1-linux-x86_64.AppImage"
+            "Example-*-x86_64.AppImage",
+            "Example-2.18.1-linux-x86_64.AppImage"
         ));
-        assert!(!glob_match("*.AppImage", "Heroic-2.18.1.AppImage.blockmap"));
+        assert!(!glob_match(
+            "*.AppImage",
+            "Example-2.18.1.AppImage.blockmap"
+        ));
         assert!(glob_match("exact", "exact"));
         assert!(!glob_match("exact", "exactly"));
         assert!(!glob_match("a*a", "a"));

@@ -360,7 +360,7 @@ mod tests {
         if flatpak {
             tools::LaunchCmd {
                 program: "flatpak".into(),
-                args: vec!["run".into(), "net.lutris.Lutris".into()],
+                args: vec!["run".into(), "org.example.Game".into()],
                 cwd: None,
                 flatpak: true,
             }
@@ -383,7 +383,7 @@ mod tests {
 
         let f = run_script(&lc(true), Path::new("/tmp/conf"));
         assert!(f.contains("'run' '--nosocket=wayland' '--socket=x11'"));
-        assert!(f.trim_end().ends_with("'net.lutris.Lutris'"));
+        assert!(f.trim_end().ends_with("'org.example.Game'"));
     }
 
     /// Runs the installed GIF Color Changer inside tuxhub. Requires xpra and the
