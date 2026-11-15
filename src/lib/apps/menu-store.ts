@@ -37,7 +37,8 @@ export class StoredSettings {
   #queued = new Map<string, unknown>();
   /** Changes from outside that wait until the field is no longer edited. */
   #held = new Map<string, unknown>();
-  #stopped = false;
+  /** Raised by `cancel`: answers of requests sent before belong to nothing any more. */
+  #generation = 0;
 
   constructor(call: MenuCall, options: MenuStoreOptions = {}) {
     this.#call = call;
@@ -47,13 +48,13 @@ export class StoredSettings {
 
   /** Reads every stored setting. Throws what the application answered. */
   async load(): Promise<void> {
-    const answer = (await this.#call("settings.get", {})) as {
-      values?: unknown;
-      overlay?: unknown;
-      version?: unknown;
-    };
+    this.take(await this.#call("settings.get", {}));
+  }
+
+  /** Takes an answer of `settings.get`. */
+  take(raw: unknown) {
+    const answer = (raw ?? {}) as { values?: unknown; overlay?: unknown; version?: unknown };
     const values = answer && typeof answer.values === "object" && answer.values !== null ? answer.values : {};
-    this.#stopped = false;
     this.#confirmed = {};
     const shown: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(values)) {
@@ -62,8 +63,8 @@ export class StoredSettings {
       shown[key] = this.editing(key) && key in this.values ? this.values[key] : value;
     }
     this.values = shown;
-    this.overlay = answer?.overlay ?? null;
-    this.version = typeof answer?.version === "string" ? answer.version : "";
+    this.overlay = answer.overlay ?? null;
+    this.version = typeof answer.version === "string" ? answer.version : "";
     this.#options.onUpdate?.();
   }
 
@@ -114,7 +115,7 @@ export class StoredSettings {
 
   /** Drops waiting values, for example when the menu closes or the connection ended. */
   cancel() {
-    this.#stopped = true;
+    this.#generation++;
     this.#sender.cancel();
     this.#queued.clear();
     this.#held.clear();
@@ -128,7 +129,6 @@ export class StoredSettings {
   }
 
   #write(key: string, value: unknown) {
-    this.#stopped = false;
     if (this.#inFlight.has(key)) {
       this.#queued.set(key, value);
       return;
@@ -138,10 +138,12 @@ export class StoredSettings {
   }
 
   async #send(key: string, value: unknown) {
+    const generation = this.#generation;
+    const stale = () => generation !== this.#generation;
     let next: { has: boolean; value?: unknown } = { has: false };
     try {
       const answer = (await this.#call("settings.set", { key, value })) as { value?: unknown } | null;
-      if (this.#stopped) return;
+      if (stale()) return;
       const applied = answer && "value" in answer ? answer.value : value;
       this.#confirmed[key] = applied;
       // The answer comes after the application applied the value, so it is
@@ -151,7 +153,7 @@ export class StoredSettings {
         this.values = { ...this.values, [key]: applied };
       }
     } catch (e) {
-      if (this.#stopped) return;
+      if (stale()) return;
       const failure = (e ?? {}) as Failure;
       if (failure.code === "closed") {
         this.cancel();
@@ -164,12 +166,13 @@ export class StoredSettings {
       }
       this.#options.onRefused?.(key, typeof failure.message === "string" ? failure.message : String(e));
     } finally {
-      this.#inFlight.delete(key);
-      if (!this.#stopped && this.#queued.has(key)) {
+      if (!stale()) this.#inFlight.delete(key);
+      if (!stale() && this.#queued.has(key)) {
         next = { has: true, value: this.#queued.get(key) };
         this.#queued.delete(key);
       }
     }
+    if (stale()) return;
     if (next.has) {
       this.#write(key, next.value);
     } else {
