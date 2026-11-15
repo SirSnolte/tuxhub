@@ -25,6 +25,12 @@ pub fn spawn_checker(app: AppHandle) {
 /// Checks all GitHub-based tools and Flatpaks and returns `tool id -> new tag`.
 pub async fn check_all(app: &AppHandle) -> BTreeMap<String, String> {
     let hub = app.state::<Hub>();
+    // Runs shortly after startup, so installed tools pick up changes of their
+    // workshop entry without opening the workshop.
+    let (entries, _) = crate::workshop_entries().await;
+    if tools::refresh_entries(&hub.tools_dir, &entries) > 0 {
+        let _ = app.emit("tools-changed", ());
+    }
     let installed = tools::load_all(&hub.tools_dir);
     let mut found = BTreeMap::new();
     for inst in installed {

@@ -10,6 +10,9 @@ All notable changes to tuxhub are documented in this file. The format follows
 
 - A notification that an application sends for itself is no longer shown
   as an error on the settings page.
+- Installed tools take over changes of their workshop entry on startup and
+  when the workshop opens.
+- Requests of a tool's own page no longer re-check every installed tool.
 
 ## [0.8.0] - 2026-10-27
 

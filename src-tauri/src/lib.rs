@@ -386,6 +386,7 @@ async fn workshop_items(hub: &Hub, entries: Vec<Entry>) -> Vec<WorkshopItem> {
 #[tauri::command]
 async fn workshop_list(app: AppHandle) -> WorkshopView {
     let (entries, live) = workshop_entries().await;
+    tools::refresh_entries(&app.state::<Hub>().tools_dir, &entries);
     WorkshopView {
         entries: workshop_items(&app.state::<Hub>(), entries).await,
         live,
