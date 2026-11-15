@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, type Component } from "svelte";
   import {
     api,
     errText,
@@ -18,6 +18,7 @@
   import { differsFromDefault, fieldIndex, groupFields, iconFor, pickTab, tabsOf } from "./live-logic";
   import { SECTION_ICONS } from "./live-icons";
   import { RotateCcw } from "@lucide/svelte";
+  import { menuOf, menuStep, probeOutcome, type MenuProps } from "./apps/menus";
 
   type Action = LiveSchema["actions"][number];
 
@@ -34,6 +35,11 @@
 
   const id = $derived(tool.entry.id);
   const name = $derived(tool.entry.name);
+  /** tuxhub's own menu for this tool, shown instead of the form when the app supports it. */
+  const menu = $derived(menuOf(id));
+  let menuView = $state<{ component: Component<MenuProps>; initial: unknown } | null>(null);
+  /** The tool has an own menu, but the running version of the app does not offer it. */
+  let menuMissing = $state(false);
 
   let status = $state<LiveStatus | null>(null);
   let schema = $state<LiveSchema | null>(null);
@@ -76,7 +82,8 @@
   }
 
   $effect(() => {
-    actions = schema?.actions ?? [];
+    const hidden = menuView ? (menu?.hiddenActions ?? []) : [];
+    actions = (schema?.actions ?? []).filter((a) => !hidden.includes(a.id));
   });
   $effect(() => {
     acting = running !== null;
@@ -135,7 +142,9 @@
       // check again, the page fills as soon as the socket answers.
       if (step === "unreachable") retry = setTimeout(load, 2000);
       if (step === "failure") failure = status.error ?? null;
-      if (step !== "load") return;
+      const own = menuOf(tool);
+      const nextStep = menuStep(step, own !== undefined);
+      if (nextStep === "status") return;
       const next = await api.liveSchema(tool, i18n.locale);
       const current = await api.liveGet(tool);
       if (tool !== id) return;
@@ -143,11 +152,28 @@
       activeTab = pickTab(tabsOf(next), activeTab ?? storedTab());
       confirmed = { ...current };
       values = mergeChanged(keepKnown(values, next), current, editing);
+      if (nextStep === "probe" && own) await probeMenu(tool, own);
     } catch (e) {
       if (isLiveError(e) && e.code === "closed") return onclosed();
       failure = isLiveError(e) ? e : { code: "", message: errText(e) };
     } finally {
       loading = false;
+    }
+  }
+
+  /** Shows the own menu when the app answers `settings.get`, else the form with a hint. */
+  async function probeMenu(tool: string, own: NonNullable<ReturnType<typeof menuOf>>) {
+    try {
+      const initial = await api.liveCall(tool, "settings.get", {});
+      const { default: component } = await own.load();
+      if (tool !== id) return;
+      menuView = { component, initial };
+      menuMissing = false;
+    } catch (e) {
+      const outcome = probeOutcome(e);
+      if (outcome !== "form") throw e;
+      menuView = null;
+      menuMissing = true;
     }
   }
 
@@ -473,7 +499,13 @@
     <strong>{t("live.protocol", { name })}</strong>
     <p>{t("live.protocolHint", { name })}</p>
   </wa-callout>
+{:else if menuView && status}
+  {@const Menu = menuView.component}
+  <Menu {id} call={(method, params) => api.liveCall(id, method, params)} initial={menuView.initial} {status} {onclosed} />
 {:else if schema}
+  {#if menuMissing}
+    <wa-callout variant="neutral">{t("live.menuUpdate", { name })}</wa-callout>
+  {/if}
   {#if schema.invalid.length}
     <wa-callout variant="warning">
       <p>{t("live.invalid", { count: schema.invalid.length, name })}</p>
