@@ -1940,7 +1940,7 @@ while True:
         assert_eq!(sidebar_state(&hub, "demo").await, (false, true));
     }
 
-    /// The ProtonUp-Qt case: tuxhub installed a user copy of an app the
+    /// tuxhub installed a user copy of an app the
     /// system already had. Removing the copy keeps the settings.
     #[tokio::test]
     async fn removes_the_own_user_copy_of_a_system_flatpak() {

@@ -4,6 +4,14 @@ All notable changes to tuxhub are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Removed
+
+- The workshop no longer lists third-party applications that tuxhub does not
+  integrate with: Piper, ProtonUp-Qt, ProtonPlus, Bottles, MangoJuice, Heroic
+  Games Launcher and Lutris.
+
 ## [0.8.0] - 2026-10-27
 
 ### Added
