@@ -14,7 +14,7 @@
   import { i18n, t, type Key } from "./i18n.svelte";
   import { onLiveEvent, toast } from "./state.svelte";
   import { checkedOf, valueOf } from "./wa";
-  import { afterStatus, delayFor, keepKnown, mergeChanged, Sender } from "./live";
+  import { afterStatus, delayFor, keepKnown, mergeChanged, noteKind, Sender } from "./live";
   import { differsFromDefault, fieldIndex, groupFields, iconFor, pickTab, tabsOf } from "./live-logic";
   import { SECTION_ICONS } from "./live-icons";
   import { RotateCcw } from "@lucide/svelte";
@@ -159,17 +159,18 @@
 
   const off = onLiveEvent((ev) => {
     if (ev.tool !== id) return;
-    if (ev.method === "changed") {
+    const kind = noteKind(ev);
+    if (kind === "changed" && ev.method === "changed") {
       Object.assign(confirmed, ev.params.values);
       values = mergeChanged(values, ev.params.values, editing);
       for (const key of Object.keys(ev.params.values)) {
         if (!editing(key)) delete errors[key];
       }
-    } else if (ev.method === "schema-changed") {
+    } else if (kind === "schema-changed") {
       load();
-    } else if (ev.params.code === "closed") {
+    } else if (kind === "closed") {
       onclosed();
-    } else {
+    } else if (kind === "failure" && ev.method === "closed") {
       failure = ev.params;
     }
   });

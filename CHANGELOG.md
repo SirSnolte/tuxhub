@@ -4,6 +4,13 @@ All notable changes to tuxhub are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- A notification that an application sends for itself is no longer shown
+  as an error on the settings page.
+
 ## [0.8.0] - 2026-10-27
 
 ### Added
