@@ -9,7 +9,10 @@
     "skipLibCheck": true,
     "sourceMap": true,
     "strict": true,
-    "moduleResolution": "bundler"
+    "moduleResolution": "bundler",
+    // Modules that tests/*.test.mjs import directly name their imports with
+    // the extension, so Node can run them without a build step.
+    "allowImportingTsExtensions": true
   }
   // Path aliases are handled by https://svelte.dev/docs/kit/configuration#alias
   // except $lib which is handled by https://svelte.dev/docs/kit/configuration#files
