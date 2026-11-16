@@ -4,7 +4,23 @@ All notable changes to tuxhub are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.9.0] - 2026-11-16
+
+### Added
+
+- tuxhub brings its own menu for Fliq: the tabs Layout, Time, Weather,
+  General and About with the content of Fliq's styling window, including a
+  layout editor with a schematic canvas (select, drag, resize, group by
+  dropping a block onto another, arrow keys, Delete, undo and redo), an add
+  bar, an inspector for the whole clock, blocks, groups, columns and rows,
+  and color fields with a hex value. Every change takes effect on the
+  running clock at once, and changes made in Fliq's own window appear
+  without reloading. Fliq only provides its socket (`settings.get`,
+  `settings.set`, `settings.reset`, `settings-changed`); with a version of
+  Fliq without it, the generic settings page is shown with a hint.
+- tuxhub's own menus may send only `settings.get`, `settings.set` and
+  `settings.reset` to an application, checked in the Rust part
+  (`live_call`, parameters an object of at most 256 KiB).
 
 ### Fixed
 
@@ -191,6 +207,7 @@ First public release.
 - System tray, autostart and single-instance behavior.
 - English and German user interface.
 
+[0.9.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.9.0
 [0.8.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.8.0
 [0.6.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.6.0
 [0.5.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.5.0
