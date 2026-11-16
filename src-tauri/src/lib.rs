@@ -634,6 +634,48 @@ fn tool_set_window(app: AppHandle, id: String, mode: String) -> Result<(), Strin
     set_window(&app.state::<Hub>(), &id, &mode)
 }
 
+/// Whether and where an app runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum RunState {
+    Stopped,
+    /// Inside tuxhub (xpra session).
+    Hub,
+    /// In its own window, or a socket app.
+    Own,
+    /// It could not be found out (flatpak did not answer).
+    Unknown,
+}
+
+/// Where the app runs; `in_hub`: tuxhub shows it in an xpra session.
+async fn run_state(hub: &Hub, in_hub: bool, inst: &Installed) -> RunState {
+    if in_hub {
+        return RunState::Hub;
+    }
+    if let Source::Flatpak { flatpak_id, .. } = &inst.entry.source
+        && !inst.manifest(&hub.tools_dir).is_live()
+    {
+        return match tools::flatpak_running(&hub.programs, flatpak_id).await {
+            Some(true) => RunState::Own,
+            Some(false) => RunState::Stopped,
+            None => RunState::Unknown,
+        };
+    }
+    if app_is_running(hub, inst).await {
+        RunState::Own
+    } else {
+        RunState::Stopped
+    }
+}
+
+#[tauri::command]
+async fn tool_run_state(app: AppHandle, id: String) -> Result<RunState, String> {
+    let hub = app.state::<Hub>();
+    let inst = tools::load(&hub.tools_dir, &id)?;
+    let in_hub = embed::status(&app, &id).await.is_some();
+    Ok(run_state(&hub, in_hub, &inst).await)
+}
+
 /// Whether the application of a tool that tuxhub only starts and stops, or
 /// one with a live interface, is running, also when it was started outside
 /// tuxhub.
@@ -661,6 +703,11 @@ async fn quit_app(
     wait: std::time::Duration,
 ) -> Result<(), String> {
     let id = inst.id();
+    if let Source::Flatpak { flatpak_id, .. } = &inst.entry.source
+        && !inst.manifest(&hub.tools_dir).is_live()
+    {
+        return tools::flatpak_kill(&hub.programs, flatpak_id, wait).await;
+    }
     let program = tools::app_program(&hub.tools_dir, inst);
     let deadline = tokio::time::Instant::now() + wait;
     let asked = inst.manifest(&hub.tools_dir).is_live() && hub.live.running(id).await;
@@ -709,6 +756,7 @@ async fn tool_quit(app: AppHandle, id: String) -> Result<(), String> {
     let inst = tools::load(&hub.tools_dir, &id)?;
     if !inst.manifest(&hub.tools_dir).is_live()
         && tools::app_program(&hub.tools_dir, &inst).is_none()
+        && !matches!(inst.entry.source, Source::Flatpak { .. })
     {
         return Err(format!("{id} is not started and stopped by tuxhub"));
     }
@@ -1253,6 +1301,7 @@ pub fn run() {
             tool_launch,
             tool_app_running,
             tool_set_window,
+            tool_run_state,
             tool_quit,
             tool_uninstall,
             tool_check_update,
@@ -2486,5 +2535,64 @@ while True:
         let view = views.iter().find(|v| v.entry.id == "demo").unwrap();
         assert_eq!(view.integration, tools::Integration::Embedded);
         assert_eq!(view.window, tools::WindowMode::Own);
+    }
+
+    /// Edge case 9: an app in the hub that the user runs in its own window
+    /// is noticed, not only apps with `embed = false`.
+    #[tokio::test]
+    async fn notices_an_app_in_its_own_window() {
+        let (hub, base, tool) = hub_with_tool("own-window", json!({ "run": { "command": "app" } }));
+        let inst = tools::load(&hub.tools_dir, "livedemo").unwrap();
+        assert_eq!(run_state(&hub, false, &inst).await, RunState::Stopped);
+        let mut child = tools::spawn_copied(&tool.join("app"), &["30"]).await;
+        assert!(app_is_running(&hub, &inst).await);
+        assert_eq!(run_state(&hub, false, &inst).await, RunState::Own);
+        assert_eq!(run_state(&hub, true, &inst).await, RunState::Hub);
+        quit_app(&hub, &inst, std::time::Duration::from_secs(3))
+            .await
+            .unwrap();
+        assert!(exits_soon(&mut child).await, "the program still runs");
+        assert_eq!(run_state(&hub, false, &inst).await, RunState::Stopped);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Edge case 10: a Flatpak in its own window is found with `flatpak ps`;
+    /// without an answer the state is unknown.
+    #[tokio::test]
+    async fn run_state_of_a_flatpak() {
+        let (hub, f) = hub_with_fakes("run-state-flatpak");
+        let inst = Installed::new(flatpak_app("demo"));
+        record(&hub, &inst);
+        f.set("flatpak", "echo net.example.demo");
+        assert_eq!(run_state(&hub, false, &inst).await, RunState::Own);
+        f.set("flatpak", "echo net.example.other");
+        assert_eq!(run_state(&hub, false, &inst).await, RunState::Stopped);
+        f.set("flatpak", "exit 1");
+        assert_eq!(run_state(&hub, false, &inst).await, RunState::Unknown);
+        assert_eq!(run_state(&hub, true, &inst).await, RunState::Hub);
+    }
+
+    #[tokio::test]
+    async fn quitting_a_flatpak_uses_flatpak_kill() {
+        let (hub, f) = hub_with_fakes("quit-flatpak");
+        let state = f.dir.join("running");
+        std::fs::write(&state, "net.example.demo\n").unwrap();
+        f.set(
+            "flatpak",
+            &format!(
+                "case \"$1\" in ps) cat '{0}';; kill) : > '{0}';; esac",
+                state.display()
+            ),
+        );
+        let inst = Installed::new(flatpak_app("demo"));
+        record(&hub, &inst);
+        quit_app(&hub, &inst, std::time::Duration::from_millis(300))
+            .await
+            .unwrap();
+        assert!(
+            f.calls()
+                .contains(&"flatpak kill net.example.demo".to_string())
+        );
+        assert_eq!(run_state(&hub, false, &inst).await, RunState::Stopped);
     }
 }

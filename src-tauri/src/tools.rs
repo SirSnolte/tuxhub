@@ -1420,9 +1420,12 @@ pub fn launch(tools_dir: &Path, inst: &Installed) -> Result<(), String> {
     Ok(())
 }
 
-/// The program of a tool that tuxhub only starts and stops (`embed = false`).
+/// The program of an app that runs as a regular application: one that
+/// tuxhub only starts and stops (`embed = false`) or a level-0 app, which
+/// may run in its own window. Flatpaks are found with `flatpak ps` instead.
 pub fn app_program(tools_dir: &Path, inst: &Installed) -> Option<PathBuf> {
-    if inst.manifest(tools_dir).embed != Some(false) {
+    let manifest = inst.manifest(tools_dir);
+    if manifest.embed != Some(false) && manifest.level() != 0 {
         return None;
     }
     launch_cmd(tools_dir, inst)
@@ -1431,8 +1434,8 @@ pub fn app_program(tools_dir: &Path, inst: &Installed) -> Option<PathBuf> {
         .map(|lc| lc.program)
 }
 
-/// Whether a tool that tuxhub only starts and stops is running, also when it
-/// was started outside tuxhub.
+/// Whether the app of [`app_program`] is running, also when it was started
+/// outside tuxhub (or inside tuxhub's xpra session).
 pub fn app_running(tools_dir: &Path, inst: &Installed) -> bool {
     app_program(tools_dir, inst).is_some_and(|p| !processes(&p).is_empty())
 }
@@ -1462,6 +1465,47 @@ fn runs(exe: &Path, program: &Path) -> bool {
             .to_str()
             .and_then(|s| s.strip_suffix(" (deleted)"))
             .is_some_and(|s| Path::new(s) == program)
+}
+
+/// Whether the output of `flatpak ps --columns=application` lists the app.
+pub fn flatpak_ps_has(out: &str, flatpak_id: &str) -> bool {
+    out.lines().any(|line| line.trim() == flatpak_id)
+}
+
+/// Whether the Flatpak runs, or `None` when flatpak did not answer.
+pub async fn flatpak_running(programs: &Programs, flatpak_id: &str) -> Option<bool> {
+    let out = programs
+        .query(&programs.flatpak, &["ps", "--columns=application"])
+        .await?;
+    out.status
+        .success()
+        .then(|| flatpak_ps_has(&String::from_utf8_lossy(&out.stdout), flatpak_id))
+}
+
+/// Ends a running Flatpak with `flatpak kill`. Fails when it still runs
+/// after `wait`; an app flatpak cannot tell about counts as ended.
+pub async fn flatpak_kill(
+    programs: &Programs,
+    flatpak_id: &str,
+    wait: Duration,
+) -> Result<(), String> {
+    if flatpak_running(programs, flatpak_id).await == Some(false) {
+        return Ok(());
+    }
+    // The app may exit in between, so the exit status does not matter.
+    let _ = programs
+        .query(&programs.flatpak, &["kill", flatpak_id])
+        .await;
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        if flatpak_running(programs, flatpak_id).await != Some(true) {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!("{flatpak_id} is still running"));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 /// Ends the processes that run `program`: SIGTERM first, SIGKILL for those
@@ -2280,5 +2324,81 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(e.integration, Some(Integration::Socket));
+    }
+
+    #[test]
+    fn reads_running_flatpaks() {
+        let out = "com.core447.StreamController\ncom.discordapp.Discord\n";
+        assert!(flatpak_ps_has(out, "com.core447.StreamController"));
+        assert!(flatpak_ps_has(
+            "  com.core447.StreamController  \n",
+            "com.core447.StreamController"
+        ));
+        assert!(!flatpak_ps_has(out, "com.core447"));
+        assert!(!flatpak_ps_has(out, "com.core447.StreamController.Locale"));
+        assert!(!flatpak_ps_has("", "com.core447.StreamController"));
+        assert!(!flatpak_ps_has(
+            "com.core447.StreamController.Extra\n",
+            "com.core447.StreamController"
+        ));
+    }
+
+    #[tokio::test]
+    async fn asks_flatpak_whether_an_app_runs() {
+        let f = Fakes::new("flatpak-ps");
+        f.set(
+            "flatpak",
+            "printf 'net.example.other\\nnet.example.demo\\n'",
+        );
+        assert_eq!(
+            flatpak_running(&f.programs, "net.example.demo").await,
+            Some(true)
+        );
+        assert_eq!(
+            flatpak_running(&f.programs, "net.example.gone").await,
+            Some(false)
+        );
+        assert!(
+            f.calls()
+                .contains(&"flatpak ps --columns=application".to_string())
+        );
+        f.set("flatpak", "exit 1");
+        assert_eq!(flatpak_running(&f.programs, "net.example.demo").await, None);
+        let mut missing = f.programs.clone();
+        missing.flatpak = f.dir.join("no-flatpak");
+        assert_eq!(flatpak_running(&missing, "net.example.demo").await, None);
+    }
+
+    #[tokio::test]
+    async fn ends_a_running_flatpak() {
+        let f = Fakes::new("flatpak-kill");
+        let state = f.dir.join("running");
+        std::fs::write(&state, "net.example.demo\n").unwrap();
+        f.set(
+            "flatpak",
+            &format!(
+                "case \"$1\" in ps) cat '{0}';; kill) : > '{0}';; esac",
+                state.display()
+            ),
+        );
+        flatpak_kill(&f.programs, "net.example.demo", Duration::from_millis(500))
+            .await
+            .unwrap();
+        assert!(
+            f.calls()
+                .contains(&"flatpak kill net.example.demo".to_string())
+        );
+        assert_eq!(
+            flatpak_running(&f.programs, "net.example.demo").await,
+            Some(false)
+        );
+
+        // The app is still there after kill: the caller must not go on.
+        f.set("flatpak", "case \"$1\" in ps) echo net.example.demo;; esac");
+        assert!(
+            flatpak_kill(&f.programs, "net.example.demo", Duration::from_millis(300))
+                .await
+                .is_err()
+        );
     }
 }

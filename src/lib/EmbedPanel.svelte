@@ -55,9 +55,13 @@
   let switching = $state<WindowMode | null>(null);
   let switchBusy = $state(false);
 
-  /** Where the app runs right now, or null when it does not run. */
+  /** Where the app runs right now, or null when it does not run. An app
+   * whose state is unknown counts as running in its own window, so the
+   * user is asked before it is quit. */
   async function runningIn(): Promise<WindowMode | null> {
-    return url ? "hub" : null;
+    if (url) return "hub";
+    const state = await api.runState(id).catch(() => "unknown" as const);
+    return state === "stopped" ? null : state === "hub" ? "hub" : "own";
   }
 
   /** Puts the toggle back on the stored mode. */

@@ -87,6 +87,8 @@ export type Tool = {
 };
 
 export type WindowMode = "hub" | "own";
+/** Whether and where an app runs; `unknown` when it could not be found out. */
+export type RunState = "stopped" | "hub" | "own" | "unknown";
 
 /** How deeply tuxhub integrates an app. */
 export type Integration = "socket" | "embedded" | "standalone";
@@ -189,6 +191,7 @@ export const api = {
   tools: () => invoke<Tool[]>("tool_list"),
   launch: (id: string) => invoke<void>("tool_launch", { id }),
   setWindow: (id: string, mode: WindowMode) => invoke<void>("tool_set_window", { id, mode }),
+  runState: (id: string) => invoke<RunState>("tool_run_state", { id }),
   appRunning: (id: string) => invoke<boolean>("tool_app_running", { id }),
   quit: (id: string) => invoke<void>("tool_quit", { id }),
   uninstall: (id: string) => invoke<void>("tool_uninstall", { id }),
