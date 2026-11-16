@@ -1,6 +1,8 @@
 mod embed;
 mod github;
 mod live;
+#[allow(dead_code)] // wired up in a later installed-apps task
+mod local_apps;
 mod manifest;
 mod native;
 mod shortcuts;
