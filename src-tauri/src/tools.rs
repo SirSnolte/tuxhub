@@ -529,6 +529,8 @@ pub struct Programs {
     pub flatpak: PathBuf,
     pub rpm: PathBuf,
     pub dpkg_query: PathBuf,
+    /// Tells which Debian package owns a file (`dpkg -S`).
+    pub dpkg: PathBuf,
     /// Longest time a query may take before it counts as "not installed".
     pub timeout: Duration,
     /// Longest time a query of a remote may take.
@@ -541,6 +543,7 @@ impl Default for Programs {
             flatpak: "flatpak".into(),
             rpm: "rpm".into(),
             dpkg_query: "dpkg-query".into(),
+            dpkg: "dpkg".into(),
             timeout: Duration::from_secs(5),
             network_timeout: Duration::from_secs(60),
         }
@@ -550,7 +553,11 @@ impl Default for Programs {
 impl Programs {
     /// Output of a query, or `None` when the program is missing, cannot run
     /// or takes longer than the timeout. A late program is killed.
-    async fn query(&self, program: &Path, args: &[&str]) -> Option<std::process::Output> {
+    pub(crate) async fn query(
+        &self,
+        program: &Path,
+        args: &[&str],
+    ) -> Option<std::process::Output> {
         let out = Command::new(program)
             .args(args)
             .stdin(Stdio::null())
@@ -567,7 +574,11 @@ impl Programs {
             .map(|o| o.status.success())
     }
 
-    async fn flatpak_installed(&self, flatpak_id: &str, installation: Installation) -> bool {
+    pub(crate) async fn flatpak_installed(
+        &self,
+        flatpak_id: &str,
+        installation: Installation,
+    ) -> bool {
         self.flatpak_answer(flatpak_id, installation).await == Some(true)
     }
 
@@ -1692,6 +1703,7 @@ impl Fakes {
             flatpak: dir.join("flatpak"),
             rpm: dir.join("rpm"),
             dpkg_query: dir.join("dpkg-query"),
+            dpkg: dir.join("dpkg"),
             timeout: Duration::from_secs(5),
             network_timeout: Duration::from_secs(5),
         };

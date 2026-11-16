@@ -55,6 +55,10 @@ pub struct Hub {
         std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>,
     /// flatpak, rpm and dpkg-query, which tell where apps are installed
     programs: tools::Programs,
+    /// Installed apps found on this PC, with the newest application folder
+    /// time and the `show_all` setting they were built for.
+    #[allow(dead_code)] // read by the IPC command of a later installed-apps task
+    local_apps: std::sync::Mutex<local_apps::Cache>,
 }
 
 impl Hub {
@@ -73,6 +77,7 @@ impl Hub {
             live: live::Live::new(None, std::sync::Arc::new(|_| {})),
             live_starts: Default::default(),
             programs: Default::default(),
+            local_apps: Default::default(),
         }
     }
 
@@ -1338,6 +1343,7 @@ pub fn run() {
                 live,
                 live_starts: Default::default(),
                 programs: Default::default(),
+                local_apps: Default::default(),
             });
 
             if let Err(e) = system::setup_tray(app.handle()) {
