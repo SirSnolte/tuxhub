@@ -5,6 +5,8 @@
   import { category as categoryLabel, t, type Key } from "./i18n.svelte";
   import Readme from "./Readme.svelte";
   import ToolIcon from "./ToolIcon.svelte";
+  import IntegrationTag from "./IntegrationTag.svelte";
+  import { integrationInfo } from "./apps/integration";
   import { workshopAction } from "./install-state";
   import { valueOf } from "./wa";
 
@@ -152,6 +154,7 @@
             {#if item.entry.category}
               <wa-tag size="s" appearance="filled">{categoryLabel(item.entry.category)}</wa-tag>
             {/if}
+            <IntegrationTag level={item.integration} anchor={`integration-${item.entry.id}`} />
             {#if item.installed}
               <wa-tag size="s" appearance="filled" variant="success">{t("workshop.installed")}</wa-tag>
             {:else if item.present}
@@ -191,6 +194,13 @@
           </wa-button>
         </div>
         <p>{describe(e)}</p>
+        {#if integrationInfo(selected.integration)}
+          {@const info = integrationInfo(selected.integration)!}
+          <div class="integration">
+            <IntegrationTag level={selected.integration} />
+            <span class="small muted">{t(info.hint)}</span>
+          </div>
+        {/if}
         {#if action === "adopt"}
           <p class="small muted">{t("workshop.presentHint", { name: e.name })}</p>
         {/if}
@@ -367,6 +377,12 @@
     flex: 1;
     display: grid;
     gap: var(--wa-space-xs);
+  }
+  .integration {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
+    flex-wrap: wrap;
   }
   .detail-actions {
     display: flex;

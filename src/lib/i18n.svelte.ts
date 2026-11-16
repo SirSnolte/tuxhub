@@ -35,6 +35,13 @@ const en = {
   "level.2": "Integrated",
   "level.3": "Live",
 
+  "integration.socket": "tuxhub menu",
+  "integration.socket.hint": "Settings right in tuxhub, live-connected to the app.",
+  "integration.embedded": "In tuxhub",
+  "integration.embedded.hint": "Runs inside tuxhub or in its own window, as you choose.",
+  "integration.standalone": "Standalone",
+  "integration.standalone.hint": "Always runs in its own window; tuxhub installs, starts and updates it.",
+
   "tool.running": "Running",
   "tool.openWindow": "Open own window",
   "tool.started": "{name} started",
@@ -354,6 +361,13 @@ const de: Record<Key, string> = {
   "level.1": "Web-Oberfläche",
   "level.2": "Integriert",
   "level.3": "Live",
+
+  "integration.socket": "tuxhub-Menü",
+  "integration.socket.hint": "Einstellungen direkt in tuxhub, live mit der App verbunden.",
+  "integration.embedded": "Im Hub",
+  "integration.embedded.hint": "Läuft auf Wunsch in tuxhub oder im eigenen Fenster.",
+  "integration.standalone": "Eigenständig",
+  "integration.standalone.hint": "Läuft immer im eigenen Fenster; tuxhub installiert, startet und aktualisiert sie.",
 
   "tool.running": "Läuft",
   "tool.openWindow": "Eigenes Fenster öffnen",

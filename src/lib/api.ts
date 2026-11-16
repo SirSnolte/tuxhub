@@ -82,8 +82,17 @@ export type Tool = {
   duplicate: boolean;
 };
 
-/** `present`: on the computer, but not in tuxhub. */
-export type WorkshopItem = { entry: Entry; installed: boolean; present: boolean };
+/** How deeply tuxhub integrates an app. */
+export type Integration = "socket" | "embedded" | "standalone";
+
+/** `present`: on the computer, but not in tuxhub. `integration`: none when
+ * the workshop does not say (or names a level this tuxhub does not know). */
+export type WorkshopItem = {
+  entry: Entry;
+  installed: boolean;
+  present: boolean;
+  integration?: Integration | null;
+};
 export type Workshop = { entries: WorkshopItem[]; live: boolean };
 
 export type ShortcutStatus = {
