@@ -32,15 +32,30 @@ struct Draft {
     id: String,
     name: ByLang,
     summary: ByLang,
-    description: ByLang,
+    /// One document per `<description>` element (its own `xml:lang`, blocks).
+    descriptions: Vec<(Option<String>, Vec<Block>)>,
     icons: Vec<(String, String)>,
     urls: Vec<(String, String)>,
     launchables: Vec<String>,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum BlockKind {
+    Para,
+    Item,
+}
+
+/// A paragraph or list item with its translations (`""` = untranslated).
+struct Block {
+    kind: BlockKind,
+    list: usize,
+    texts: ByLang,
+}
+
 struct Frame {
     name: String,
     lang: Option<String>,
+    own_lang: Option<String>,
     attrs: Vec<(String, String)>,
     text: String,
 }
@@ -70,13 +85,40 @@ fn pick(map: &ByLang, cands: &[String]) -> Option<String> {
         .map(String::from)
 }
 
-fn ensure_gap(buf: &mut String, gap: &str) {
-    if buf.is_empty() || buf.ends_with(gap) {
-        return;
+/// Renders the blocks of one description in the wanted language. A block
+/// without a translation falls back to its untranslated text.
+fn render_blocks(blocks: &[Block], cands: &[String]) -> String {
+    let mut out = String::new();
+    let mut prev: Option<(BlockKind, usize)> = None;
+    for b in blocks {
+        let Some(text) = pick(&b.texts, cands) else {
+            continue;
+        };
+        match prev {
+            None => {}
+            Some((BlockKind::Item, l)) if b.kind == BlockKind::Item && l == b.list => {
+                out.push('\n')
+            }
+            Some(_) => out.push_str("\n\n"),
+        }
+        if b.kind == BlockKind::Item {
+            out.push_str("- ");
+        }
+        out.push_str(&text);
+        prev = Some((b.kind, b.list));
     }
-    let keep = buf.trim_end_matches('\n').len();
-    buf.truncate(keep);
-    buf.push_str(gap);
+    out
+}
+
+/// Description document for the language: a whole `<description xml:lang>`
+/// wins over the untranslated one.
+fn pick_description(docs: &[(Option<String>, Vec<Block>)], cands: &[String]) -> Option<String> {
+    let doc = cands
+        .iter()
+        .find_map(|c| docs.iter().find(|(l, _)| l.as_deref() == Some(c.as_str())))
+        .or_else(|| docs.iter().find(|(l, _)| l.is_none()))?;
+    let text = render_blocks(&doc.1, cands);
+    (!text.is_empty()).then_some(text)
 }
 
 fn frame_from(e: &BytesStart, parent_lang: Option<&String>) -> Frame {
@@ -98,7 +140,8 @@ fn frame_from(e: &BytesStart, parent_lang: Option<&String>) -> Frame {
         .map(|(_, v)| v.clone());
     Frame {
         name: e.name().as_ref().to_string(),
-        lang: own.or_else(|| parent_lang.cloned()),
+        lang: own.clone().or_else(|| parent_lang.cloned()),
+        own_lang: own,
         attrs,
         text: String::new(),
     }
@@ -110,16 +153,39 @@ struct Parser {
     /// Stack length while inside the open component (its own frame included).
     comp_depth: usize,
     done: Vec<Draft>,
+    /// Number of lists seen in the open component (tells list items apart).
+    lists: usize,
 }
 
 impl Parser {
-    fn description_buf(&mut self) -> Option<&mut String> {
-        let depth = self.comp_depth;
-        let lang = self.stack.last()?.lang.clone().unwrap_or_default();
-        if self.stack.get(depth)?.name != "description" {
+    /// The open `<description>` document, when the stack is inside one.
+    fn description_doc(&mut self) -> Option<&mut Vec<Block>> {
+        if self.stack.get(self.comp_depth)?.name != "description" {
             return None;
         }
-        Some(self.cur.as_mut()?.description.entry(lang).or_default())
+        self.cur.as_mut()?.descriptions.last_mut().map(|(_, b)| b)
+    }
+
+    fn open_block(&mut self, kind: BlockKind, own_lang: Option<String>) {
+        let list = self.lists;
+        let Some(blocks) = self.description_doc() else {
+            return;
+        };
+        let lang = own_lang.clone().unwrap_or_default();
+        // A block with its own language translates the previous block of its kind.
+        if own_lang.is_some()
+            && let Some(last) = blocks.last_mut()
+            && last.kind == kind
+            && !last.texts.contains_key(&lang)
+        {
+            last.texts.insert(lang, String::new());
+            return;
+        }
+        blocks.push(Block {
+            kind,
+            list,
+            texts: ByLang::from([(lang, String::new())]),
+        });
     }
 
     fn start(&mut self, e: &BytesStart) {
@@ -133,21 +199,26 @@ impl Parser {
             if ty.is_some_and(|t| COMPONENT_TYPES.contains(&t)) {
                 self.cur = Some(Draft::default());
                 self.comp_depth = self.stack.len() + 1;
+                self.lists = 0;
             }
         }
         let name = frame.name.clone();
         self.stack.push(frame);
-        if self.cur.is_some() {
-            let gap = match name.as_str() {
-                "p" | "ul" | "ol" => Some("\n\n"),
-                "li" => Some("\n"),
-                _ => None,
-            };
-            if let (Some(gap), Some(buf)) = (gap, self.description_buf()) {
-                ensure_gap(buf, gap);
-                if name == "li" {
-                    buf.push_str("- ");
-                }
+        if self.cur.is_some() && self.stack.len() == self.comp_depth + 1 && name == "description" {
+            let own = self.stack.last().and_then(|f| f.own_lang.clone());
+            if let Some(d) = self.cur.as_mut() {
+                d.descriptions.push((own, Vec::new()));
+            }
+        } else if self.cur.is_some() && self.stack.len() > self.comp_depth + 1 {
+            let own = self.stack.last().and_then(|f| f.own_lang.clone());
+            let in_block = self.stack[self.comp_depth + 1..self.stack.len() - 1]
+                .iter()
+                .any(|f| f.name == "p" || f.name == "li");
+            match name.as_str() {
+                "ul" | "ol" => self.lists += 1,
+                "p" if !in_block => self.open_block(BlockKind::Para, own),
+                "li" if !in_block => self.open_block(BlockKind::Item, own),
+                _ => {}
             }
         }
     }
@@ -156,29 +227,45 @@ impl Parser {
         if self.cur.is_none() {
             return;
         }
-        let in_block = self
+        if self
             .stack
-            .get(self.comp_depth..)
-            .is_some_and(|s| s.iter().any(|f| f.name == "p" || f.name == "li"));
-        if let Some(buf) = self.description_buf() {
-            if in_block {
-                // Collapse source whitespace but keep single spaces between words.
-                let starts = t.starts_with(char::is_whitespace);
-                let ends = t.ends_with(char::is_whitespace);
-                let words = t.split_whitespace().collect::<Vec<_>>().join(" ");
-                if words.is_empty() {
-                    if !buf.is_empty() && !buf.ends_with([' ', '\n']) {
-                        buf.push(' ');
-                    }
-                    return;
-                }
-                if starts && !buf.is_empty() && !buf.ends_with([' ', '\n']) {
+            .get(self.comp_depth)
+            .is_some_and(|f| f.name == "description")
+        {
+            // Text belongs to the innermost p/li; its language is the block's own one.
+            let Some(idx) = self.stack[self.comp_depth..]
+                .iter()
+                .position(|f| f.name == "p" || f.name == "li")
+            else {
+                return;
+            };
+            let lang = self.stack[self.comp_depth + idx]
+                .own_lang
+                .clone()
+                .unwrap_or_default();
+            let Some(buf) = self
+                .description_doc()
+                .and_then(|b| b.last_mut())
+                .and_then(|b| b.texts.get_mut(&lang))
+            else {
+                return;
+            };
+            // Collapse source whitespace but keep single spaces between words.
+            let starts = t.starts_with(char::is_whitespace);
+            let ends = t.ends_with(char::is_whitespace);
+            let words = t.split_whitespace().collect::<Vec<_>>().join(" ");
+            if words.is_empty() {
+                if !buf.is_empty() && !buf.ends_with(' ') {
                     buf.push(' ');
                 }
-                buf.push_str(&words);
-                if ends {
-                    buf.push(' ');
-                }
+                return;
+            }
+            if starts && !buf.is_empty() && !buf.ends_with(' ') {
+                buf.push(' ');
+            }
+            buf.push_str(&words);
+            if ends {
+                buf.push(' ');
             }
             return;
         }
@@ -231,27 +318,24 @@ impl Parser {
 }
 
 fn finish(d: Draft, cands: &[String]) -> (AppInfo, Vec<String>) {
-    let icon = d
-        .icons
-        .iter()
-        .find(|(t, _)| t == "stock")
-        .or_else(|| d.icons.first())
-        .map(|(_, v)| v.clone());
+    // Never a remote icon: nothing is fetched when the workshop opens.
+    let icon = ["stock", "cached", "local"].iter().find_map(|ty| {
+        d.icons
+            .iter()
+            .find(|(t, v)| t == ty && !v.contains("://"))
+            .map(|(_, v)| v.clone())
+    });
     let homepage = d
         .urls
         .iter()
         .find(|(t, _)| t == "homepage")
         .map(|(_, v)| v.clone());
-    let description = d
-        .description
-        .iter()
-        .map(|(l, v)| (l.clone(), v.trim().to_string()))
-        .collect::<ByLang>();
+    let description = pick_description(&d.descriptions, cands);
     let info = AppInfo {
         id: d.id,
         name: pick(&d.name, cands),
         summary: pick(&d.summary, cands),
-        description: pick(&description, cands),
+        description,
         icon,
         homepage,
         urls: d.urls.into_iter().map(|(_, v)| v).collect(),
@@ -266,6 +350,7 @@ fn parse_full(xml: &[u8], lang: &str) -> Vec<(AppInfo, Vec<String>)> {
         stack: Vec::new(),
         cur: None,
         comp_depth: 0,
+        lists: 0,
         done: Vec::new(),
     };
     loop {
@@ -541,6 +626,75 @@ mod tests {
         assert!(parse(cut.as_bytes(), "en").is_empty());
         assert!(parse(b"<<<not xml", "en").is_empty());
         assert!(parse(b"", "en").is_empty());
+    }
+
+    const INLINE_TRANSLATIONS: &str = r#"<component type="desktop-application"><id>a.b</id>
+<description>
+  <p>English one</p>
+  <p xml:lang="de">Deutsch eins</p>
+  <p>English two</p>
+  <ul>
+    <li>Item A</li>
+    <li xml:lang="de">Punkt A</li>
+    <li>Item B</li>
+  </ul>
+  <p>Closing</p>
+</description></component>"#;
+
+    #[test]
+    fn inline_translations_keep_untranslated_blocks() {
+        let de = parse(INLINE_TRANSLATIONS.as_bytes(), "de")[0]
+            .description
+            .clone();
+        assert_eq!(
+            de.as_deref(),
+            Some("Deutsch eins\n\nEnglish two\n\n- Punkt A\n- Item B\n\nClosing")
+        );
+        let en = parse(INLINE_TRANSLATIONS.as_bytes(), "en")[0]
+            .description
+            .clone();
+        assert_eq!(
+            en.as_deref(),
+            Some("English one\n\nEnglish two\n\n- Item A\n- Item B\n\nClosing")
+        );
+    }
+
+    #[test]
+    fn whole_translated_description_wins() {
+        let xml = r#"<component type="desktop-application"><id>a.b</id>
+<description><p>English</p></description>
+<description xml:lang="de"><p>Deutsch</p><ul><li>Eins</li></ul></description></component>"#;
+        assert_eq!(
+            parse(xml.as_bytes(), "de")[0].description.as_deref(),
+            Some("Deutsch\n\n- Eins")
+        );
+        assert_eq!(
+            parse(xml.as_bytes(), "en")[0].description.as_deref(),
+            Some("English")
+        );
+    }
+
+    #[test]
+    fn never_uses_remote_icons() {
+        let xml = |icons: &str| {
+            format!(r#"<component type="desktop-application"><id>a.b</id>{icons}</component>"#)
+        };
+        let remote = r#"<icon type="remote">https://example.org/i.png</icon>"#;
+        assert_eq!(parse(xml(remote).as_bytes(), "en")[0].icon, None);
+        let all = format!(
+            r#"{remote}<icon type="local">/x/l.png</icon><icon type="cached">c.png</icon><icon type="stock">st</icon>"#
+        );
+        assert_eq!(
+            parse(xml(&all).as_bytes(), "en")[0].icon.as_deref(),
+            Some("st")
+        );
+        let no_stock = format!(
+            r#"{remote}<icon type="local">/x/l.png</icon><icon type="cached">c.png</icon>"#
+        );
+        assert_eq!(
+            parse(xml(&no_stock).as_bytes(), "en")[0].icon.as_deref(),
+            Some("c.png")
+        );
     }
 
     fn temp(name: &str) -> PathBuf {
