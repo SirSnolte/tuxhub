@@ -22,7 +22,7 @@
   import LaunchPanel from "./LaunchPanel.svelte";
   import LivePanel from "./LivePanel.svelte";
   import { asksHowToRemove, installHint, needsPassword } from "./install-state";
-  import { canToggleWindow } from "./apps/integration";
+  import { INTEGRATIONS, canToggleWindow } from "./apps/integration";
   import { updateApp } from "./update";
   import type { RunState } from "./api";
   import type { MenuItem } from "./ToolMenu.svelte";
@@ -153,7 +153,10 @@
   function installUpdate(ok: string) {
     run(async () => {
       const done = await updateApp(id, askUpdate, embedPanel ? () => embedPanel!.startInHub() : undefined);
-      if (done) toast(ok, "info");
+      if (done) {
+        update = null;
+        toast(ok, "info");
+      }
     });
   }
 
@@ -218,7 +221,7 @@
     const state = [tool.running || tool.app_running ? t("tool.running") : "", tool.version ?? ""]
       .filter(Boolean)
       .join(" · ");
-    const kind = `${t(`source.${source.type}` as Key)} · ${t(`level.${tool.level}` as Key)}`;
+    const kind = `${t(`source.${source.type}` as Key)} · ${t(INTEGRATIONS[tool.integration].label)}`;
     return { title: state ? [state, kind] : [kind], items };
   }
 

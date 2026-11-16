@@ -30,10 +30,6 @@ const en = {
   "source.external": "Installed separately",
   "source.system-package": "System package",
 
-  "level.0": "Standalone",
-  "level.1": "Web interface",
-  "level.2": "Integrated",
-  "level.3": "Live",
 
   "integration.socket": "tuxhub menu",
   "integration.socket.hint": "Settings right in tuxhub, live-connected to the app.",
@@ -372,10 +368,6 @@ const de: Record<Key, string> = {
   "source.external": "Separat installiert",
   "source.system-package": "Systempaket",
 
-  "level.0": "Eigenständig",
-  "level.1": "Web-Oberfläche",
-  "level.2": "Integriert",
-  "level.3": "Live",
 
   "integration.socket": "tuxhub-Menü",
   "integration.socket.hint": "Einstellungen direkt in tuxhub, live mit der App verbunden.",
