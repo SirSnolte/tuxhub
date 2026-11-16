@@ -1,7 +1,7 @@
 // Updating an app that may be running: ask first, quit it, update it and
 // start it again where it ran (SPEC integration-levels-0.10.0, 4.4).
 import { api, type RunState } from "./api";
-import { restartTarget, updateNeedsConfirm } from "./apps/integration";
+import { mayQuit, restartTarget, updateNeedsConfirm } from "./apps/integration";
 
 /** Where the app runs now; null when that cannot be asked (not installed). */
 export async function runStateOf(id: string): Promise<RunState | null> {
@@ -21,8 +21,9 @@ export async function updateApp(
   startInHub?: () => Promise<void>,
 ): Promise<boolean> {
   const state = await runStateOf(id);
-  if (state && updateNeedsConfirm(state) && !(await ask(state))) return false;
-  await installAndRestart(id, state !== null, startInHub);
+  const confirmed = state !== null && updateNeedsConfirm(state) && (await ask(state));
+  if (state !== null && updateNeedsConfirm(state) && !confirmed) return false;
+  await installAndRestart(id, mayQuit(state, confirmed), startInHub);
   return true;
 }
 

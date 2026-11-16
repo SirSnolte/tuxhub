@@ -4,7 +4,7 @@
   import { fly } from "svelte/transition";
   import { ArrowUp, CircleAlert, CircleCheck, Settings, X } from "@lucide/svelte";
   import { api, errText, type RunState, type ShortcutStatus, type Tool, type Updates } from "$lib/api";
-  import { updateNeedsConfirm } from "$lib/apps/integration";
+  import { mayQuit, updateNeedsConfirm } from "$lib/apps/integration";
   import { installAndRestart, runStateOf } from "$lib/update";
   import { dismissToast, hub, startListening, toast } from "$lib/state.svelte";
   import { t } from "$lib/i18n.svelte";
@@ -67,7 +67,8 @@
       try {
         const startInHub =
           view.kind === "tool" && view.id === id && page ? () => page!.startInHub() : undefined;
-        await installAndRestart(id, states[id] !== null, startInHub);
+        // The question above covered every running app.
+        await installAndRestart(id, mayQuit(states[id], true), startInHub);
         toast(t("tool.updatedTo", { version: updates[id] ?? "" }) + ` (${name})`, "info");
       } catch (e) {
         toast(`${name}: ${errText(e)}`);

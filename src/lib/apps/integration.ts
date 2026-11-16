@@ -53,3 +53,10 @@ export function updateNeedsConfirm(state: RunState): boolean {
 export function restartTarget(state: RunState): WindowMode | null {
   return state === "hub" || state === "own" ? state : null;
 }
+
+/** Whether tuxhub may quit the app for the update: only a running app (or
+ * one that may run) the user agreed to quit. An app seen as stopped that
+ * starts in between is left alone; the backend then refuses the update. */
+export function mayQuit(state: RunState | null, confirmed: boolean): boolean {
+  return state !== null && updateNeedsConfirm(state) && confirmed;
+}

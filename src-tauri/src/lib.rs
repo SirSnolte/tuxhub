@@ -490,7 +490,7 @@ async fn tool_install(app: AppHandle, id: String, restart: bool) -> Result<Insta
     let quit = || async {
         match (before, &existing) {
             (RunState::Hub, _) => embed::stop(&app, &id).await,
-            (_, Some(inst)) => quit_app(&hub, inst, QUIT_WAIT).await?,
+            (_, Some(inst)) => quit_running(&hub, inst, QUIT_WAIT).await?,
             _ => {}
         }
         Ok(())
@@ -730,7 +730,9 @@ async fn run_state(hub: &Hub, in_hub: bool, inst: &Installed) -> RunState {
             None => RunState::Unknown,
         };
     }
-    if app_is_running(hub, inst).await {
+    // A service from the `[live]` section runs without a window; it is not
+    // the app the user would lose work in.
+    if window_is_open(hub, inst).await {
         RunState::Own
     } else {
         RunState::Stopped
@@ -772,11 +774,6 @@ async fn quit_app(
     wait: std::time::Duration,
 ) -> Result<(), String> {
     let id = inst.id();
-    if let Source::Flatpak { flatpak_id, .. } = &inst.entry.source
-        && !inst.manifest(&hub.tools_dir).is_live()
-    {
-        return tools::flatpak_kill(&hub.programs, flatpak_id, wait).await;
-    }
     let program = tools::app_program(&hub.tools_dir, inst);
     let deadline = tokio::time::Instant::now() + wait;
     let asked = inst.manifest(&hub.tools_dir).is_live() && hub.live.running(id).await;
@@ -797,6 +794,21 @@ async fn quit_app(
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     tools::quit(&program).await
+}
+
+/// Quits the running app the user asked to quit (or to update): like
+/// [`quit_app`], and a Flatpak with `flatpak kill`.
+async fn quit_running(
+    hub: &Hub,
+    inst: &tools::Installed,
+    wait: std::time::Duration,
+) -> Result<(), String> {
+    if let Source::Flatpak { flatpak_id, .. } = &inst.entry.source
+        && !inst.manifest(&hub.tools_dir).is_live()
+    {
+        return tools::flatpak_kill(&hub.programs, flatpak_id, wait).await;
+    }
+    quit_app(hub, inst, wait).await
 }
 
 #[tauri::command]
@@ -829,7 +841,7 @@ async fn tool_quit(app: AppHandle, id: String) -> Result<(), String> {
     {
         return Err(format!("{id} is not started and stopped by tuxhub"));
     }
-    quit_app(&hub, &inst, QUIT_WAIT).await
+    quit_running(&hub, &inst, QUIT_WAIT).await
 }
 
 #[tauri::command]
@@ -1637,6 +1649,14 @@ mod tests {
             let inst = tools::load(&hub.tools_dir, "livedemo").unwrap();
             assert!(app_is_running(&hub, &inst).await, "{name}");
             assert_eq!(window_is_open(&hub, &inst).await, blocked, "{name}");
+            // Only the app itself is quit and started again for an update,
+            // not a service that runs without a window.
+            let expected = if blocked {
+                RunState::Own
+            } else {
+                RunState::Stopped
+            };
+            assert_eq!(run_state(&hub, false, &inst).await, expected, "{name}");
             let _ = std::fs::remove_dir_all(&base);
         }
     }
@@ -2655,7 +2675,13 @@ while True:
         );
         let inst = Installed::new(flatpak_app("demo"));
         record(&hub, &inst);
+        // Removing a copy or uninstalling leaves a running Flatpak alone, as
+        // before; only quitting it and updates end it.
         quit_app(&hub, &inst, std::time::Duration::from_millis(300))
+            .await
+            .unwrap();
+        assert!(!f.calls().iter().any(|c| c.starts_with("flatpak kill")));
+        quit_running(&hub, &inst, std::time::Duration::from_millis(300))
             .await
             .unwrap();
         assert!(

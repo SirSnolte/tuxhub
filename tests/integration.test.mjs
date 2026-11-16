@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { INTEGRATIONS, canToggleWindow, integrationInfo, restartTarget, updateNeedsConfirm } from "../src/lib/apps/integration.ts";
+import { INTEGRATIONS, canToggleWindow, integrationInfo, mayQuit, restartTarget, updateNeedsConfirm } from "../src/lib/apps/integration.ts";
 
 const i18n = readFileSync(new URL("../src/lib/i18n.svelte.ts", import.meta.url), "utf8");
 const [en, de] = i18n.split(/\nconst de\b/);
@@ -59,4 +59,14 @@ test("after an update the app starts again where it ran", () => {
   assert.equal(restartTarget("stopped"), null);
   // Where an app that may have run ran is not known: it stays quit.
   assert.equal(restartTarget("unknown"), null);
+});
+
+test("an update may quit an app only after the user said yes", () => {
+  // Seen as stopped: if it starts before the update, tuxhub must not quit it unasked.
+  assert.equal(mayQuit("stopped", false), false);
+  assert.equal(mayQuit(null, false), false);
+  for (const state of ["hub", "own", "unknown"]) {
+    assert.equal(mayQuit(state, true), true, state);
+    assert.equal(mayQuit(state, false), false, state);
+  }
 });
