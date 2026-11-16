@@ -19,7 +19,12 @@
     onreset?: () => void;
   } = $props();
 
+  /** What the user typed; dropped whenever the stored color changes (other block, undo, Fliq). */
   let draft = $state<string | null>(null);
+  $effect(() => {
+    void value;
+    draft = null;
+  });
   const shown = $derived(draft ?? value ?? "");
   const invalid = $derived(draft !== null && !isColor(draft));
 

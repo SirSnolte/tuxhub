@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { t, type Key } from "../../i18n.svelte";
   import { knownFont } from "./fliq-options";
   import {
@@ -68,6 +69,8 @@
     memberMenu = null;
     removeListeners();
   }
+
+  onDestroy(cancelDrag);
 
   function rect(r: CellRect) {
     return grid.pixelRect(r, scale);

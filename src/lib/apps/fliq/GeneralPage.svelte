@@ -1,12 +1,11 @@
 <script lang="ts">
-  import type { LiveStatus } from "../../api";
   import { errText } from "../../api";
   import { t } from "../../i18n.svelte";
   import { toast } from "../../state.svelte";
   import { checkedOf, valueOf } from "../../wa";
   import type { FliqStore } from "./store.svelte";
 
-  let { store }: { store: FliqStore; status: LiveStatus } = $props();
+  let { store }: { store: FliqStore } = $props();
 
   let confirming = $state(false);
   let resetting = $state(false);

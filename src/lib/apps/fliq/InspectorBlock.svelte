@@ -2,7 +2,7 @@
   import { ChevronLeft, ChevronRight, LogOut, Trash, X } from "@lucide/svelte";
   import { t, type Key } from "../../i18n.svelte";
   import { checkedOf, valueOf } from "../../wa";
-  import { fontLabel, FONT_OPTIONS, kindInfo, knownFont, RANGES, SIZE_PRESETS } from "./fliq-options";
+  import { kindInfo, RANGES, SIZE_PRESETS } from "./fliq-options";
   import {
     BLOCK_DEFAULTS,
     clampText,
@@ -17,6 +17,7 @@
   } from "./layout-model";
   import type { Commit } from "./inspector";
   import ColorField from "./ColorField.svelte";
+  import FontSelect from "./FontSelect.svelte";
   import RangeField from "./RangeField.svelte";
 
   // One selected block: what it shows, how it looks, its size, and a group's items.
@@ -25,12 +26,14 @@
     block,
     oncommit,
     onfinish,
+    onfocusfield,
     onselect,
   }: {
     layout: ClockLayout;
     block: LayoutBlock;
     oncommit: Commit;
     onfinish: () => void;
+    onfocusfield: () => void;
     onselect: (id: number | null) => void;
   } = $props();
 
@@ -143,14 +146,14 @@
     {/if}
     {#if block.display === "custom"}
       <wa-input size="s" value={block.customFormat ?? ""} maxlength={CONTENT_LIMITS.textLength}
-        oninput={(e: Event) => typed("customFormat", valueOf(e))} onblur={onfinish}>
+        oninput={(e: Event) => typed("customFormat", valueOf(e))} onfocus={onfocusfield} onblur={onfinish}>
         <span slot="label">{t("fliq.insp.format")}</span>
         <span slot="hint">{t("fliq.insp.formatHint")}</span>
       </wa-input>
     {/if}
     {#if block.kind === "text"}
       <wa-input size="s" value={block.text ?? ""} maxlength={CONTENT_LIMITS.textLength}
-        oninput={(e: Event) => typed("text", valueOf(e))} onblur={onfinish}>
+        oninput={(e: Event) => typed("text", valueOf(e))} onfocus={onfocusfield} onblur={onfinish}>
         <span slot="label">{t("fliq.insp.text")}</span>
       </wa-input>
     {/if}
@@ -161,16 +164,12 @@
     {/if}
   {/if}
 
-  <wa-select size="s" value={block.font ?? ""} onchange={(e: Event) => patch({ font: valueOf(e) || undefined })}>
-    <span slot="label">{t("fliq.insp.font")}</span>
-    <wa-option value="">{t("fliq.insp.fontDefault")}</wa-option>
-    {#if block.font && !knownFont(block.font)}
-      <wa-option value={block.font}>{fontLabel(block.font)}</wa-option>
-    {/if}
-    {#each FONT_OPTIONS as f (f.value)}
-      <wa-option value={f.value}>{f.label}</wa-option>
-    {/each}
-  </wa-select>
+  <FontSelect
+    label={t("fliq.insp.font")}
+    value={block.font ?? ""}
+    defaultLabel={t("fliq.insp.fontDefault")}
+    onchange={(font) => patch({ font: font || undefined })}
+  />
   <ColorField
     label={t("fliq.insp.textColor")}
     value={block.color}

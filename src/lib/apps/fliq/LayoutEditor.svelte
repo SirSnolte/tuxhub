@@ -71,6 +71,8 @@
       complain(refusal);
       return;
     }
+    // Nothing changed (a preset of the current size, a slider let go where it was).
+    if (JSON.stringify(checked) === JSON.stringify(layout)) return;
     if (key === null || key !== gesture) {
       history.record(layout);
       syncHistory();
@@ -120,6 +122,8 @@
     const target = e.target as HTMLElement | null;
     if (target?.closest("input, textarea, wa-input, wa-textarea, wa-select, wa-slider, wa-color-picker")) return;
     const mod = e.ctrlKey || e.metaKey;
+    // Arrows and Delete act on blocks only from the canvas; inspector controls keep their keys.
+    const onCanvas = Boolean(target?.closest(".surface"));
     if (e.key === "Escape" && (selected.length || track)) {
       select(null);
     } else if (mod && e.key.toLowerCase() === "z" && !e.shiftKey) {
@@ -128,11 +132,11 @@
     } else if (mod && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) {
       e.preventDefault();
       redo();
-    } else if (layout && selected.length && (e.key === "Delete" || e.key === "Backspace")) {
+    } else if (layout && onCanvas && selected.length && (e.key === "Delete" || e.key === "Backspace")) {
       e.preventDefault();
       commit(removeBlocks(layout, selected));
       selected = [];
-    } else if (layout && selected.length === 1 && e.key.startsWith("Arrow")) {
+    } else if (layout && onCanvas && selected.length === 1 && e.key.startsWith("Arrow")) {
       e.preventDefault();
       const [dx, dy] = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key] ?? [0, 0];
       const moved = moveBlock(layout, selected[0], dx, dy);
@@ -192,6 +196,7 @@
           bind:tab={inspectorTab}
           oncommit={commit}
           onfinish={finish}
+          onfocusfield={() => store.focus(FLIQ_LAYOUT)}
           onselect={select}
           groupable={selected.length > 1 && new LayoutGrid(layout).groupable(selected) !== null}
         />

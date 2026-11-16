@@ -1,11 +1,11 @@
 <script lang="ts">
   import { t } from "../../i18n.svelte";
-  import { valueOf } from "../../wa";
-  import { fontLabel, FONT_OPTIONS, knownFont, RANGES } from "./fliq-options";
+  import { RANGES } from "./fliq-options";
   import { LayoutGrid, type ClockLayout } from "./layout-model";
   import { SLIDE_DELAY, type FliqStore } from "./store.svelte";
   import type { Commit } from "./inspector";
   import ColorField from "./ColorField.svelte";
+  import FontSelect from "./FontSelect.svelte";
   import RangeField from "./RangeField.svelte";
 
   // The whole clock: Fliq's own settings for size and look, and the grid's default spacing.
@@ -54,16 +54,7 @@
     range={RANGES.padding}
     onchange={(v, done) => setting("clockPadding", v, done)}
   />
-  <wa-select size="s" value={font} onchange={(e: Event) => store.set("textFont", valueOf(e))}>
-    <span slot="label">{t("fliq.insp.defaultFont")}</span>
-    {#if font && !knownFont(font)}
-      <!-- A font Fliq knows but this list does not: named, never used as CSS. -->
-      <wa-option value={font}>{fontLabel(font)}</wa-option>
-    {/if}
-    {#each FONT_OPTIONS as f (f.value)}
-      <wa-option value={f.value}>{f.label}</wa-option>
-    {/each}
-  </wa-select>
+  <FontSelect label={t("fliq.insp.defaultFont")} value={font} onchange={(f) => store.set("textFont", f)} />
   <ColorField
     label={t("fliq.insp.defaultTextColor")}
     value={store.text("textColor") || undefined}

@@ -146,13 +146,18 @@
       const nextStep = menuStep(step, own !== undefined);
       if (nextStep === "status") return;
       const next = await api.liveSchema(tool, i18n.locale);
-      const current = await api.liveGet(tool);
       if (tool !== id) return;
+      // The schema also brings the actions of the tool menu, with an own menu as well.
       schema = next;
       activeTab = pickTab(tabsOf(next), activeTab ?? storedTab());
+      if (nextStep === "probe" && own) {
+        await probeMenu(tool, own);
+        if (menuView || tool !== id) return;
+      }
+      const current = await api.liveGet(tool);
+      if (tool !== id) return;
       confirmed = { ...current };
       values = mergeChanged(keepKnown(values, next), current, editing);
-      if (nextStep === "probe" && own) await probeMenu(tool, own);
     } catch (e) {
       if (isLiveError(e) && e.code === "closed") return onclosed();
       failure = isLiveError(e) ? e : { code: "", message: errText(e) };

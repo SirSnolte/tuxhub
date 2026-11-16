@@ -93,7 +93,7 @@
     </wa-tab-panel>
     <wa-tab-panel name="time"><TimePage {store} /></wa-tab-panel>
     <wa-tab-panel name="weather"><WeatherPage {store} /></wa-tab-panel>
-    <wa-tab-panel name="general"><GeneralPage {store} {status} /></wa-tab-panel>
+    <wa-tab-panel name="general"><GeneralPage {store} /></wa-tab-panel>
     <wa-tab-panel name="about"><AboutPage version={store.version || status.version || ""} /></wa-tab-panel>
   </wa-tab-group>
 </div>

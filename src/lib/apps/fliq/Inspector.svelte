@@ -1,11 +1,11 @@
 <script lang="ts">
   import { t } from "../../i18n.svelte";
   import { valueOf } from "../../wa";
-  import { FONT_OPTIONS } from "./fliq-options";
   import { LayoutGrid, removeBlocks, updateBlock, type BlockAlign, type ClockLayout, type LayoutBlock, type TrackRef } from "./layout-model";
   import type { FliqStore } from "./store.svelte";
   import type { Commit } from "./inspector";
   import ColorField from "./ColorField.svelte";
+  import FontSelect from "./FontSelect.svelte";
   import InspectorClock from "./InspectorClock.svelte";
   import InspectorBlock from "./InspectorBlock.svelte";
   import InspectorTrack from "./InspectorTrack.svelte";
@@ -20,6 +20,7 @@
     groupable,
     oncommit,
     onfinish,
+    onfocusfield,
     onselect,
   }: {
     layout: ClockLayout;
@@ -30,6 +31,8 @@
     groupable: boolean;
     oncommit: Commit;
     onfinish: () => void;
+    /** A text field of the layout got focus; changes from outside wait until it is left. */
+    onfocusfield: () => void;
     onselect: (id: number | null) => void;
   } = $props();
 
@@ -72,7 +75,9 @@
       <InspectorClock {layout} {store} {oncommit} {onfinish} />
       {#if !hasSelection}<p class="muted small">{t("fliq.insp.nothing")}</p>{/if}
     {:else if blocks.length === 1}
-      <InspectorBlock {layout} block={blocks[0]} {oncommit} {onfinish} {onselect} />
+      {#key blocks[0].id}
+        <InspectorBlock {layout} block={blocks[0]} {oncommit} {onfinish} {onfocusfield} {onselect} />
+      {/key}
     {:else if blocks.length > 1}
       <div class="fields">
         <div class="actions">
@@ -97,17 +102,12 @@
           </wa-button>
         </div>
         {#if !groupable}<p class="muted small">{t("fliq.insp.groupHint")}</p>{/if}
-        <wa-select
-          size="s"
+        <FontSelect
+          label={t("fliq.insp.font")}
           value={shared("font") ?? ""}
-          onchange={(e: Event) => patchAll({ font: valueOf(e) || undefined })}
-        >
-          <span slot="label">{t("fliq.insp.font")}</span>
-          <wa-option value="">{t("fliq.insp.fontDefault")}</wa-option>
-          {#each FONT_OPTIONS as f (f.value)}
-            <wa-option value={f.value}>{f.label}</wa-option>
-          {/each}
-        </wa-select>
+          defaultLabel={t("fliq.insp.fontDefault")}
+          onchange={(font) => patchAll({ font: font || undefined })}
+        />
         <ColorField
           label={t("fliq.insp.textColor")}
           value={shared("color")}
