@@ -43,6 +43,15 @@ pub struct Entry {
     /// be integrated without changes to their repository.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manifest: Option<Manifest>,
+    /// How deeply tuxhub integrates the app, shown in the workshop while it
+    /// is not installed (the installed manifest wins). An unknown value, for
+    /// example a level of a newer tuxhub, counts as missing.
+    #[serde(
+        default,
+        deserialize_with = "lenient_integration",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub integration: Option<Integration>,
     /// Localized texts by language code, for example `{"de": {"description": "…"}}`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub translations: BTreeMap<String, Value>,
@@ -86,6 +95,39 @@ pub enum Source {
         #[serde(default)]
         user: bool,
     },
+}
+
+/// How deeply tuxhub integrates an app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Integration {
+    /// tuxhub's own menu, live with the app over its socket.
+    Socket,
+    /// Runs inside tuxhub (xpra or its own page) or in its own window.
+    Embedded,
+    /// Always runs in its own window; tuxhub installs, starts and updates it.
+    Standalone,
+}
+
+/// The integration a manifest describes.
+pub fn integration_of(manifest: &Manifest) -> Integration {
+    if manifest.is_live() {
+        Integration::Socket
+    } else if manifest.embed == Some(false) {
+        Integration::Standalone
+    } else {
+        Integration::Embedded
+    }
+}
+
+/// Reads `integration` without failing on unknown values: one bad entry must
+/// not drop the whole workshop.
+fn lenient_integration<'de, D>(de: D) -> Result<Option<Integration>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<Value>::deserialize(de)?;
+    Ok(v.and_then(|v| serde_json::from_value(v).ok()))
 }
 
 fn default_remote() -> String {
@@ -216,6 +258,18 @@ pub struct Installed {
     /// The user keeps both Flatpak installations: no hint about the copy.
     #[serde(default)]
     pub duplicate_dismissed: bool,
+    /// Where an app in the hub runs when it is started (embedded apps only).
+    #[serde(default)]
+    pub window: WindowMode,
+}
+
+/// Where an embedded app runs: inside tuxhub (xpra) or in its own window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WindowMode {
+    #[default]
+    Hub,
+    Own,
 }
 
 /// Installation progress; the user interface turns `stage` into text.
@@ -253,6 +307,7 @@ impl Installed {
             adopted: false,
             installation: Installation::User,
             duplicate_dismissed: false,
+            window: WindowMode::Hub,
         }
     }
 
@@ -430,6 +485,7 @@ fn announced(file: &Path, user: bool) -> Result<Installed, String> {
             user,
         },
         manifest: None,
+        integration: None,
         translations: BTreeMap::new(),
         id: a.id,
     };
@@ -1185,6 +1241,7 @@ pub fn link_local(tools_dir: &Path, path: &Path) -> Result<Installed, String> {
             path: path.to_string_lossy().into_owned(),
         },
         manifest: None,
+        integration: None,
         translations: BTreeMap::new(),
         id,
     };
@@ -1363,9 +1420,12 @@ pub fn launch(tools_dir: &Path, inst: &Installed) -> Result<(), String> {
     Ok(())
 }
 
-/// The program of a tool that tuxhub only starts and stops (`embed = false`).
+/// The program of an app that runs as a regular application: one that
+/// tuxhub only starts and stops (`embed = false`) or a level-0 app, which
+/// may run in its own window. Flatpaks are found with `flatpak ps` instead.
 pub fn app_program(tools_dir: &Path, inst: &Installed) -> Option<PathBuf> {
-    if inst.manifest(tools_dir).embed != Some(false) {
+    let manifest = inst.manifest(tools_dir);
+    if manifest.embed != Some(false) && manifest.level() != 0 {
         return None;
     }
     launch_cmd(tools_dir, inst)
@@ -1374,18 +1434,24 @@ pub fn app_program(tools_dir: &Path, inst: &Installed) -> Option<PathBuf> {
         .map(|lc| lc.program)
 }
 
-/// Whether a tool that tuxhub only starts and stops is running, also when it
-/// was started outside tuxhub.
+/// Whether the app of [`app_program`] is running, also when it was started
+/// outside tuxhub (or inside tuxhub's xpra session).
 pub fn app_running(tools_dir: &Path, inst: &Installed) -> bool {
     app_program(tools_dir, inst).is_some_and(|p| !processes(&p).is_empty())
 }
 
 /// Processes of the current user that run `program`. The processes of other
-/// users cannot be read and are left out.
+/// users cannot be read and are left out. The app of an AppImage runs from a
+/// temporary mount; it is found by `APPIMAGE` in its environment.
 pub fn processes(program: &Path) -> Vec<u32> {
     let program = program
         .canonicalize()
         .unwrap_or_else(|_| program.to_path_buf());
+    let appimage = is_appimage(&program).then(|| {
+        let mut var = b"APPIMAGE=".to_vec();
+        var.extend_from_slice(program.as_os_str().as_encoded_bytes());
+        var
+    });
     let Ok(rd) = std::fs::read_dir("/proc") else {
         return vec![];
     };
@@ -1393,8 +1459,21 @@ pub fn processes(program: &Path) -> Vec<u32> {
         .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
         .filter(|pid| {
             std::fs::read_link(format!("/proc/{pid}/exe")).is_ok_and(|exe| runs(&exe, &program))
+                || appimage.as_deref().is_some_and(|var| started_by(*pid, var))
         })
         .collect()
+}
+
+fn is_appimage(program: &Path) -> bool {
+    program
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("appimage"))
+}
+
+/// Whether the environment of `pid` holds exactly `var` (`APPIMAGE=<path>`).
+fn started_by(pid: u32, var: &[u8]) -> bool {
+    std::fs::read(format!("/proc/{pid}/environ"))
+        .is_ok_and(|env| env.split(|b| *b == 0).any(|entry| entry == var))
 }
 
 /// Whether `exe`, the target of `/proc/<pid>/exe`, is `program`. When an
@@ -1405,6 +1484,47 @@ fn runs(exe: &Path, program: &Path) -> bool {
             .to_str()
             .and_then(|s| s.strip_suffix(" (deleted)"))
             .is_some_and(|s| Path::new(s) == program)
+}
+
+/// Whether the output of `flatpak ps --columns=application` lists the app.
+pub fn flatpak_ps_has(out: &str, flatpak_id: &str) -> bool {
+    out.lines().any(|line| line.trim() == flatpak_id)
+}
+
+/// Whether the Flatpak runs, or `None` when flatpak did not answer.
+pub async fn flatpak_running(programs: &Programs, flatpak_id: &str) -> Option<bool> {
+    let out = programs
+        .query(&programs.flatpak, &["ps", "--columns=application"])
+        .await?;
+    out.status
+        .success()
+        .then(|| flatpak_ps_has(&String::from_utf8_lossy(&out.stdout), flatpak_id))
+}
+
+/// Ends a running Flatpak with `flatpak kill`. Fails when it still runs
+/// after `wait`; an app flatpak cannot tell about counts as ended.
+pub async fn flatpak_kill(
+    programs: &Programs,
+    flatpak_id: &str,
+    wait: Duration,
+) -> Result<(), String> {
+    if flatpak_running(programs, flatpak_id).await == Some(false) {
+        return Ok(());
+    }
+    // The app may exit in between, so the exit status does not matter.
+    let _ = programs
+        .query(&programs.flatpak, &["kill", flatpak_id])
+        .await;
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        if flatpak_running(programs, flatpak_id).await != Some(true) {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!("{flatpak_id} is still running"));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 /// Ends the processes that run `program`: SIGTERM first, SIGKILL for those
@@ -2163,5 +2283,173 @@ mod tests {
         assert!(!flatpak_already_gone(
             "error: Could not unmount revokefs-fuse"
         ));
+    }
+
+    fn manifest(toml: &str) -> Manifest {
+        toml::from_str(toml).unwrap()
+    }
+
+    #[test]
+    fn integration_follows_the_manifest() {
+        assert_eq!(
+            integration_of(&manifest("live = true")),
+            Integration::Socket
+        );
+        assert_eq!(
+            integration_of(&manifest("live = true\nembed = false")),
+            Integration::Socket
+        );
+        assert_eq!(
+            integration_of(&manifest("embed = false")),
+            Integration::Standalone
+        );
+        assert_eq!(integration_of(&Manifest::default()), Integration::Embedded);
+        assert_eq!(
+            integration_of(&manifest("web_url = \"http://localhost:1/\"")),
+            Integration::Embedded
+        );
+    }
+
+    #[test]
+    fn every_workshop_entry_names_its_integration() {
+        let entries: Vec<Entry> =
+            serde_json::from_str(include_str!("../../registry/index.json")).unwrap();
+        assert!(!entries.is_empty());
+        for e in &entries {
+            let level = e
+                .integration
+                .unwrap_or_else(|| panic!("{} has no valid integration", e.id));
+            if let Some(m) = &e.manifest {
+                assert_eq!(level, integration_of(m), "{}", e.id);
+            }
+        }
+    }
+
+    #[test]
+    fn an_unknown_integration_counts_as_missing() {
+        let e: Entry = serde_json::from_value(serde_json::json!({
+            "id": "demo",
+            "name": "Demo",
+            "integration": "foo",
+            "source": { "type": "flatpak", "flatpak_id": "net.example.Demo" },
+        }))
+        .unwrap();
+        assert_eq!(e.integration, None);
+        let e: Entry = serde_json::from_value(serde_json::json!({
+            "id": "demo",
+            "name": "Demo",
+            "integration": "socket",
+            "source": { "type": "flatpak", "flatpak_id": "net.example.Demo" },
+        }))
+        .unwrap();
+        assert_eq!(e.integration, Some(Integration::Socket));
+    }
+
+    #[test]
+    fn reads_running_flatpaks() {
+        let out = "com.core447.StreamController\ncom.discordapp.Discord\n";
+        assert!(flatpak_ps_has(out, "com.core447.StreamController"));
+        assert!(flatpak_ps_has(
+            "  com.core447.StreamController  \n",
+            "com.core447.StreamController"
+        ));
+        assert!(!flatpak_ps_has(out, "com.core447"));
+        assert!(!flatpak_ps_has(out, "com.core447.StreamController.Locale"));
+        assert!(!flatpak_ps_has("", "com.core447.StreamController"));
+        assert!(!flatpak_ps_has(
+            "com.core447.StreamController.Extra\n",
+            "com.core447.StreamController"
+        ));
+    }
+
+    #[tokio::test]
+    async fn asks_flatpak_whether_an_app_runs() {
+        let f = Fakes::new("flatpak-ps");
+        f.set(
+            "flatpak",
+            "printf 'net.example.other\\nnet.example.demo\\n'",
+        );
+        assert_eq!(
+            flatpak_running(&f.programs, "net.example.demo").await,
+            Some(true)
+        );
+        assert_eq!(
+            flatpak_running(&f.programs, "net.example.gone").await,
+            Some(false)
+        );
+        assert!(
+            f.calls()
+                .contains(&"flatpak ps --columns=application".to_string())
+        );
+        f.set("flatpak", "exit 1");
+        assert_eq!(flatpak_running(&f.programs, "net.example.demo").await, None);
+        let mut missing = f.programs.clone();
+        missing.flatpak = f.dir.join("no-flatpak");
+        assert_eq!(flatpak_running(&missing, "net.example.demo").await, None);
+    }
+
+    #[tokio::test]
+    async fn ends_a_running_flatpak() {
+        let f = Fakes::new("flatpak-kill");
+        let state = f.dir.join("running");
+        std::fs::write(&state, "net.example.demo\n").unwrap();
+        f.set(
+            "flatpak",
+            &format!(
+                "case \"$1\" in ps) cat '{0}';; kill) : > '{0}';; esac",
+                state.display()
+            ),
+        );
+        flatpak_kill(&f.programs, "net.example.demo", Duration::from_millis(500))
+            .await
+            .unwrap();
+        assert!(
+            f.calls()
+                .contains(&"flatpak kill net.example.demo".to_string())
+        );
+        assert_eq!(
+            flatpak_running(&f.programs, "net.example.demo").await,
+            Some(false)
+        );
+
+        // The app is still there after kill: the caller must not go on.
+        f.set("flatpak", "case \"$1\" in ps) echo net.example.demo;; esac");
+        assert!(
+            flatpak_kill(&f.programs, "net.example.demo", Duration::from_millis(300))
+                .await
+                .is_err()
+        );
+    }
+
+    /// An AppImage runs its app from a temporary mount; only `APPIMAGE` in
+    /// the environment names the file tuxhub started.
+    #[tokio::test]
+    async fn finds_the_app_an_appimage_started() {
+        let dir = std::env::temp_dir().join(format!("tuxhub-appimage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let image = dir.join("App.AppImage");
+        std::fs::write(&image, "not started").unwrap();
+        let inner = dir.join("inner");
+        std::fs::copy("/usr/bin/sleep", &inner).unwrap();
+        let mut child = loop {
+            match std::process::Command::new(&inner)
+                .arg("30")
+                .env("APPIMAGE", &image)
+                .spawn()
+            {
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    tokio::time::sleep(Duration::from_millis(20)).await
+                }
+                r => break r.unwrap(),
+            }
+        };
+        assert_eq!(processes(&image), [child.id()]);
+        // Another file with the same start of its name is not this app.
+        assert!(processes(&dir.join("App.App")).is_empty());
+        quit(&image).await.unwrap();
+        assert!(child.wait().is_ok());
+        assert!(processes(&image).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -4,10 +4,35 @@ All notable changes to tuxhub are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.10.0] - 2026-11-16
+
+### Added
+
+- Every workshop card shows how deeply tuxhub integrates the app: tuxhub
+  menu (settings live over the app's socket), In tuxhub (runs inside tuxhub
+  or in its own window) or Standalone, with a tooltip; the detail panel
+  shows the explaining sentence. Workshop entries name it in the new field
+  `integration`; for installed apps the manifest decides.
+- Apps that run inside tuxhub per xpra get the toggle "In tuxhub / Own
+  window" on their page. The choice is kept across updates. Switching while
+  the app runs asks first, quits it and starts it in the new place. The
+  menu entry "Open own window" is greyed out for these apps.
+- Updating a running app asks first ("may be running" when that cannot be
+  told), quits it cleanly, updates it and starts it again where it ran,
+  also when the update fails. "Update all" asks once for all running apps.
+
+### Fixed
+
+- tuxhub notices an app in its own window also for apps that run inside
+  tuxhub, Flatpaks (`flatpak ps`, ended with `flatpak kill`) and AppImages,
+  whose app runs from a temporary mount. Before, an update replaced the
+  files under a running app.
 
 ### Changed
 
+- The tool menu names the integration level (tuxhub menu, In tuxhub,
+  Standalone) instead of the old levels, which called an app in the hub
+  "Standalone".
 - The hint above the generic settings page of an application without its own
   menu support no longer asks to update it, since no such version may exist
   yet; it says that the full menu comes with a newer version.
@@ -215,6 +240,7 @@ First public release.
 - System tray, autostart and single-instance behavior.
 - English and German user interface.
 
+[0.10.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.10.0
 [0.9.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.9.0
 [0.8.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.8.0
 [0.6.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.6.0

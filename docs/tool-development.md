@@ -518,6 +518,7 @@ Workshop entries live in [`registry/index.json`](../registry/index.json):
   "icon": "https://example.org/icon-128.png",
   "category": "input",
   "repo": "owner/example-tool",
+  "integration": "socket",
   "source": { "type": "github-release", "asset": "*x86_64-linux.tar.gz" },
   "translations": {
     "de": { "description": "Ein Satz, der das Tool beschreibt." }
@@ -532,6 +533,7 @@ Workshop entries live in [`registry/index.json`](../registry/index.json):
 | `category` | `input`, `compatibility`, `overlay`, `launcher` or `creative` |
 | `icon` | HTTPS URL of a square image, at least 128 pixels |
 | `manifest` | Optional. Replaces the tool's own `tuxhub.toml`, so third-party tools can be integrated without changes to their repository. |
+| `integration` | From tuxhub 0.10.0. How deeply tuxhub integrates the app, shown as a tag on the workshop card while it is not installed: `socket` (tuxhub menu, live over the socket), `embedded` (runs inside tuxhub or in its own window) or `standalone` (always its own window; tuxhub installs, starts and updates it). Once installed, the manifest decides: `live` → `socket`, otherwise `embed = false` → `standalone`, otherwise `embedded`. An unknown value shows no tag; older tuxhub versions ignore the field. |
 | `translations` | Optional localized descriptions by language code |
 
 A system package names the package, an asset pattern per package format and

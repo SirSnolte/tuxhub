@@ -3,7 +3,9 @@
   import { listen } from "@tauri-apps/api/event";
   import { fly } from "svelte/transition";
   import { ArrowUp, CircleAlert, CircleCheck, Settings, X } from "@lucide/svelte";
-  import { api, errText, type ShortcutStatus, type Tool, type Updates } from "$lib/api";
+  import { api, errText, type RunState, type ShortcutStatus, type Tool, type Updates } from "$lib/api";
+  import { mayQuit, updateNeedsConfirm } from "$lib/apps/integration";
+  import { installAndRestart, runStateOf } from "$lib/update";
   import { dismissToast, hub, startListening, toast } from "$lib/state.svelte";
   import { t } from "$lib/i18n.svelte";
   import ToolPage from "$lib/ToolPage.svelte";
@@ -37,12 +39,36 @@
     }
   }
 
+  /** Names of running apps the user is asked about before "Update all". */
+  let runningAsk = $state<{ names: string; answer: (yes: boolean) => void } | null>(null);
+
+  function answerRunning(yes: boolean) {
+    runningAsk?.answer(yes);
+    runningAsk = null;
+  }
+
   async function updateAll() {
     updatingAll = true;
-    for (const id of Object.keys(updates)) {
-      const name = tools.find((tool) => tool.entry.id === id)?.entry.name ?? id;
+    const ids = Object.keys(updates);
+    const nameOf = (id: string) => tools.find((tool) => tool.entry.id === id)?.entry.name ?? id;
+    const states: Record<string, RunState | null> = {};
+    for (const id of ids) states[id] = await runStateOf(id);
+    const running = ids.filter((id) => states[id] && updateNeedsConfirm(states[id]!));
+    if (running.length > 0) {
+      const names = running.map(nameOf).join(", ");
+      const yes = await new Promise<boolean>((answer) => (runningAsk = { names, answer }));
+      if (!yes) {
+        updatingAll = false;
+        return;
+      }
+    }
+    for (const id of ids) {
+      const name = nameOf(id);
       try {
-        await api.install(id);
+        const startInHub =
+          view.kind === "tool" && view.id === id && page ? () => page!.startInHub() : undefined;
+        // The question above covered every running app.
+        await installAndRestart(id, mayQuit(states[id], true), startInHub);
         toast(t("tool.updatedTo", { version: updates[id] ?? "" }) + ` (${name})`, "info");
       } catch (e) {
         toast(`${name}: ${errText(e)}`);
@@ -177,7 +203,27 @@
   </div>
 </div>
 
+<wa-dialog
+  label={t("update.confirmManyTitle")}
+  open={runningAsk !== null}
+  onwa-after-hide={(e: Event) => {
+    if (e.target === e.currentTarget && runningAsk) answerRunning(false);
+  }}
+>
+  <p>{t("update.runningMany", { names: runningAsk?.names ?? "" })}</p>
+  <div slot="footer" class="dialog-buttons">
+    <wa-button appearance="outlined" onclick={() => answerRunning(false)}>{t("common.cancel")}</wa-button>
+    <wa-button variant="brand" onclick={() => answerRunning(true)}>{t("update.quitAndUpdate")}</wa-button>
+  </div>
+</wa-dialog>
+
 <style>
+  .dialog-buttons {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: var(--wa-space-xs);
+  }
   .app {
     display: grid;
     grid-template-columns: 252px minmax(0, 1fr);

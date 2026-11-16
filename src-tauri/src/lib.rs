@@ -359,15 +359,16 @@ struct WorkshopItem {
     installed: bool,
     /// On this computer, but not in tuxhub: it can be added to the sidebar.
     present: bool,
+    /// How deeply tuxhub integrates the app; none when the workshop does
+    /// not say and the app is not installed.
+    integration: Option<tools::Integration>,
 }
 
 /// The workshop entries with their state. Installations are looked for side
 /// by side, so a hanging query delays the list by the timeout at most.
 async fn workshop_items(hub: &Hub, entries: Vec<Entry>) -> Vec<WorkshopItem> {
-    let installed: Vec<String> = tools::load_all(&hub.tools_dir)
-        .into_iter()
-        .map(|t| t.entry.id)
-        .collect();
+    let records = tools::load_all(&hub.tools_dir);
+    let installed: Vec<String> = records.iter().map(|t| t.entry.id.clone()).collect();
     let present = futures_util::future::join_all(entries.iter().map(|e| async {
         !installed.contains(&e.id) && tools::detect(e, &hub.programs).await.any()
     }))
@@ -375,12 +376,38 @@ async fn workshop_items(hub: &Hub, entries: Vec<Entry>) -> Vec<WorkshopItem> {
     entries
         .into_iter()
         .zip(present)
-        .map(|(entry, present)| WorkshopItem {
-            installed: installed.contains(&entry.id),
-            present,
-            entry,
+        .map(|(entry, present)| {
+            let record = records.iter().find(|t| t.entry.id == entry.id);
+            WorkshopItem {
+                installed: record.is_some(),
+                integration: workshop_integration(&hub.tools_dir, &entry, record),
+                present,
+                entry,
+            }
         })
         .collect()
+}
+
+/// The integration a workshop card shows: the installed app's manifest
+/// wins over what the workshop says.
+fn workshop_integration(
+    tools_dir: &Path,
+    entry: &Entry,
+    installed: Option<&Installed>,
+) -> Option<tools::Integration> {
+    let Some(inst) = installed else {
+        return entry.integration;
+    };
+    let actual = tools::integration_of(&inst.manifest(tools_dir));
+    if let Some(listed) = entry.integration
+        && listed != actual
+    {
+        eprintln!(
+            "{}: the workshop says {listed:?}, the installed app is {actual:?}",
+            entry.id
+        );
+    }
+    Some(actual)
 }
 
 #[tauri::command]
@@ -398,34 +425,94 @@ async fn workshop_readme(repo: String) -> Result<String, String> {
     github::readme(&repo).await
 }
 
+/// The result of an install or update: where the app ran before (the user
+/// interface starts it there again) and why the update failed, if it did.
+#[derive(Debug, Serialize)]
+struct InstallOutcome {
+    state: RunState,
+    error: Option<String>,
+}
+
+/// Quits a running app, then updates it. Without `restart` (the user's yes
+/// to quit and restart) a running app is left alone. When quitting fails,
+/// nothing is updated; when the update fails, the old version stays and the
+/// app is still to be started again.
+async fn update_running<Q, QF, U, UF>(
+    before: RunState,
+    restart: bool,
+    quit: Q,
+    update: U,
+) -> Result<InstallOutcome, String>
+where
+    Q: FnOnce() -> QF,
+    QF: std::future::Future<Output = Result<(), String>>,
+    U: FnOnce() -> UF,
+    UF: std::future::Future<Output = Result<(), String>>,
+{
+    if before != RunState::Stopped {
+        if !restart {
+            return Err("the app is running; quit it before the update".into());
+        }
+        quit().await?;
+    }
+    Ok(InstallOutcome {
+        state: before,
+        error: update().await.err(),
+    })
+}
+
+/// Installs or updates a tool. A running app is quit first when `restart`
+/// says the user agreed; the returned state tells where it ran.
 #[tauri::command]
-async fn tool_install(app: AppHandle, id: String) -> Result<(), String> {
+async fn tool_install(app: AppHandle, id: String, restart: bool) -> Result<InstallOutcome, String> {
+    let hub = app.state::<Hub>();
+    let existing = tools::load(&hub.tools_dir, &id).ok();
     // A tool installed outside tuxhub is updated where it is.
-    let existing = tools::load(&app.state::<Hub>().tools_dir, &id).ok();
-    if let Some(inst) = existing.filter(|i| matches!(i.entry.source, Source::External { .. })) {
-        let hub = app.state::<Hub>();
+    let external = existing
+        .clone()
+        .filter(|i| matches!(i.entry.source, Source::External { .. }));
+    let entry = match external {
+        Some(_) => None,
+        None => {
+            let (entries, _) = workshop_entries().await;
+            Some(
+                entries
+                    .into_iter()
+                    .find(|e| e.id == id)
+                    .ok_or_else(|| format!("{id} is not in the workshop"))?,
+            )
+        }
+    };
+    let before = match &existing {
+        Some(inst) => run_state(&hub, embed::status(&app, &id).await.is_some(), inst).await,
+        None => RunState::Stopped,
+    };
+    let quit = || async {
+        match (before, &existing) {
+            (RunState::Hub, _) => embed::stop(&app, &id).await,
+            (_, Some(inst)) => quit_running(&hub, inst, QUIT_WAIT).await?,
+            _ => {}
+        }
+        Ok(())
+    };
+    let update = || async {
+        // Background processes stop for the update and start again below.
         hub.runtime.stop(&id).await;
         embed::stop(&app, &id).await;
-        tools::update_external(&app, &inst).await?;
+        match (&external, &entry) {
+            (Some(inst), _) => tools::update_external(&app, inst).await?,
+            (None, Some(entry)) => {
+                install_entry(&app, &hub, entry).await?;
+            }
+            (None, None) => return Err(format!("{id} is not in the workshop")),
+        }
         updates::forget(&app, &id);
         shortcuts::rebind(app.clone());
-        start_background_tools(app).await;
-        return Ok(());
-    }
-    let (entries, _) = workshop_entries().await;
-    let entry = entries
-        .into_iter()
-        .find(|e| e.id == id)
-        .ok_or_else(|| format!("{id} is not in the workshop"))?;
-    let hub = app.state::<Hub>();
-    // Stop the running process before an update.
-    hub.runtime.stop(&id).await;
-    embed::stop(&app, &id).await;
-    install_entry(&app, &hub, &entry).await?;
-    updates::forget(&app, &id);
-    shortcuts::rebind(app.clone());
-    start_background_tools(app).await;
-    Ok(())
+        Ok(())
+    };
+    let outcome = update_running(before, restart, quit, update).await;
+    start_background_tools(app.clone()).await;
+    outcome
 }
 
 /// Installs or updates a workshop entry. An app that is already on this
@@ -459,10 +546,19 @@ async fn install_entry<R: tauri::Runtime>(
         _ => {}
     }
     let inst = tools::install(app, &hub.tools_dir, &hub.programs, entry).await?;
-    let inst = carry_over(previous.as_ref(), found.package, inst);
-    if inst.adopted {
-        tools::save(&hub.tools_dir, &inst)?;
-    }
+    record_after_install(hub, previous.as_ref(), found.package, inst)
+}
+
+/// Stores the record of a new installation with what it keeps from the
+/// previous one (see [`carry_over`]).
+fn record_after_install(
+    hub: &Hub,
+    previous: Option<&Installed>,
+    present: bool,
+    inst: Installed,
+) -> Result<Installed, String> {
+    let inst = carry_over(previous, present, inst);
+    tools::save(&hub.tools_dir, &inst)?;
     Ok(inst)
 }
 
@@ -475,6 +571,9 @@ fn carry_over(previous: Option<&Installed>, present: bool, mut new: Installed) -
         && matches!(new.entry.source, Source::SystemPackage { .. })
     {
         new.adopted = true;
+    }
+    if let Some(p) = previous {
+        new.window = p.window;
     }
     new
 }
@@ -524,6 +623,10 @@ struct ToolView {
     /// The Flatpak is installed for the user and system-wide, and the user
     /// has not chosen to keep both.
     duplicate: bool,
+    /// How deeply tuxhub integrates the app.
+    integration: tools::Integration,
+    /// Where an embedded app runs when it is started.
+    window: tools::WindowMode,
 }
 
 #[tauri::command]
@@ -550,12 +653,9 @@ async fn tool_views(hub: &Hub) -> Vec<ToolView> {
             running: hub.runtime.is_running(inst.id()).await,
             app_running: app_is_running(hub, &inst).await,
             level: manifest.level(),
-            can_launch: manifest.run.is_some()
-                || inst.detected_run.is_some()
-                || matches!(
-                    inst.entry.source,
-                    Source::Flatpak { .. } | Source::SystemPackage { .. }
-                ),
+            can_launch: can_launch(&inst, &manifest),
+            integration: tools::integration_of(&manifest),
+            window: inst.window,
             path: inst
                 .root_dir(&hub.tools_dir)
                 .map(|p| p.to_string_lossy().into_owned()),
@@ -565,6 +665,86 @@ async fn tool_views(hub: &Hub) -> Vec<ToolView> {
         });
     }
     out
+}
+
+/// Whether tuxhub can start the tool as an application.
+fn can_launch(inst: &Installed, manifest: &Manifest) -> bool {
+    manifest.run.is_some()
+        || inst.detected_run.is_some()
+        || matches!(
+            inst.entry.source,
+            Source::Flatpak { .. } | Source::SystemPackage { .. }
+        )
+}
+
+/// Whether the app has the "In tuxhub / Own window" toggle: an app that runs
+/// per xpra, recorded by tuxhub (an announced tool has no record to keep it).
+fn has_window_toggle(inst: &Installed, manifest: &Manifest) -> bool {
+    tools::integration_of(manifest) == tools::Integration::Embedded
+        && manifest.level() == 0
+        && can_launch(inst, manifest)
+        && !matches!(inst.entry.source, Source::External { .. })
+}
+
+/// Stores where an embedded app runs. Starts and stops nothing.
+fn set_window(hub: &Hub, id: &str, mode: &str) -> Result<(), String> {
+    let mode: tools::WindowMode = serde_json::from_value(Value::String(mode.into()))
+        .map_err(|_| format!("unknown window mode {mode:?}"))?;
+    let mut inst = tools::load(&hub.tools_dir, id)?;
+    if !has_window_toggle(&inst, &inst.manifest(&hub.tools_dir)) {
+        return Err(format!("{} always runs the same way", inst.entry.name));
+    }
+    inst.window = mode;
+    tools::save(&hub.tools_dir, &inst)
+}
+
+#[tauri::command]
+fn tool_set_window(app: AppHandle, id: String, mode: String) -> Result<(), String> {
+    set_window(&app.state::<Hub>(), &id, &mode)
+}
+
+/// Whether and where an app runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum RunState {
+    Stopped,
+    /// Inside tuxhub (xpra session).
+    Hub,
+    /// In its own window, or a socket app.
+    Own,
+    /// It could not be found out (flatpak did not answer).
+    Unknown,
+}
+
+/// Where the app runs; `in_hub`: tuxhub shows it in an xpra session.
+async fn run_state(hub: &Hub, in_hub: bool, inst: &Installed) -> RunState {
+    if in_hub {
+        return RunState::Hub;
+    }
+    if let Source::Flatpak { flatpak_id, .. } = &inst.entry.source
+        && !inst.manifest(&hub.tools_dir).is_live()
+    {
+        return match tools::flatpak_running(&hub.programs, flatpak_id).await {
+            Some(true) => RunState::Own,
+            Some(false) => RunState::Stopped,
+            None => RunState::Unknown,
+        };
+    }
+    // A service from the `[live]` section runs without a window; it is not
+    // the app the user would lose work in.
+    if window_is_open(hub, inst).await {
+        RunState::Own
+    } else {
+        RunState::Stopped
+    }
+}
+
+#[tauri::command]
+async fn tool_run_state(app: AppHandle, id: String) -> Result<RunState, String> {
+    let hub = app.state::<Hub>();
+    let inst = tools::load(&hub.tools_dir, &id)?;
+    let in_hub = embed::status(&app, &id).await.is_some();
+    Ok(run_state(&hub, in_hub, &inst).await)
 }
 
 /// Whether the application of a tool that tuxhub only starts and stops, or
@@ -616,6 +796,21 @@ async fn quit_app(
     tools::quit(&program).await
 }
 
+/// Quits the running app the user asked to quit (or to update): like
+/// [`quit_app`], and a Flatpak with `flatpak kill`.
+async fn quit_running(
+    hub: &Hub,
+    inst: &tools::Installed,
+    wait: std::time::Duration,
+) -> Result<(), String> {
+    if let Source::Flatpak { flatpak_id, .. } = &inst.entry.source
+        && !inst.manifest(&hub.tools_dir).is_live()
+    {
+        return tools::flatpak_kill(&hub.programs, flatpak_id, wait).await;
+    }
+    quit_app(hub, inst, wait).await
+}
+
 #[tauri::command]
 async fn tool_launch(app: AppHandle, id: String) -> Result<(), String> {
     let hub = app.state::<Hub>();
@@ -642,10 +837,11 @@ async fn tool_quit(app: AppHandle, id: String) -> Result<(), String> {
     let inst = tools::load(&hub.tools_dir, &id)?;
     if !inst.manifest(&hub.tools_dir).is_live()
         && tools::app_program(&hub.tools_dir, &inst).is_none()
+        && !matches!(inst.entry.source, Source::Flatpak { .. })
     {
         return Err(format!("{id} is not started and stopped by tuxhub"));
     }
-    quit_app(&hub, &inst, QUIT_WAIT).await
+    quit_running(&hub, &inst, QUIT_WAIT).await
 }
 
 #[tauri::command]
@@ -1185,6 +1381,8 @@ pub fn run() {
             tool_list,
             tool_launch,
             tool_app_running,
+            tool_set_window,
+            tool_run_state,
             tool_quit,
             tool_uninstall,
             tool_check_update,
@@ -1451,6 +1649,14 @@ mod tests {
             let inst = tools::load(&hub.tools_dir, "livedemo").unwrap();
             assert!(app_is_running(&hub, &inst).await, "{name}");
             assert_eq!(window_is_open(&hub, &inst).await, blocked, "{name}");
+            // Only the app itself is quit and started again for an update,
+            // not a service that runs without a window.
+            let expected = if blocked {
+                RunState::Own
+            } else {
+                RunState::Stopped
+            };
+            assert_eq!(run_state(&hub, false, &inst).await, expected, "{name}");
             let _ = std::fs::remove_dir_all(&base);
         }
     }
@@ -2283,5 +2489,305 @@ while True:
             "{:?}",
             saved.entry.source
         );
+    }
+
+    #[test]
+    fn an_unknown_integration_keeps_the_workshop() {
+        let entries = parse_workshop(
+            r#"[
+                {"id": "a", "name": "A", "integration": "foo",
+                 "source": {"type": "flatpak", "flatpak_id": "net.example.A"}},
+                {"id": "b", "name": "B", "integration": "embedded",
+                 "source": {"type": "flatpak", "flatpak_id": "net.example.B"}}
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].integration, None);
+        assert_eq!(entries[1].integration, Some(tools::Integration::Embedded));
+    }
+
+    #[tokio::test]
+    async fn workshop_integration_prefers_the_installed_manifest() {
+        let (hub, _f) = hub_with_fakes("workshop-integration");
+        let mut live = flatpak_app("live");
+        live.manifest = Some(toml::from_str("live = true").unwrap());
+        record(&hub, &Installed::new(live.clone()));
+        let mut listed = flatpak_app("live");
+        listed.integration = Some(tools::Integration::Embedded);
+        let mut other = flatpak_app("other");
+        other.integration = Some(tools::Integration::Standalone);
+        let items = workshop_items(&hub, vec![listed, other, flatpak_app("plain")]).await;
+        let levels: Vec<_> = items.iter().map(|i| i.integration).collect();
+        assert_eq!(
+            levels,
+            [
+                Some(tools::Integration::Socket),
+                Some(tools::Integration::Standalone),
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn a_record_without_window_runs_in_the_hub() {
+        let inst: Installed =
+            serde_json::from_value(json!({ "entry": flatpak_app("old") })).unwrap();
+        assert_eq!(inst.window, tools::WindowMode::Hub);
+    }
+
+    #[test]
+    fn an_update_keeps_the_window() {
+        let mut previous = Installed::new(flatpak_app("demo"));
+        previous.window = tools::WindowMode::Own;
+        let new = Installed::new(flatpak_app("demo"));
+        assert_eq!(
+            carry_over(Some(&previous), false, new.clone()).window,
+            tools::WindowMode::Own
+        );
+        assert_eq!(carry_over(None, false, new).window, tools::WindowMode::Hub);
+    }
+
+    #[tokio::test]
+    async fn a_flatpak_update_keeps_the_window() {
+        let (hub, f) = hub_with_fakes("flatpak-update-window");
+        flatpak_with_updates(&f, &[tools::Installation::User], "");
+        let mut inst = Installed::new(flatpak_app("demo"));
+        inst.window = tools::WindowMode::Own;
+        record(&hub, &inst);
+        let app = tauri::test::mock_app();
+        install_entry(app.handle(), &hub, &flatpak_app("demo"))
+            .await
+            .unwrap();
+        assert_eq!(
+            recorded(&hub, "demo").unwrap().window,
+            tools::WindowMode::Own
+        );
+    }
+
+    #[test]
+    fn sets_the_window_of_an_app_in_the_hub() {
+        let (hub, _f) = hub_with_fakes("set-window");
+        record(&hub, &Installed::new(flatpak_app("demo")));
+        set_window(&hub, "demo", "own").unwrap();
+        assert_eq!(
+            recorded(&hub, "demo").unwrap().window,
+            tools::WindowMode::Own
+        );
+        set_window(&hub, "demo", "hub").unwrap();
+        assert_eq!(
+            recorded(&hub, "demo").unwrap().window,
+            tools::WindowMode::Hub
+        );
+    }
+
+    #[test]
+    fn only_apps_in_the_hub_get_a_window_setting() {
+        let (hub, _f) = hub_with_fakes("set-window-refused");
+        let with = |id: &str, manifest: &str| {
+            let mut e = flatpak_app(id);
+            e.manifest = Some(toml::from_str(manifest).unwrap());
+            let inst = Installed::new(e);
+            record(&hub, &inst);
+        };
+        with("socket", "live = true");
+        with("standalone", "embed = false");
+        with("page", "ui = \"index.html\"");
+        with("web", "web_url = \"http://localhost:1/\"");
+        record(&hub, &Installed::new(flatpak_app("plain")));
+        let before = |id: &str| std::fs::read(hub.tools_dir.join(id).join("tool.json")).unwrap();
+        for (id, mode) in [
+            ("socket", "own"),
+            ("standalone", "own"),
+            ("page", "own"),
+            ("web", "own"),
+            ("plain", "x"),
+            ("plain", "Own"),
+        ] {
+            let saved = before(id);
+            assert!(set_window(&hub, id, mode).is_err(), "{id} {mode}");
+            assert_eq!(before(id), saved, "{id} {mode}");
+        }
+        assert!(set_window(&hub, "missing", "own").is_err());
+        assert!(set_window(&hub, "../plain", "own").is_err());
+        assert!(!hub.tools_dir.join("missing").exists());
+    }
+
+    #[tokio::test]
+    async fn tool_view_tells_integration_and_window() {
+        let (hub, f) = hub_with_fakes("tool-view-window");
+        f.flatpak_with(&[tools::Installation::User]);
+        let mut inst = Installed::new(flatpak_app("demo"));
+        inst.window = tools::WindowMode::Own;
+        record(&hub, &inst);
+        let views = tool_views(&hub).await;
+        let view = views.iter().find(|v| v.entry.id == "demo").unwrap();
+        assert_eq!(view.integration, tools::Integration::Embedded);
+        assert_eq!(view.window, tools::WindowMode::Own);
+    }
+
+    /// Edge case 9: an app in the hub that the user runs in its own window
+    /// is noticed, not only apps with `embed = false`.
+    #[tokio::test]
+    async fn notices_an_app_in_its_own_window() {
+        let (hub, base, tool) = hub_with_tool("own-window", json!({ "run": { "command": "app" } }));
+        let inst = tools::load(&hub.tools_dir, "livedemo").unwrap();
+        assert_eq!(run_state(&hub, false, &inst).await, RunState::Stopped);
+        let mut child = tools::spawn_copied(&tool.join("app"), &["30"]).await;
+        assert!(app_is_running(&hub, &inst).await);
+        assert_eq!(run_state(&hub, false, &inst).await, RunState::Own);
+        assert_eq!(run_state(&hub, true, &inst).await, RunState::Hub);
+        quit_app(&hub, &inst, std::time::Duration::from_secs(3))
+            .await
+            .unwrap();
+        assert!(exits_soon(&mut child).await, "the program still runs");
+        assert_eq!(run_state(&hub, false, &inst).await, RunState::Stopped);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Edge case 10: a Flatpak in its own window is found with `flatpak ps`;
+    /// without an answer the state is unknown.
+    #[tokio::test]
+    async fn run_state_of_a_flatpak() {
+        let (hub, f) = hub_with_fakes("run-state-flatpak");
+        let inst = Installed::new(flatpak_app("demo"));
+        record(&hub, &inst);
+        f.set("flatpak", "echo net.example.demo");
+        assert_eq!(run_state(&hub, false, &inst).await, RunState::Own);
+        f.set("flatpak", "echo net.example.other");
+        assert_eq!(run_state(&hub, false, &inst).await, RunState::Stopped);
+        f.set("flatpak", "exit 1");
+        assert_eq!(run_state(&hub, false, &inst).await, RunState::Unknown);
+        assert_eq!(run_state(&hub, true, &inst).await, RunState::Hub);
+    }
+
+    #[tokio::test]
+    async fn quitting_a_flatpak_uses_flatpak_kill() {
+        let (hub, f) = hub_with_fakes("quit-flatpak");
+        let state = f.dir.join("running");
+        std::fs::write(&state, "net.example.demo\n").unwrap();
+        f.set(
+            "flatpak",
+            &format!(
+                "case \"$1\" in ps) cat '{0}';; kill) : > '{0}';; esac",
+                state.display()
+            ),
+        );
+        let inst = Installed::new(flatpak_app("demo"));
+        record(&hub, &inst);
+        // Removing a copy or uninstalling leaves a running Flatpak alone, as
+        // before; only quitting it and updates end it.
+        quit_app(&hub, &inst, std::time::Duration::from_millis(300))
+            .await
+            .unwrap();
+        assert!(!f.calls().iter().any(|c| c.starts_with("flatpak kill")));
+        quit_running(&hub, &inst, std::time::Duration::from_millis(300))
+            .await
+            .unwrap();
+        assert!(
+            f.calls()
+                .contains(&"flatpak kill net.example.demo".to_string())
+        );
+        assert_eq!(run_state(&hub, false, &inst).await, RunState::Stopped);
+    }
+
+    /// Edge case 11: the update of a running app with fake steps.
+    #[tokio::test]
+    async fn updates_a_running_app_in_order() {
+        use std::sync::{Arc, Mutex};
+        let steps = Arc::new(Mutex::new(Vec::<&str>::new()));
+        let step = |name: &'static str, ok: bool| {
+            let steps = steps.clone();
+            move || async move {
+                steps.lock().unwrap().push(name);
+                if ok {
+                    Ok(())
+                } else {
+                    Err(format!("{name} failed"))
+                }
+            }
+        };
+
+        let out = update_running(
+            RunState::Own,
+            true,
+            step("quit", true),
+            step("update", true),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.state, RunState::Own);
+        assert_eq!(out.error, None);
+        assert_eq!(*steps.lock().unwrap(), ["quit", "update"]);
+
+        // Quitting fails: nothing is updated, nothing to restart.
+        steps.lock().unwrap().clear();
+        let err = update_running(
+            RunState::Own,
+            true,
+            step("quit", false),
+            step("update", true),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err, "quit failed");
+        assert_eq!(*steps.lock().unwrap(), ["quit"]);
+
+        // The update fails: the app is started again where it ran.
+        steps.lock().unwrap().clear();
+        let out = update_running(
+            RunState::Own,
+            true,
+            step("quit", true),
+            step("update", false),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.state, RunState::Own);
+        assert_eq!(out.error.as_deref(), Some("update failed"));
+        assert_eq!(*steps.lock().unwrap(), ["quit", "update"]);
+
+        // A stopped app is not quit.
+        steps.lock().unwrap().clear();
+        let out = update_running(
+            RunState::Stopped,
+            false,
+            step("quit", true),
+            step("update", true),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.state, RunState::Stopped);
+        assert_eq!(*steps.lock().unwrap(), ["update"]);
+
+        // A running app is never quit without the user's yes.
+        for before in [RunState::Hub, RunState::Own, RunState::Unknown] {
+            steps.lock().unwrap().clear();
+            assert!(
+                update_running(before, false, step("quit", true), step("update", true))
+                    .await
+                    .is_err()
+            );
+            assert!(steps.lock().unwrap().is_empty(), "{before:?}");
+        }
+    }
+
+    /// An update of a downloaded app keeps "Own window" in its record.
+    #[test]
+    fn an_update_stores_the_kept_window() {
+        let (hub, _f) = hub_with_fakes("update-stores-window");
+        let release = workshop_entry("demo", json!({ "type": "github-release", "asset": "*" }));
+        let mut previous = Installed::new(release.clone());
+        previous.window = tools::WindowMode::Own;
+        previous.version = Some("v1".into());
+        // What tools::install leaves behind: a fresh record of the new version.
+        let mut fresh = Installed::new(release);
+        fresh.version = Some("v2".into());
+        record(&hub, &fresh);
+        let inst = record_after_install(&hub, Some(&previous), false, fresh).unwrap();
+        assert_eq!(inst.window, tools::WindowMode::Own);
+        let saved = recorded(&hub, "demo").unwrap();
+        assert_eq!(saved.window, tools::WindowMode::Own);
+        assert_eq!(saved.version.as_deref(), Some("v2"));
     }
 }

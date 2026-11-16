@@ -4,10 +4,16 @@
   import ToolIcon from "./ToolIcon.svelte";
   import { onDestroy } from "svelte";
   import { fade } from "svelte/transition";
-  import { api, describe, errText, type Tool } from "./api";
+  import { api, describe, errText, type Tool, type WindowMode } from "./api";
   import { toast } from "./state.svelte";
+  import { canToggleWindow } from "./apps/integration";
+  import { valueOf } from "./wa";
 
-  let { tool, running = $bindable(false) }: { tool: Tool; running?: boolean } = $props();
+  let {
+    tool,
+    running = $bindable(false),
+    onchanged,
+  }: { tool: Tool; running?: boolean; onchanged?: () => void } = $props();
 
   const id = $derived(tool.entry.id);
   let url = $state<string | null>(null);
@@ -36,6 +42,91 @@
   $effect(() => {
     running = url !== null;
   });
+
+  /** The app has the "In tuxhub / Own window" toggle. */
+  const toggle = $derived(canToggleWindow(tool));
+  /** Where the app runs when it is started; follows the stored choice. */
+  let mode = $state<WindowMode>("hub");
+  $effect.pre(() => {
+    mode = tool.window;
+  });
+  let group = $state<HTMLElement>();
+  /** The mode the user switches to while the app runs in the other one. */
+  let switching = $state<WindowMode | null>(null);
+  let switchBusy = $state(false);
+
+  /** Where the app runs right now, or null when it does not run. An app
+   * whose state is unknown counts as running in its own window, so the
+   * user is asked before it is quit. */
+  async function runningIn(): Promise<WindowMode | null> {
+    if (url) return "hub";
+    const state = await api.runState(id).catch(() => "unknown" as const);
+    return state === "stopped" ? null : state === "hub" ? "hub" : "own";
+  }
+
+  /** Puts the toggle back on the stored mode. */
+  function revert() {
+    if (group) (group as unknown as { value: string }).value = mode;
+  }
+
+  async function save(next: WindowMode) {
+    await api.setWindow(id, next);
+    mode = next;
+    onchanged?.();
+  }
+
+  async function choose(e: Event) {
+    const next = valueOf(e) as WindowMode;
+    if (next === mode) return;
+    const now = await runningIn();
+    if (now && now !== next) {
+      switching = next;
+      return;
+    }
+    try {
+      await save(next);
+    } catch (err) {
+      toast(errText(err));
+      revert();
+    }
+  }
+
+  function cancelSwitch() {
+    switching = null;
+    revert();
+  }
+
+  /** Quits the app, stores the new mode and starts it there. */
+  async function confirmSwitch() {
+    const next = switching;
+    if (!next) return;
+    switchBusy = true;
+    try {
+      if (url) {
+        clearInterval(timer);
+        clearInterval(watch);
+        await api.embedStop(id);
+        url = null;
+      } else {
+        await api.quit(id);
+      }
+    } catch (err) {
+      toast(errText(err));
+      switchBusy = false;
+      cancelSwitch();
+      return;
+    }
+    try {
+      await save(next);
+      switching = null;
+      await start();
+    } catch (err) {
+      toast(errText(err));
+      cancelSwitch();
+    } finally {
+      switchBusy = false;
+    }
+  }
 
   // On open: is a session already running, and is xpra installed?
   (async () => {
@@ -143,11 +234,31 @@
   }
 
   async function start() {
+    if (toggle && mode === "own") {
+      starting = true;
+      try {
+        await api.launch(id);
+        toast(t("embed.startedWindow", { name: tool.entry.name }), "info");
+      } catch (e) {
+        toast(errText(e));
+      } finally {
+        starting = false;
+        onchanged?.();
+      }
+      return;
+    }
+    try {
+      await startInHub();
+    } catch (e) {
+      toast(errText(e));
+    }
+  }
+
+  /** Starts the app inside tuxhub and shows it; throws when that fails. */
+  export async function startInHub() {
     starting = true;
     try {
       attach((await api.embedStart(id)).url);
-    } catch (e) {
-      toast(errText(e));
     } finally {
       starting = false;
     }
@@ -182,7 +293,22 @@
   }
 </script>
 
-{#if url || starting}
+{#if toggle}
+  <wa-radio-group
+    bind:this={group}
+    class="where"
+    orientation="horizontal"
+    label={t("embed.where")}
+    value={mode}
+    disabled={switchBusy || starting}
+    onchange={choose}
+  >
+    <wa-radio appearance="button" size="s" value="hub">{t("embed.inHub")}</wa-radio>
+    <wa-radio appearance="button" size="s" value="own">{t("embed.ownWindow")}</wa-radio>
+  </wa-radio-group>
+{/if}
+
+{#if url || (starting && mode === "hub")}
   <div class="embed card">
     {#if url}
       <iframe
@@ -233,7 +359,7 @@
       <div class="text">
         <h2>{tool.entry.name}</h2>
         <p class="muted">{describe(tool.entry)}</p>
-        {#if missing}
+        {#if missing && !(toggle && mode === "own")}
           <wa-callout variant="warning">
             <p>{t("embed.missing", { dep: missing })}</p>
             {#if missing === "xpra"}
@@ -245,20 +371,53 @@
           </wa-callout>
         {/if}
         <div class="buttons">
-          <wa-button variant="brand" disabled={!!missing} loading={starting} onclick={start}>
-            <span slot="start"><Play size={15} aria-hidden="true" /></span>
-            {t("embed.start")}
-          </wa-button>
+          {#if toggle && mode === "own"}
+            <wa-button variant="brand" loading={starting} onclick={start}>
+              <span slot="start"><Play size={15} aria-hidden="true" /></span>
+              {t("embed.startOwn")}
+            </wa-button>
+          {:else}
+            <wa-button variant="brand" disabled={!!missing} loading={starting} onclick={start}>
+              <span slot="start"><Play size={15} aria-hidden="true" /></span>
+              {t("embed.start")}
+            </wa-button>
+          {/if}
         </div>
         <p class="muted small">
-          {t("embed.hint")}
+          {toggle ? t("embed.hintToggle") : t("embed.hint")}
         </p>
       </div>
     </div>
   </wa-card>
 {/if}
 
+<wa-dialog
+  label={t("embed.switchTitle", { name: tool.entry.name })}
+  open={switching !== null}
+  onwa-after-hide={(e: Event) => {
+    if (e.target === e.currentTarget && switching !== null && !switchBusy) cancelSwitch();
+  }}
+>
+  <p>
+    {switching === "own"
+      ? t("embed.switchToOwn", { name: tool.entry.name })
+      : t("embed.switchToHub", { name: tool.entry.name })}
+  </p>
+  <div slot="footer" class="dialog-buttons">
+    <wa-button appearance="outlined" disabled={switchBusy} onclick={cancelSwitch}>{t("common.cancel")}</wa-button>
+    <wa-button variant="brand" loading={switchBusy} onclick={confirmSwitch}>{t("embed.switch")}</wa-button>
+  </div>
+</wa-dialog>
+
 <style>
+  .where {
+    align-self: flex-start;
+  }
+  .dialog-buttons {
+    display: flex;
+    gap: var(--wa-space-xs);
+    justify-content: flex-end;
+  }
   .embed {
     position: relative;
     display: flex;

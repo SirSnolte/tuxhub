@@ -22,6 +22,9 @@
   import LaunchPanel from "./LaunchPanel.svelte";
   import LivePanel from "./LivePanel.svelte";
   import { asksHowToRemove, installHint, needsPassword } from "./install-state";
+  import { INTEGRATIONS, canToggleWindow } from "./apps/integration";
+  import { updateApp } from "./update";
+  import type { RunState } from "./api";
   import type { MenuItem } from "./ToolMenu.svelte";
 
   let {
@@ -128,6 +131,35 @@
     }
   }
 
+  /** Starts the app inside tuxhub, in this page when it shows the app. */
+  export async function startInHub() {
+    if (embedPanel) await embedPanel.startInHub();
+    else await api.embedStart(id);
+  }
+
+  /** The question before quitting a running app for an update. */
+  let updateAsk = $state<{ state: RunState; answer: (yes: boolean) => void } | null>(null);
+
+  function askUpdate(state: RunState): Promise<boolean> {
+    return new Promise((answer) => (updateAsk = { state, answer }));
+  }
+
+  function answerUpdate(yes: boolean) {
+    updateAsk?.answer(yes);
+    updateAsk = null;
+  }
+
+  /** Installs or updates the tool; a running app is quit after asking and started again. */
+  function installUpdate(ok: string) {
+    run(async () => {
+      const done = await updateApp(id, askUpdate, embedPanel ? () => embedPanel!.startInHub() : undefined);
+      if (done) {
+        update = null;
+        toast(ok, "info");
+      }
+    });
+  }
+
   async function checkUpdate() {
     await run(async () => {
       update = await api.checkUpdate(id);
@@ -135,8 +167,9 @@
     });
   }
 
-  /** Whether the tool can open a window of its own. */
-  const canOpenWindow = $derived((tool.can_launch || webTool) && !tool.missing);
+  /** Whether the tool can open a window of its own. Apps with the window
+   * toggle open it from there, so there is only one way. */
+  const canOpenWindow = $derived((tool.can_launch || webTool) && !tool.missing && !canToggleWindow(tool));
   /** Whether something of the tool is running that "Quit" can end. */
   const canQuit = $derived((liveApp && liveRunning) || tool.running || (launchOnly && tool.app_running));
 
@@ -188,7 +221,7 @@
     const state = [tool.running || tool.app_running ? t("tool.running") : "", tool.version ?? ""]
       .filter(Boolean)
       .join(" · ");
-    const kind = `${t(`source.${source.type}` as Key)} · ${t(`level.${tool.level}` as Key)}`;
+    const kind = `${t(`source.${source.type}` as Key)} · ${t(INTEGRATIONS[tool.integration].label)}`;
     return { title: state ? [state, kind] : [kind], items };
   }
 
@@ -301,7 +334,7 @@
           variant="brand"
           appearance="outlined"
           loading={busy}
-          onclick={() => run(() => api.install(id), t("tool.updatedTo", { version: update ?? "" }))}
+          onclick={() => installUpdate(t("tool.updatedTo", { version: update ?? "" }))}
         >
           {t("tool.updateTo", { version: update })}
         </wa-button>
@@ -329,7 +362,7 @@
             size="s"
             variant="brand"
             loading={busy}
-            onclick={() => run(() => api.install(id), t("workshop.installedToast", { name: tool.entry.name }))}
+            onclick={() => installUpdate(t("workshop.installedToast", { name: tool.entry.name }))}
           >
             {t("tool.install")}
           </wa-button>
@@ -438,7 +471,7 @@
   {:else if launchOnly}
     <LaunchPanel {tool} {onchanged} />
   {:else if plainApp}
-    <EmbedPanel {tool} bind:running={embedded} bind:this={embedPanel} />
+    <EmbedPanel {tool} {onchanged} bind:running={embedded} bind:this={embedPanel} />
   {:else}
     <wa-card>
       <p>{t("tool.noLauncher")}</p>
@@ -480,6 +513,24 @@
         {isLocal ? t("tool.unlink") : t("tool.uninstall")}
       </wa-button>
     {/if}
+  </div>
+</wa-dialog>
+
+<wa-dialog
+  label={t("update.confirmTitle", { name: tool.entry.name })}
+  open={updateAsk !== null}
+  onwa-after-hide={(e: Event) => {
+    if (e.target === e.currentTarget && updateAsk) answerUpdate(false);
+  }}
+>
+  <p>
+    {updateAsk?.state === "unknown"
+      ? t("update.maybeRunning", { name: tool.entry.name })
+      : t("update.running", { name: tool.entry.name })}
+  </p>
+  <div slot="footer" class="dialog-buttons">
+    <wa-button appearance="outlined" onclick={() => answerUpdate(false)}>{t("common.cancel")}</wa-button>
+    <wa-button variant="brand" onclick={() => answerUpdate(true)}>{t("update.quitAndUpdate")}</wa-button>
   </div>
 </wa-dialog>
 

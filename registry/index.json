@@ -5,6 +5,7 @@
     "description": "Automated clicking and keyboard and mouse macros. Works on Wayland and X11, with global hotkeys.",
     "category": "input",
     "repo": "SirSnolte/tuxhub-autoclicker",
+    "integration": "socket",
     "source": { "type": "github-release", "asset": "*x86_64-linux.tar.gz" },
     "translations": {
       "de": { "description": "Automatisches Klicken sowie Makros für Tastatur und Maus. Funktioniert unter Wayland und X11, mit globalen Hotkeys." }
@@ -17,6 +18,7 @@
     "icon": "https://raw.githubusercontent.com/SirSnolte/tuxhub-push-to-mute/HEAD/assets/icon.svg",
     "category": "input",
     "repo": "SirSnolte/tuxhub-push-to-mute",
+    "integration": "socket",
     "source": { "type": "github-release", "asset": "*x86_64-linux.tar.gz" },
     "translations": {
       "de": { "description": "Schaltet Discord, TeamSpeak und andere Sprachchats stumm, während du im Spiel per Push-to-Talk sprichst. Die Taste erreicht das Spiel weiterhin." }
@@ -29,6 +31,7 @@
     "icon": "https://raw.githubusercontent.com/SirSnolte/tuxhub-always-online/HEAD/assets/icon.svg",
     "category": "input",
     "repo": "SirSnolte/tuxhub-always-online",
+    "integration": "socket",
     "source": { "type": "github-release", "asset": "*x86_64-linux.tar.gz" },
     "translations": {
       "de": { "description": "Hält Discord, Steam und andere Programme davon ab, dich auf Abwesend zu setzen, solange du am Computer bist. Mit optionalem Zeitplan und längster Laufzeit." }
@@ -42,6 +45,7 @@
     "category": "input",
     "repo": "StreamController/StreamController",
     "homepage": "https://github.com/Dav1d-Fn/StreamController-BetterVolumeMixer",
+    "integration": "embedded",
     "source": { "type": "flatpak", "flatpak_id": "com.core447.StreamController" },
     "translations": {
       "de": { "description": "Steuerung von Elgato-Stream-Deck-Geräten mit Plugin-Unterstützung. Das Plugin BetterVolumeMixer von Dav1d-Fn ergänzt die Lautstärkeregelung pro Anwendung." }
@@ -54,6 +58,7 @@
     "icon": "https://raw.githubusercontent.com/Dav1d-Fn/Fliq-Desktop-Flipclock/HEAD/src-tauri/icons/128x128.png",
     "category": "overlay",
     "repo": "Dav1d-Fn/Fliq-Desktop-Flipclock",
+    "integration": "socket",
     "source": {
       "type": "system-package",
       "package": "fliq",
@@ -73,6 +78,7 @@
     "icon": "https://raw.githubusercontent.com/Dav1d-Fn/gif-color-changer/HEAD/src-tauri/icons/128x128.png",
     "category": "creative",
     "repo": "Dav1d-Fn/gif-color-changer",
+    "integration": "embedded",
     "source": { "type": "github-release", "asset": "*amd64.AppImage" },
     "translations": {
       "de": { "description": "Farben in animierten GIFs präzise und verlustfrei ersetzen. Die gesamte Verarbeitung erfolgt lokal. Von Dav1d-Fn." }

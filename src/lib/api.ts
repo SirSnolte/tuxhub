@@ -80,10 +80,29 @@ export type Tool = {
   missing: boolean;
   /** The Flatpak is installed for the user and system-wide. */
   duplicate: boolean;
+  /** How deeply tuxhub integrates the app. */
+  integration: Integration;
+  /** Where an embedded app runs when it is started. */
+  window: WindowMode;
 };
 
-/** `present`: on the computer, but not in tuxhub. */
-export type WorkshopItem = { entry: Entry; installed: boolean; present: boolean };
+export type WindowMode = "hub" | "own";
+/** Whether and where an app runs; `unknown` when it could not be found out. */
+export type RunState = "stopped" | "hub" | "own" | "unknown";
+/** Where the app ran before an update, and why the update failed if it did. */
+export type InstallOutcome = { state: RunState; error: string | null };
+
+/** How deeply tuxhub integrates an app. */
+export type Integration = "socket" | "embedded" | "standalone";
+
+/** `present`: on the computer, but not in tuxhub. `integration`: none when
+ * the workshop does not say (or names a level this tuxhub does not know). */
+export type WorkshopItem = {
+  entry: Entry;
+  installed: boolean;
+  present: boolean;
+  integration?: Integration | null;
+};
 export type Workshop = { entries: WorkshopItem[]; live: boolean };
 
 export type ShortcutStatus = {
@@ -166,13 +185,16 @@ export type Updates = Record<string, string>;
 export const api = {
   workshop: () => invoke<Workshop>("workshop_list"),
   readme: (repo: string) => invoke<string>("workshop_readme", { repo }),
-  install: (id: string) => invoke<void>("tool_install", { id }),
+  /** Installs or updates a tool; `restart`: the user agreed to quit it if it runs. */
+  install: (id: string, restart = false) => invoke<InstallOutcome>("tool_install", { id, restart }),
   adopt: (id: string) => invoke<void>("tool_adopt", { id }),
   removeCopy: (id: string) => invoke<void>("tool_remove_copy", { id }),
   dismissDuplicate: (id: string) => invoke<void>("tool_dismiss_duplicate", { id }),
   forget: (id: string) => invoke<void>("tool_forget", { id }),
   tools: () => invoke<Tool[]>("tool_list"),
   launch: (id: string) => invoke<void>("tool_launch", { id }),
+  setWindow: (id: string, mode: WindowMode) => invoke<void>("tool_set_window", { id, mode }),
+  runState: (id: string) => invoke<RunState>("tool_run_state", { id }),
   appRunning: (id: string) => invoke<boolean>("tool_app_running", { id }),
   quit: (id: string) => invoke<void>("tool_quit", { id }),
   uninstall: (id: string) => invoke<void>("tool_uninstall", { id }),
