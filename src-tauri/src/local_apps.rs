@@ -11,7 +11,9 @@ use std::time::SystemTime;
 
 const MAX_FILE_BYTES: u64 = 64 * 1024;
 const MAX_DEPTH: usize = 8;
-const OWN_DESKTOP_ID: &str = "io.github.sirsnolte.tuxhub.desktop";
+/// tuxhub's own start menu entries: the one it writes itself, and the one of
+/// its rpm and deb packages.
+const OWN_DESKTOP_IDS: [&str; 2] = ["io.github.sirsnolte.tuxhub.desktop", "tuxhub.desktop"];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DesktopApp {
@@ -224,10 +226,11 @@ fn is_env_assignment(a: &str) -> bool {
 
 /// Whether the start menu shows the app. `desktop` is the colon-separated
 /// `XDG_CURRENT_DESKTOP` (for example `KDE` or `ubuntu:GNOME`). Settings, system
-/// and console apps are hidden unless `show_all`; `NoDisplay` apps, ones not
+/// and console apps, Wine's own tools and help screens are hidden unless
+/// `show_all`; `NoDisplay` apps, ones not
 /// meant for this desktop and tuxhub itself are always hidden.
 pub fn is_visible(app: &DesktopApp, desktop: &str, show_all: bool) -> bool {
-    if app.no_display || app.desktop_id == OWN_DESKTOP_ID {
+    if app.no_display || OWN_DESKTOP_IDS.contains(&app.desktop_id.as_str()) {
         return false;
     }
     let current: Vec<&str> = desktop.split(':').filter(|s| !s.is_empty()).collect();
@@ -265,8 +268,28 @@ pub fn is_visible(app: &DesktopApp, desktop: &str, show_all: bool) -> bool {
     let settings = app.categories.iter().any(|c| {
         c == "Settings" || c.starts_with("X-KDE-settings") || c.starts_with("X-GNOME-Settings")
     });
-    !(settings || system_only || has("ConsoleOnly"))
+    // Wine's built-in tools (Notepad, Regedit, ...) and the desktop's help
+    // and welcome screens name no main category of their own.
+    let main = APP_CATEGORIES.iter().any(|c| has(c));
+    let side_tool = !main && (has("X-Wine") || has("Documentation"));
+    !(settings || system_only || side_tool || has("ConsoleOnly"))
 }
+
+/// Main categories of the Desktop Menu spec an app is filed under, without
+/// `Settings` and `System`.
+const APP_CATEGORIES: [&str; 11] = [
+    "AudioVideo",
+    "Audio",
+    "Video",
+    "Development",
+    "Education",
+    "Game",
+    "Graphics",
+    "Network",
+    "Office",
+    "Science",
+    "Utility",
+];
 
 pub fn scan_dirs(dirs: &[PathBuf]) -> Vec<DesktopApp> {
     let mut seen = HashSet::new();
@@ -993,6 +1016,41 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
         let mut a = app(&["Game"]);
         a.desktop_id = "io.github.sirsnolte.tuxhub.desktop".into();
         assert!(!is_visible(&a, "KDE", true));
+    }
+
+    #[test]
+    fn hides_own_package_wine_tools_and_help() {
+        // tuxhub's own package installs `tuxhub.desktop`.
+        let mut a = app(&["Game"]);
+        a.desktop_id = "tuxhub.desktop".into();
+        assert!(!is_visible(&a, "KDE", true));
+        // Wine's built-in tools (Notepad, Regedit, ...) carry only X-Wine.
+        let a = app(&["X-Wine"]);
+        assert!(!is_visible(&a, "KDE", false));
+        assert!(is_visible(&a, "KDE", true));
+        assert!(is_visible(
+            &app(&["Game", "LogicGame", "X-Wine"]),
+            "KDE",
+            false
+        ));
+        // A Windows program Wine made a shortcut for has no categories.
+        assert!(is_visible(&app(&[]), "KDE", false));
+        // Help and welcome screens of the desktop.
+        assert!(!is_visible(
+            &app(&["Qt", "KDE", "Core", "Documentation"]),
+            "KDE",
+            false
+        ));
+        assert!(!is_visible(
+            &app(&["Qt", "KDE", "Documentation"]),
+            "KDE",
+            false
+        ));
+        assert!(is_visible(
+            &app(&["Development", "Documentation"]),
+            "KDE",
+            false
+        ));
     }
 
     #[test]

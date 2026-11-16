@@ -1637,6 +1637,8 @@ const SHARED_LAUNCHERS: &[&str] = &[
     "dotnet",
     "electron*",
     "busybox",
+    // Every snap app's command links to it.
+    "snap",
 ];
 
 /// Whether `program` is a shell, interpreter or launcher of
@@ -2816,9 +2818,18 @@ mod tests {
             "electron33",
             "/usr/bin/dotnet",
             "busybox",
+            "/usr/bin/snap",
         ] {
             assert!(is_shared_launcher(Path::new(shared)), "{shared}");
         }
+        // A snap app's command links to `snap`, which every snap app shares.
+        let dir = std::env::temp_dir().join(format!("tuxhub-snap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("snap"), "").unwrap();
+        std::os::unix::fs::symlink(dir.join("snap"), dir.join("copilot-desktop")).unwrap();
+        assert!(is_shared_launcher(&dir.join("copilot-desktop")));
+        std::fs::remove_dir_all(&dir).unwrap();
         for own in [
             "/opt/a/run",
             "/usr/bin/dolphin",
