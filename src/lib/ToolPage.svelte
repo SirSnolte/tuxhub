@@ -22,6 +22,7 @@
   import LaunchPanel from "./LaunchPanel.svelte";
   import LivePanel from "./LivePanel.svelte";
   import { asksHowToRemove, installHint, needsPassword } from "./install-state";
+  import { canToggleWindow } from "./apps/integration";
   import type { MenuItem } from "./ToolMenu.svelte";
 
   let {
@@ -135,8 +136,9 @@
     });
   }
 
-  /** Whether the tool can open a window of its own. */
-  const canOpenWindow = $derived((tool.can_launch || webTool) && !tool.missing);
+  /** Whether the tool can open a window of its own. Apps with the window
+   * toggle open it from there, so there is only one way. */
+  const canOpenWindow = $derived((tool.can_launch || webTool) && !tool.missing && !canToggleWindow(tool));
   /** Whether something of the tool is running that "Quit" can end. */
   const canQuit = $derived((liveApp && liveRunning) || tool.running || (launchOnly && tool.app_running));
 
@@ -438,7 +440,7 @@
   {:else if launchOnly}
     <LaunchPanel {tool} {onchanged} />
   {:else if plainApp}
-    <EmbedPanel {tool} bind:running={embedded} bind:this={embedPanel} />
+    <EmbedPanel {tool} {onchanged} bind:running={embedded} bind:this={embedPanel} />
   {:else}
     <wa-card>
       <p>{t("tool.noLauncher")}</p>

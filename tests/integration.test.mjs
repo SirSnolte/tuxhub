@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { INTEGRATIONS, integrationInfo } from "../src/lib/apps/integration.ts";
+import { INTEGRATIONS, canToggleWindow, integrationInfo } from "../src/lib/apps/integration.ts";
 
 const i18n = readFileSync(new URL("../src/lib/i18n.svelte.ts", import.meta.url), "utf8");
 const [en, de] = i18n.split(/\nconst de\b/);
@@ -26,4 +26,24 @@ test("an unknown or missing level shows no tag", () => {
   assert.equal(integrationInfo("foo"), null);
   assert.equal(integrationInfo("__proto__"), null);
   assert.equal(integrationInfo("socket"), INTEGRATIONS.socket);
+});
+
+const app = (over = {}) => ({
+  integration: "embedded",
+  level: 0,
+  can_launch: true,
+  manifest: {},
+  entry: { source: { type: "flatpak" } },
+  ...over,
+});
+
+test("edge case 12: only apps that run per xpra get the window toggle", () => {
+  assert.equal(canToggleWindow(app()), true);
+  assert.equal(canToggleWindow(app({ integration: "socket", level: 3 })), false);
+  assert.equal(canToggleWindow(app({ integration: "standalone", manifest: { embed: false } })), false);
+  assert.equal(canToggleWindow(app({ can_launch: false })), false);
+  assert.equal(canToggleWindow(app({ level: 2, manifest: { ui: "index.html" } })), false);
+  assert.equal(canToggleWindow(app({ level: 1, manifest: { web_url: "http://localhost:1/" } })), false);
+  assert.equal(canToggleWindow(app({ manifest: { ui: "index.html" } })), false);
+  assert.equal(canToggleWindow(app({ entry: { source: { type: "external" } } })), false);
 });

@@ -503,6 +503,9 @@ fn carry_over(previous: Option<&Installed>, present: bool, mut new: Installed) -
     {
         new.adopted = true;
     }
+    if let Some(p) = previous {
+        new.window = p.window;
+    }
     new
 }
 
@@ -551,6 +554,10 @@ struct ToolView {
     /// The Flatpak is installed for the user and system-wide, and the user
     /// has not chosen to keep both.
     duplicate: bool,
+    /// How deeply tuxhub integrates the app.
+    integration: tools::Integration,
+    /// Where an embedded app runs when it is started.
+    window: tools::WindowMode,
 }
 
 #[tauri::command]
@@ -577,12 +584,9 @@ async fn tool_views(hub: &Hub) -> Vec<ToolView> {
             running: hub.runtime.is_running(inst.id()).await,
             app_running: app_is_running(hub, &inst).await,
             level: manifest.level(),
-            can_launch: manifest.run.is_some()
-                || inst.detected_run.is_some()
-                || matches!(
-                    inst.entry.source,
-                    Source::Flatpak { .. } | Source::SystemPackage { .. }
-                ),
+            can_launch: can_launch(&inst, &manifest),
+            integration: tools::integration_of(&manifest),
+            window: inst.window,
             path: inst
                 .root_dir(&hub.tools_dir)
                 .map(|p| p.to_string_lossy().into_owned()),
@@ -592,6 +596,42 @@ async fn tool_views(hub: &Hub) -> Vec<ToolView> {
         });
     }
     out
+}
+
+/// Whether tuxhub can start the tool as an application.
+fn can_launch(inst: &Installed, manifest: &Manifest) -> bool {
+    manifest.run.is_some()
+        || inst.detected_run.is_some()
+        || matches!(
+            inst.entry.source,
+            Source::Flatpak { .. } | Source::SystemPackage { .. }
+        )
+}
+
+/// Whether the app has the "In tuxhub / Own window" toggle: an app that runs
+/// per xpra, recorded by tuxhub (an announced tool has no record to keep it).
+fn has_window_toggle(inst: &Installed, manifest: &Manifest) -> bool {
+    tools::integration_of(manifest) == tools::Integration::Embedded
+        && manifest.level() == 0
+        && can_launch(inst, manifest)
+        && !matches!(inst.entry.source, Source::External { .. })
+}
+
+/// Stores where an embedded app runs. Starts and stops nothing.
+fn set_window(hub: &Hub, id: &str, mode: &str) -> Result<(), String> {
+    let mode: tools::WindowMode = serde_json::from_value(Value::String(mode.into()))
+        .map_err(|_| format!("unknown window mode {mode:?}"))?;
+    let mut inst = tools::load(&hub.tools_dir, id)?;
+    if !has_window_toggle(&inst, &inst.manifest(&hub.tools_dir)) {
+        return Err(format!("{} always runs the same way", inst.entry.name));
+    }
+    inst.window = mode;
+    tools::save(&hub.tools_dir, &inst)
+}
+
+#[tauri::command]
+fn tool_set_window(app: AppHandle, id: String, mode: String) -> Result<(), String> {
+    set_window(&app.state::<Hub>(), &id, &mode)
 }
 
 /// Whether the application of a tool that tuxhub only starts and stops, or
@@ -1212,6 +1252,7 @@ pub fn run() {
             tool_list,
             tool_launch,
             tool_app_running,
+            tool_set_window,
             tool_quit,
             tool_uninstall,
             tool_check_update,
@@ -2348,5 +2389,102 @@ while True:
                 None
             ]
         );
+    }
+
+    #[test]
+    fn a_record_without_window_runs_in_the_hub() {
+        let inst: Installed =
+            serde_json::from_value(json!({ "entry": flatpak_app("old") })).unwrap();
+        assert_eq!(inst.window, tools::WindowMode::Hub);
+    }
+
+    #[test]
+    fn an_update_keeps_the_window() {
+        let mut previous = Installed::new(flatpak_app("demo"));
+        previous.window = tools::WindowMode::Own;
+        let new = Installed::new(flatpak_app("demo"));
+        assert_eq!(
+            carry_over(Some(&previous), false, new.clone()).window,
+            tools::WindowMode::Own
+        );
+        assert_eq!(carry_over(None, false, new).window, tools::WindowMode::Hub);
+    }
+
+    #[tokio::test]
+    async fn a_flatpak_update_keeps_the_window() {
+        let (hub, f) = hub_with_fakes("flatpak-update-window");
+        flatpak_with_updates(&f, &[tools::Installation::User], "");
+        let mut inst = Installed::new(flatpak_app("demo"));
+        inst.window = tools::WindowMode::Own;
+        record(&hub, &inst);
+        let app = tauri::test::mock_app();
+        install_entry(app.handle(), &hub, &flatpak_app("demo"))
+            .await
+            .unwrap();
+        assert_eq!(
+            recorded(&hub, "demo").unwrap().window,
+            tools::WindowMode::Own
+        );
+    }
+
+    #[test]
+    fn sets_the_window_of_an_app_in_the_hub() {
+        let (hub, _f) = hub_with_fakes("set-window");
+        record(&hub, &Installed::new(flatpak_app("demo")));
+        set_window(&hub, "demo", "own").unwrap();
+        assert_eq!(
+            recorded(&hub, "demo").unwrap().window,
+            tools::WindowMode::Own
+        );
+        set_window(&hub, "demo", "hub").unwrap();
+        assert_eq!(
+            recorded(&hub, "demo").unwrap().window,
+            tools::WindowMode::Hub
+        );
+    }
+
+    #[test]
+    fn only_apps_in_the_hub_get_a_window_setting() {
+        let (hub, _f) = hub_with_fakes("set-window-refused");
+        let with = |id: &str, manifest: &str| {
+            let mut e = flatpak_app(id);
+            e.manifest = Some(toml::from_str(manifest).unwrap());
+            let inst = Installed::new(e);
+            record(&hub, &inst);
+        };
+        with("socket", "live = true");
+        with("standalone", "embed = false");
+        with("page", "ui = \"index.html\"");
+        with("web", "web_url = \"http://localhost:1/\"");
+        record(&hub, &Installed::new(flatpak_app("plain")));
+        let before = |id: &str| std::fs::read(hub.tools_dir.join(id).join("tool.json")).unwrap();
+        for (id, mode) in [
+            ("socket", "own"),
+            ("standalone", "own"),
+            ("page", "own"),
+            ("web", "own"),
+            ("plain", "x"),
+            ("plain", "Own"),
+        ] {
+            let saved = before(id);
+            assert!(set_window(&hub, id, mode).is_err(), "{id} {mode}");
+            assert_eq!(before(id), saved, "{id} {mode}");
+        }
+        assert!(set_window(&hub, "missing", "own").is_err());
+        assert!(set_window(&hub, "../plain", "own").is_err());
+        assert!(!hub.tools_dir.join("missing").exists());
+    }
+
+    #[tokio::test]
+    async fn tool_view_tells_integration_and_window() {
+        let (hub, f) = hub_with_fakes("tool-view-window");
+        f.flatpak_with(&[tools::Installation::User]);
+        let mut inst = Installed::new(flatpak_app("demo"));
+        inst.window = tools::WindowMode::Own;
+        record(&hub, &inst);
+        let views = tool_views(&hub).await;
+        let view = views.iter().find(|v| v.entry.id == "demo").unwrap();
+        assert_eq!(view.integration, tools::Integration::Embedded);
+        assert_eq!(view.window, tools::WindowMode::Own);
     }
 }

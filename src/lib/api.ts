@@ -80,7 +80,13 @@ export type Tool = {
   missing: boolean;
   /** The Flatpak is installed for the user and system-wide. */
   duplicate: boolean;
+  /** How deeply tuxhub integrates the app. */
+  integration: Integration;
+  /** Where an embedded app runs when it is started. */
+  window: WindowMode;
 };
+
+export type WindowMode = "hub" | "own";
 
 /** How deeply tuxhub integrates an app. */
 export type Integration = "socket" | "embedded" | "standalone";
@@ -182,6 +188,7 @@ export const api = {
   forget: (id: string) => invoke<void>("tool_forget", { id }),
   tools: () => invoke<Tool[]>("tool_list"),
   launch: (id: string) => invoke<void>("tool_launch", { id }),
+  setWindow: (id: string, mode: WindowMode) => invoke<void>("tool_set_window", { id, mode }),
   appRunning: (id: string) => invoke<boolean>("tool_app_running", { id }),
   quit: (id: string) => invoke<void>("tool_quit", { id }),
   uninstall: (id: string) => invoke<void>("tool_uninstall", { id }),

@@ -258,6 +258,18 @@ pub struct Installed {
     /// The user keeps both Flatpak installations: no hint about the copy.
     #[serde(default)]
     pub duplicate_dismissed: bool,
+    /// Where an app in the hub runs when it is started (embedded apps only).
+    #[serde(default)]
+    pub window: WindowMode,
+}
+
+/// Where an embedded app runs: inside tuxhub (xpra) or in its own window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WindowMode {
+    #[default]
+    Hub,
+    Own,
 }
 
 /// Installation progress; the user interface turns `stage` into text.
@@ -295,6 +307,7 @@ impl Installed {
             adopted: false,
             installation: Installation::User,
             duplicate_dismissed: false,
+            window: WindowMode::Hub,
         }
     }
 

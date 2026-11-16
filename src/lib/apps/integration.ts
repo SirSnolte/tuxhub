@@ -1,6 +1,6 @@
 // How deeply tuxhub integrates an app, shown as a tag in the workshop, without
 // Svelte. Tested in tests/integration.test.mjs.
-import type { Integration } from "../api";
+import type { Integration, Tool } from "../api";
 
 export type IntegrationInfo = {
   /** Name of the Lucide symbol (IntegrationTag.svelte maps it). */
@@ -24,4 +24,22 @@ export const INTEGRATIONS: Record<Integration, IntegrationInfo> = {
 /** The tag of a level; none for a missing or unknown one. */
 export function integrationInfo(level: string | null | undefined): IntegrationInfo | null {
   return level && Object.hasOwn(INTEGRATIONS, level) ? INTEGRATIONS[level as Integration] : null;
+}
+
+/** Whether an app has the "In tuxhub / Own window" toggle: it runs per xpra
+ * (no page of its own) and has a record in tuxhub to keep the choice. */
+export function canToggleWindow(
+  tool: Pick<Tool, "integration" | "level" | "can_launch"> & {
+    manifest: Pick<Tool["manifest"], "ui" | "web_url">;
+    entry: { source: Pick<Tool["entry"]["source"], "type"> };
+  },
+): boolean {
+  return (
+    tool.integration === "embedded" &&
+    tool.level === 0 &&
+    tool.can_launch &&
+    !tool.manifest.ui &&
+    !tool.manifest.web_url &&
+    tool.entry.source.type !== "external"
+  );
 }
