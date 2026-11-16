@@ -477,7 +477,12 @@ async fn tool_install(app: AppHandle, id: String, restart: bool) -> Result<Insta
     let external = existing
         .clone()
         .filter(|i| matches!(i.entry.source, Source::External { .. }));
-    let entry = match external {
+    // An app adopted from the package manager is updated by it, never from
+    // the workshop.
+    let distro = existing
+        .clone()
+        .filter(|i| matches!(i.entry.source, Source::DistroPackage { .. }));
+    let entry = match external.as_ref().or(distro.as_ref()) {
         Some(_) => None,
         None => {
             let (entries, _) = workshop_entries().await;
@@ -507,6 +512,10 @@ async fn tool_install(app: AppHandle, id: String, restart: bool) -> Result<Insta
         embed::stop(&app, &id).await;
         match (&external, &entry) {
             (Some(inst), _) => tools::update_external(&app, inst).await?,
+            (None, None) if distro.is_some() => {
+                let inst = distro.as_ref().unwrap();
+                tools::update_distro_package(&hub.tools_dir, &hub.programs, inst).await?;
+            }
             (None, Some(entry)) => {
                 install_entry(&app, &hub, entry).await?;
             }

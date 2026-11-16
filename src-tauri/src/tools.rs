@@ -596,6 +596,14 @@ pub struct Programs {
     pub dpkg_query: PathBuf,
     /// Tells which Debian package owns a file (`dpkg -S`).
     pub dpkg: PathBuf,
+    /// Lists and installs updates of RPM packages.
+    pub dnf: PathBuf,
+    /// Lists updates of Debian packages.
+    pub apt: PathBuf,
+    /// Installs updates of Debian packages.
+    pub apt_get: PathBuf,
+    /// Runs a program as root; it asks for the password.
+    pub pkexec: PathBuf,
     /// Longest time a query may take before it counts as "not installed".
     pub timeout: Duration,
     /// Longest time a query of a remote may take.
@@ -609,6 +617,10 @@ impl Default for Programs {
             rpm: "rpm".into(),
             dpkg_query: "dpkg-query".into(),
             dpkg: "dpkg".into(),
+            dnf: "dnf".into(),
+            apt: "apt".into(),
+            apt_get: "apt-get".into(),
+            pkexec: "pkexec".into(),
             timeout: Duration::from_secs(5),
             network_timeout: Duration::from_secs(60),
         }
@@ -1783,6 +1795,15 @@ pub async fn check_update(inst: &Installed, programs: &Programs) -> Result<Optio
     if let Source::Flatpak { flatpak_id, .. } = &inst.entry.source {
         return flatpak_update(programs, flatpak_id, inst.installation).await;
     }
+    // An app adopted from this computer is updated by its package manager
+    // only, never from GitHub. A launcher has no package manager.
+    if let Source::DistroPackage {
+        package, manager, ..
+    } = &inst.entry.source
+    {
+        inst.entry.validate()?;
+        return distro_update(programs, package, *manager).await;
+    }
     let updatable = match &inst.entry.source {
         Source::GithubRelease { .. } | Source::SystemPackage { .. } => true,
         Source::External { asset, user, .. } => *user && asset.is_some(),
@@ -1796,6 +1817,157 @@ pub async fn check_update(inst: &Installed, programs: &Programs) -> Result<Optio
     let norm = |v: &str| v.trim_start_matches('v').to_string();
     let newer = inst.version.as_deref().map(norm) != Some(norm(&rel.tag_name));
     Ok(newer.then_some(rel.tag_name))
+}
+
+/// Version of a pending package update. Anything that is not a plain version
+/// (spaces, control characters, an absurd length) is rejected.
+fn clean_version(raw: &str) -> Result<String, String> {
+    // Epoch ("2:") and release or revision ("-1.fc44") are not part of it.
+    let v = raw.split_once(':').map_or(raw, |(_, v)| v);
+    let v = v.rsplit_once('-').map_or(v, |(v, _)| v);
+    let sane = !v.is_empty()
+        && v.len() <= 64
+        && v.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._+~^".contains(c));
+    if sane {
+        Ok(v.to_string())
+    } else {
+        Err(format!(
+            "unexpected version {raw:?} from the package manager"
+        ))
+    }
+}
+
+/// The version a pending update of a distribution package brings, or `None`
+/// when it is up to date. Ends after `network_timeout`.
+pub async fn distro_update(
+    programs: &Programs,
+    package: &str,
+    manager: PackageFormat,
+) -> Result<Option<String>, String> {
+    if !valid_package_name(package) {
+        return Err(format!("invalid package name {package:?}"));
+    }
+    let (program, args): (&Path, Vec<&str>) = match manager {
+        PackageFormat::Rpm => (&programs.dnf, vec!["-q", "check-update", package]),
+        PackageFormat::Deb => (&programs.apt, vec!["list", "--upgradable", package]),
+    };
+    let out = Command::new(program)
+        .args(&args)
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let out = tokio::time::timeout(programs.network_timeout, out)
+        .await
+        .map_err(|_| format!("{} did not answer in time", program.display()))?
+        .map_err(|e| format!("could not run {}: {e}", program.display()))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    match manager {
+        PackageFormat::Rpm => match out.status.code() {
+            Some(0) => Ok(None),
+            Some(100) => {
+                // dnf may put the columns of a long line on the next line.
+                let prefix = format!("{package}.");
+                let mut lines = stdout.lines();
+                if let Some(line) = lines.find(|l| l.starts_with(&prefix)) {
+                    let mut cols = line.split_whitespace();
+                    cols.next();
+                    let version = cols
+                        .next()
+                        .or_else(|| lines.next().and_then(|l| l.split_whitespace().next()));
+                    return version
+                        .ok_or_else(|| "dnf reported an update without a version".to_string())
+                        .and_then(clean_version)
+                        .map(Some);
+                }
+                Err("dnf reported an update that is not for this package".into())
+            }
+            _ => Err(failure_text(&out)),
+        },
+        PackageFormat::Deb => {
+            if !out.status.success() {
+                return Err(failure_text(&out));
+            }
+            let prefix = format!("{package}/");
+            match stdout.lines().find(|l| l.starts_with(&prefix)) {
+                None => Ok(None),
+                Some(line) => line
+                    .split_whitespace()
+                    .nth(1)
+                    .ok_or_else(|| "apt reported an update without a version".to_string())
+                    .and_then(clean_version)
+                    .map(Some),
+            }
+        }
+    }
+}
+
+fn failure_text(out: &std::process::Output) -> String {
+    let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if err.is_empty() {
+        format!("the package manager failed ({})", out.status)
+    } else {
+        err
+    }
+}
+
+/// Installs the pending update of an app adopted from a package manager.
+/// The password prompt of Polkit appears; when it is cancelled or the
+/// upgrade fails, the record keeps its version.
+pub async fn update_distro_package(
+    tools_dir: &Path,
+    programs: &Programs,
+    inst: &Installed,
+) -> Result<Installed, String> {
+    let Source::DistroPackage {
+        package, manager, ..
+    } = &inst.entry.source
+    else {
+        return Err(format!(
+            "{} is not updated by a package manager",
+            inst.entry.name
+        ));
+    };
+    inst.entry.validate()?;
+    let rpm = *manager == PackageFormat::Rpm;
+    let (program, args): (&Path, Vec<&str>) = if rpm {
+        (&programs.dnf, vec!["-y", "upgrade", package])
+    } else {
+        (
+            &programs.apt_get,
+            vec!["install", "-y", "--only-upgrade", package],
+        )
+    };
+    // pkexec runs only a program it finds by its full path.
+    let program = if program.is_absolute() {
+        program.to_path_buf()
+    } else {
+        which(&program.to_string_lossy())
+            .ok_or_else(|| format!("{} is missing", program.display()))?
+    };
+    let out = Command::new(&programs.pkexec)
+        .arg(&program)
+        .args(&args)
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .map_err(|e| format!("could not run pkexec: {e}"))?;
+    match out.status.code() {
+        Some(0) => {}
+        Some(126) => return Err("the password prompt was cancelled".into()),
+        Some(127) => return Err("not authorized to install packages".into()),
+        _ => {
+            let err = failure_text(&out);
+            return Err(err);
+        }
+    }
+    let mut updated = inst.clone();
+    if let Some(v) = programs.package_version(package, rpm, !rpm).await {
+        updated.version = Some(v);
+    }
+    save(tools_dir, &updated)?;
+    Ok(updated)
 }
 
 /// The version of a pending Flatpak update, or its short commit when the app
@@ -1912,6 +2084,10 @@ impl Fakes {
             rpm: dir.join("rpm"),
             dpkg_query: dir.join("dpkg-query"),
             dpkg: dir.join("dpkg"),
+            dnf: dir.join("dnf"),
+            apt: dir.join("apt"),
+            apt_get: dir.join("apt-get"),
+            pkexec: dir.join("pkexec"),
             timeout: Duration::from_secs(5),
             network_timeout: Duration::from_secs(5),
         };
@@ -3054,5 +3230,181 @@ mod tests {
         assert!(child.wait().is_ok());
         assert!(processes(&image).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Updates of apps adopted from the distribution
+
+    fn distro_inst(manager: &str) -> Installed {
+        let mut inst = Installed::new(distro_entry(manager));
+        inst.version = Some("2.1".into());
+        inst.adopted = true;
+        inst
+    }
+
+    #[tokio::test]
+    async fn dnf_reports_update() {
+        let f = Fakes::new("dnf-update");
+        f.set(
+            "dnf",
+            "echo 'Last metadata check'; printf 'other.x86_64  1.0-1.fc44  updates\\nclock.x86_64  2:25.08.2-1.fc44  updates\\n'; exit 100",
+        );
+        let got = check_update(&distro_inst("rpm"), &f.programs).await;
+        assert_eq!(got, Ok(Some("25.08.2".into())));
+        assert_eq!(f.calls(), ["dnf -q check-update clock"]);
+    }
+
+    #[tokio::test]
+    async fn dnf_no_update() {
+        let f = Fakes::new("dnf-none");
+        f.set("dnf", "exit 0");
+        assert_eq!(
+            check_update(&distro_inst("rpm"), &f.programs).await,
+            Ok(None)
+        );
+    }
+
+    #[tokio::test]
+    async fn dnf_failure_is_error() {
+        let f = Fakes::new("dnf-fail");
+        let tools = f.dir.join("tools");
+        f.set("dnf", "echo 'locked' >&2; exit 1");
+        let inst = distro_inst("rpm");
+        std::fs::create_dir_all(tools.join("local.clock")).unwrap();
+        save(&tools, &inst).unwrap();
+        let err = check_update(&inst, &f.programs).await.unwrap_err();
+        assert!(err.contains("locked"), "{err}");
+        assert_eq!(
+            load(&tools, "local.clock").unwrap().version.as_deref(),
+            Some("2.1")
+        );
+    }
+
+    #[tokio::test]
+    async fn dnf_odd_output_is_rejected() {
+        let f = Fakes::new("dnf-odd");
+        for body in [
+            "printf 'clock.x86_64\\n'; exit 100",
+            "printf 'clock.x86_64  bad\\001ver-1  updates\\n'; exit 100",
+            "printf 'clock.x86_64  -1.fc44  updates\\n'; exit 100",
+            "printf 'clock.x86_64  1.%s-1.fc44  updates\\n' \"$(printf 'x%.0s' $(seq 1 100))\"; exit 100",
+            "exit 100",
+        ] {
+            f.set("dnf", body);
+            assert!(
+                check_update(&distro_inst("rpm"), &f.programs)
+                    .await
+                    .is_err(),
+                "{body}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn apt_reports_update() {
+        let f = Fakes::new("apt-update");
+        f.set(
+            "apt",
+            "echo 'Listing...'; echo 'clock/stable 1:3.0.21-1 amd64 [upgradable from: 3.0.20-1]'",
+        );
+        let got = check_update(&distro_inst("deb"), &f.programs).await;
+        assert_eq!(got, Ok(Some("3.0.21".into())));
+        assert_eq!(f.calls(), ["apt list --upgradable clock"]);
+        f.set("apt", "echo 'Listing...'");
+        assert_eq!(
+            check_update(&distro_inst("deb"), &f.programs).await,
+            Ok(None)
+        );
+        f.set("apt", "exit 1");
+        assert!(
+            check_update(&distro_inst("deb"), &f.programs)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hanging_package_manager_fails() {
+        let mut f = Fakes::new("dnf-hang");
+        f.programs.network_timeout = Duration::from_millis(300);
+        f.set("dnf", "exec sleep 30");
+        let start = std::time::Instant::now();
+        assert!(
+            check_update(&distro_inst("rpm"), &f.programs)
+                .await
+                .is_err()
+        );
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    #[tokio::test]
+    async fn launcher_never_updates() {
+        let f = Fakes::new("launcher-update");
+        let inst = Installed::new(launcher_entry(&["/bin/sh", "-c", "x"]));
+        assert_eq!(check_update(&inst, &f.programs).await, Ok(None));
+        assert!(f.calls().is_empty());
+        let tools = f.dir.join("tools");
+        assert!(
+            update_distro_package(&tools, &f.programs, &inst)
+                .await
+                .is_err()
+        );
+        assert!(f.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn upgrade_runs_through_pkexec_and_reads_the_new_version() {
+        let f = Fakes::new("upgrade-ok");
+        let tools = f.dir.join("tools");
+        let inst = distro_inst("rpm");
+        std::fs::create_dir_all(tools.join("local.clock")).unwrap();
+        save(&tools, &inst).unwrap();
+        f.set("pkexec", "exit 0");
+        f.set("rpm", "printf 25.08.2");
+        let out = update_distro_package(&tools, &f.programs, &inst)
+            .await
+            .unwrap();
+        assert_eq!(out.version.as_deref(), Some("25.08.2"));
+        assert!(out.adopted);
+        assert_eq!(
+            load(&tools, "local.clock").unwrap().version.as_deref(),
+            Some("25.08.2")
+        );
+        let calls = f.calls();
+        assert!(
+            calls[0].starts_with("pkexec ") && calls[0].ends_with("dnf -y upgrade clock"),
+            "{calls:?}"
+        );
+
+        let f = Fakes::new("upgrade-deb");
+        let tools = f.dir.join("tools");
+        let inst = distro_inst("deb");
+        std::fs::create_dir_all(tools.join("local.clock")).unwrap();
+        f.set("pkexec", "exit 0");
+        f.set("dpkg-query", "printf 3.0.21-1");
+        let out = update_distro_package(&tools, &f.programs, &inst)
+            .await
+            .unwrap();
+        assert_eq!(out.version.as_deref(), Some("3.0.21"));
+        assert!(f.calls()[0].ends_with("apt-get install -y --only-upgrade clock"));
+    }
+
+    #[tokio::test]
+    async fn pkexec_cancel_keeps_version() {
+        let f = Fakes::new("upgrade-cancel");
+        let tools = f.dir.join("tools");
+        let inst = distro_inst("rpm");
+        std::fs::create_dir_all(tools.join("local.clock")).unwrap();
+        save(&tools, &inst).unwrap();
+        f.set("pkexec", "exit 126");
+        f.set("rpm", "printf 99");
+        let err = update_distro_package(&tools, &f.programs, &inst)
+            .await
+            .unwrap_err();
+        assert!(err.contains("cancelled"), "{err}");
+        assert_eq!(
+            load(&tools, "local.clock").unwrap().version.as_deref(),
+            Some("2.1")
+        );
+        assert!(f.calls().iter().all(|c| !c.starts_with("rpm")));
     }
 }
