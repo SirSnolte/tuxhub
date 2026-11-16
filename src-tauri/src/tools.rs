@@ -1441,11 +1441,17 @@ pub fn app_running(tools_dir: &Path, inst: &Installed) -> bool {
 }
 
 /// Processes of the current user that run `program`. The processes of other
-/// users cannot be read and are left out.
+/// users cannot be read and are left out. The app of an AppImage runs from a
+/// temporary mount; it is found by `APPIMAGE` in its environment.
 pub fn processes(program: &Path) -> Vec<u32> {
     let program = program
         .canonicalize()
         .unwrap_or_else(|_| program.to_path_buf());
+    let appimage = is_appimage(&program).then(|| {
+        let mut var = b"APPIMAGE=".to_vec();
+        var.extend_from_slice(program.as_os_str().as_encoded_bytes());
+        var
+    });
     let Ok(rd) = std::fs::read_dir("/proc") else {
         return vec![];
     };
@@ -1453,8 +1459,21 @@ pub fn processes(program: &Path) -> Vec<u32> {
         .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
         .filter(|pid| {
             std::fs::read_link(format!("/proc/{pid}/exe")).is_ok_and(|exe| runs(&exe, &program))
+                || appimage.as_deref().is_some_and(|var| started_by(*pid, var))
         })
         .collect()
+}
+
+fn is_appimage(program: &Path) -> bool {
+    program
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("appimage"))
+}
+
+/// Whether the environment of `pid` holds exactly `var` (`APPIMAGE=<path>`).
+fn started_by(pid: u32, var: &[u8]) -> bool {
+    std::fs::read(format!("/proc/{pid}/environ"))
+        .is_ok_and(|env| env.split(|b| *b == 0).any(|entry| entry == var))
 }
 
 /// Whether `exe`, the target of `/proc/<pid>/exe`, is `program`. When an
@@ -2400,5 +2419,37 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    /// An AppImage runs its app from a temporary mount; only `APPIMAGE` in
+    /// the environment names the file tuxhub started.
+    #[tokio::test]
+    async fn finds_the_app_an_appimage_started() {
+        let dir = std::env::temp_dir().join(format!("tuxhub-appimage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let image = dir.join("App.AppImage");
+        std::fs::write(&image, "not started").unwrap();
+        let inner = dir.join("inner");
+        std::fs::copy("/usr/bin/sleep", &inner).unwrap();
+        let mut child = loop {
+            match std::process::Command::new(&inner)
+                .arg("30")
+                .env("APPIMAGE", &image)
+                .spawn()
+            {
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    tokio::time::sleep(Duration::from_millis(20)).await
+                }
+                r => break r.unwrap(),
+            }
+        };
+        assert_eq!(processes(&image), [child.id()]);
+        // Another file with the same start of its name is not this app.
+        assert!(processes(&dir.join("App.App")).is_empty());
+        quit(&image).await.unwrap();
+        assert!(child.wait().is_ok());
+        assert!(processes(&image).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
