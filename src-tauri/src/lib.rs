@@ -1,3 +1,5 @@
+#[allow(dead_code)] // wired up in a later installed-apps task
+mod appstream;
 mod embed;
 mod github;
 mod live;
