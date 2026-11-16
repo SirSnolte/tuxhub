@@ -89,6 +89,8 @@ export type Tool = {
 export type WindowMode = "hub" | "own";
 /** Whether and where an app runs; `unknown` when it could not be found out. */
 export type RunState = "stopped" | "hub" | "own" | "unknown";
+/** Where the app ran before an update, and why the update failed if it did. */
+export type InstallOutcome = { state: RunState; error: string | null };
 
 /** How deeply tuxhub integrates an app. */
 export type Integration = "socket" | "embedded" | "standalone";
@@ -183,7 +185,8 @@ export type Updates = Record<string, string>;
 export const api = {
   workshop: () => invoke<Workshop>("workshop_list"),
   readme: (repo: string) => invoke<string>("workshop_readme", { repo }),
-  install: (id: string) => invoke<void>("tool_install", { id }),
+  /** Installs or updates a tool; `restart`: the user agreed to quit it if it runs. */
+  install: (id: string, restart = false) => invoke<InstallOutcome>("tool_install", { id, restart }),
   adopt: (id: string) => invoke<void>("tool_adopt", { id }),
   removeCopy: (id: string) => invoke<void>("tool_remove_copy", { id }),
   dismissDuplicate: (id: string) => invoke<void>("tool_dismiss_duplicate", { id }),

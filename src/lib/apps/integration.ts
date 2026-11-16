@@ -1,6 +1,6 @@
 // How deeply tuxhub integrates an app, shown as a tag in the workshop, without
 // Svelte. Tested in tests/integration.test.mjs.
-import type { Integration, Tool } from "../api";
+import type { Integration, RunState, Tool, WindowMode } from "../api";
 
 export type IntegrationInfo = {
   /** Name of the Lucide symbol (IntegrationTag.svelte maps it). */
@@ -42,4 +42,14 @@ export function canToggleWindow(
     !tool.manifest.web_url &&
     tool.entry.source.type !== "external"
   );
+}
+
+/** An update quits a running app (or one that may run) only after asking. */
+export function updateNeedsConfirm(state: RunState): boolean {
+  return state !== "stopped";
+}
+
+/** Where an app starts again after an update: where it ran, if known. */
+export function restartTarget(state: RunState): WindowMode | null {
+  return state === "hub" || state === "own" ? state : null;
 }

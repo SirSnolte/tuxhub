@@ -247,11 +247,18 @@
       }
       return;
     }
+    try {
+      await startInHub();
+    } catch (e) {
+      toast(errText(e));
+    }
+  }
+
+  /** Starts the app inside tuxhub and shows it; throws when that fails. */
+  export async function startInHub() {
     starting = true;
     try {
       attach((await api.embedStart(id)).url);
-    } catch (e) {
-      toast(errText(e));
     } finally {
       starting = false;
     }

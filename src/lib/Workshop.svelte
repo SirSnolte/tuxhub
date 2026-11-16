@@ -7,6 +7,7 @@
   import ToolIcon from "./ToolIcon.svelte";
   import IntegrationTag from "./IntegrationTag.svelte";
   import { integrationInfo } from "./apps/integration";
+  import { installAndRestart } from "./update";
   import { workshopAction } from "./install-state";
   import { valueOf } from "./wa";
 
@@ -50,7 +51,7 @@
   async function install(item: WorkshopItem) {
     installing = item.entry.id;
     try {
-      await api.install(item.entry.id);
+      await installAndRestart(item.entry.id, false);
       toast(t("workshop.installedToast", { name: item.entry.name }), "info");
       await load();
       onchanged();

@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { INTEGRATIONS, canToggleWindow, integrationInfo } from "../src/lib/apps/integration.ts";
+import { INTEGRATIONS, canToggleWindow, integrationInfo, restartTarget, updateNeedsConfirm } from "../src/lib/apps/integration.ts";
 
 const i18n = readFileSync(new URL("../src/lib/i18n.svelte.ts", import.meta.url), "utf8");
 const [en, de] = i18n.split(/\nconst de\b/);
@@ -46,4 +46,17 @@ test("edge case 12: only apps that run per xpra get the window toggle", () => {
   assert.equal(canToggleWindow(app({ level: 1, manifest: { web_url: "http://localhost:1/" } })), false);
   assert.equal(canToggleWindow(app({ manifest: { ui: "index.html" } })), false);
   assert.equal(canToggleWindow(app({ entry: { source: { type: "external" } } })), false);
+});
+
+test("edge case 13: only a running app, or one that may run, asks before an update", () => {
+  assert.equal(updateNeedsConfirm("stopped"), false);
+  for (const state of ["hub", "own", "unknown"]) assert.equal(updateNeedsConfirm(state), true, state);
+});
+
+test("after an update the app starts again where it ran", () => {
+  assert.equal(restartTarget("hub"), "hub");
+  assert.equal(restartTarget("own"), "own");
+  assert.equal(restartTarget("stopped"), null);
+  // Where an app that may have run ran is not known: it stays quit.
+  assert.equal(restartTarget("unknown"), null);
 });

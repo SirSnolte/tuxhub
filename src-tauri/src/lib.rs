@@ -425,34 +425,94 @@ async fn workshop_readme(repo: String) -> Result<String, String> {
     github::readme(&repo).await
 }
 
+/// The result of an install or update: where the app ran before (the user
+/// interface starts it there again) and why the update failed, if it did.
+#[derive(Debug, Serialize)]
+struct InstallOutcome {
+    state: RunState,
+    error: Option<String>,
+}
+
+/// Quits a running app, then updates it. Without `restart` (the user's yes
+/// to quit and restart) a running app is left alone. When quitting fails,
+/// nothing is updated; when the update fails, the old version stays and the
+/// app is still to be started again.
+async fn update_running<Q, QF, U, UF>(
+    before: RunState,
+    restart: bool,
+    quit: Q,
+    update: U,
+) -> Result<InstallOutcome, String>
+where
+    Q: FnOnce() -> QF,
+    QF: std::future::Future<Output = Result<(), String>>,
+    U: FnOnce() -> UF,
+    UF: std::future::Future<Output = Result<(), String>>,
+{
+    if before != RunState::Stopped {
+        if !restart {
+            return Err("the app is running; quit it before the update".into());
+        }
+        quit().await?;
+    }
+    Ok(InstallOutcome {
+        state: before,
+        error: update().await.err(),
+    })
+}
+
+/// Installs or updates a tool. A running app is quit first when `restart`
+/// says the user agreed; the returned state tells where it ran.
 #[tauri::command]
-async fn tool_install(app: AppHandle, id: String) -> Result<(), String> {
+async fn tool_install(app: AppHandle, id: String, restart: bool) -> Result<InstallOutcome, String> {
+    let hub = app.state::<Hub>();
+    let existing = tools::load(&hub.tools_dir, &id).ok();
     // A tool installed outside tuxhub is updated where it is.
-    let existing = tools::load(&app.state::<Hub>().tools_dir, &id).ok();
-    if let Some(inst) = existing.filter(|i| matches!(i.entry.source, Source::External { .. })) {
-        let hub = app.state::<Hub>();
+    let external = existing
+        .clone()
+        .filter(|i| matches!(i.entry.source, Source::External { .. }));
+    let entry = match external {
+        Some(_) => None,
+        None => {
+            let (entries, _) = workshop_entries().await;
+            Some(
+                entries
+                    .into_iter()
+                    .find(|e| e.id == id)
+                    .ok_or_else(|| format!("{id} is not in the workshop"))?,
+            )
+        }
+    };
+    let before = match &existing {
+        Some(inst) => run_state(&hub, embed::status(&app, &id).await.is_some(), inst).await,
+        None => RunState::Stopped,
+    };
+    let quit = || async {
+        match (before, &existing) {
+            (RunState::Hub, _) => embed::stop(&app, &id).await,
+            (_, Some(inst)) => quit_app(&hub, inst, QUIT_WAIT).await?,
+            _ => {}
+        }
+        Ok(())
+    };
+    let update = || async {
+        // Background processes stop for the update and start again below.
         hub.runtime.stop(&id).await;
         embed::stop(&app, &id).await;
-        tools::update_external(&app, &inst).await?;
+        match (&external, &entry) {
+            (Some(inst), _) => tools::update_external(&app, inst).await?,
+            (None, Some(entry)) => {
+                install_entry(&app, &hub, entry).await?;
+            }
+            (None, None) => return Err(format!("{id} is not in the workshop")),
+        }
         updates::forget(&app, &id);
         shortcuts::rebind(app.clone());
-        start_background_tools(app).await;
-        return Ok(());
-    }
-    let (entries, _) = workshop_entries().await;
-    let entry = entries
-        .into_iter()
-        .find(|e| e.id == id)
-        .ok_or_else(|| format!("{id} is not in the workshop"))?;
-    let hub = app.state::<Hub>();
-    // Stop the running process before an update.
-    hub.runtime.stop(&id).await;
-    embed::stop(&app, &id).await;
-    install_entry(&app, &hub, &entry).await?;
-    updates::forget(&app, &id);
-    shortcuts::rebind(app.clone());
-    start_background_tools(app).await;
-    Ok(())
+        Ok(())
+    };
+    let outcome = update_running(before, restart, quit, update).await;
+    start_background_tools(app.clone()).await;
+    outcome
 }
 
 /// Installs or updates a workshop entry. An app that is already on this
@@ -2594,5 +2654,86 @@ while True:
                 .contains(&"flatpak kill net.example.demo".to_string())
         );
         assert_eq!(run_state(&hub, false, &inst).await, RunState::Stopped);
+    }
+
+    /// Edge case 11: the update of a running app with fake steps.
+    #[tokio::test]
+    async fn updates_a_running_app_in_order() {
+        use std::sync::{Arc, Mutex};
+        let steps = Arc::new(Mutex::new(Vec::<&str>::new()));
+        let step = |name: &'static str, ok: bool| {
+            let steps = steps.clone();
+            move || async move {
+                steps.lock().unwrap().push(name);
+                if ok {
+                    Ok(())
+                } else {
+                    Err(format!("{name} failed"))
+                }
+            }
+        };
+
+        let out = update_running(
+            RunState::Own,
+            true,
+            step("quit", true),
+            step("update", true),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.state, RunState::Own);
+        assert_eq!(out.error, None);
+        assert_eq!(*steps.lock().unwrap(), ["quit", "update"]);
+
+        // Quitting fails: nothing is updated, nothing to restart.
+        steps.lock().unwrap().clear();
+        let err = update_running(
+            RunState::Own,
+            true,
+            step("quit", false),
+            step("update", true),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err, "quit failed");
+        assert_eq!(*steps.lock().unwrap(), ["quit"]);
+
+        // The update fails: the app is started again where it ran.
+        steps.lock().unwrap().clear();
+        let out = update_running(
+            RunState::Own,
+            true,
+            step("quit", true),
+            step("update", false),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.state, RunState::Own);
+        assert_eq!(out.error.as_deref(), Some("update failed"));
+        assert_eq!(*steps.lock().unwrap(), ["quit", "update"]);
+
+        // A stopped app is not quit.
+        steps.lock().unwrap().clear();
+        let out = update_running(
+            RunState::Stopped,
+            false,
+            step("quit", true),
+            step("update", true),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.state, RunState::Stopped);
+        assert_eq!(*steps.lock().unwrap(), ["update"]);
+
+        // A running app is never quit without the user's yes.
+        for before in [RunState::Hub, RunState::Own, RunState::Unknown] {
+            steps.lock().unwrap().clear();
+            assert!(
+                update_running(before, false, step("quit", true), step("update", true))
+                    .await
+                    .is_err()
+            );
+            assert!(steps.lock().unwrap().is_empty(), "{before:?}");
+        }
     }
 }
