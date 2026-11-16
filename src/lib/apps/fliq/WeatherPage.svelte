@@ -13,7 +13,6 @@
     <wa-input
       value={store.text("weatherLocation")}
       maxlength={200}
-      placeholder={t("fliq.weather.locationHint")}
       aria-invalid={refused ? "true" : undefined}
       oninput={(e: Event) => store.set("weatherLocation", clampText(valueOf(e)), TEXT_DELAY)}
       onfocus={() => store.focus("weatherLocation")}

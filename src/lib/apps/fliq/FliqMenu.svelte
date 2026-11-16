@@ -101,7 +101,11 @@
 <style>
   .fliq {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--wa-space-m);
+    min-width: 0;
+  }
+  wa-tab-group {
     min-width: 0;
   }
   .notice {
@@ -115,9 +119,7 @@
     display: inline-flex;
     align-items: center;
     gap: var(--wa-space-2xs);
-  }
-  wa-tab-group::part(nav) {
-    overflow-x: auto;
+    white-space: nowrap;
   }
   wa-tab-panel::part(base) {
     padding-inline: 0;

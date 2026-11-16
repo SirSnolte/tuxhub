@@ -349,7 +349,10 @@
 
 <style>
   .canvas {
+    /* The width comes from the editor, never from the drawn grid, so the grid scales with it. */
+    contain: inline-size;
     min-width: 0;
+    overflow: hidden;
     user-select: none;
   }
   .body {

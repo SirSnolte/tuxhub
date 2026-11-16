@@ -204,6 +204,7 @@
   .editor {
     container-type: inline-size;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--wa-space-m);
     min-width: 0;
   }
