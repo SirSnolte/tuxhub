@@ -258,9 +258,10 @@
     }
   }
 
-  /** Starts the app inside tuxhub and shows it; throws when that fails.
-   * An app that already runs outside tuxhub is not started a second time:
-   * the user is asked to close it first (`restart`). */
+  /** Starts the app inside tuxhub and shows it. An app that already runs
+   * outside tuxhub is not started a second time: this opens the dialog that
+   * asks to close it and start it here (`restart`), and returns without
+   * starting. Throws when starting fails otherwise. */
   export async function startInHub(restart = false) {
     starting = true;
     try {

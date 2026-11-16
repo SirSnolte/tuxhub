@@ -1006,13 +1006,13 @@ async fn tool_app_running(app: AppHandle, id: String) -> Result<bool, String> {
 async fn tool_quit(app: AppHandle, id: String) -> Result<(), String> {
     let hub = app.state::<Hub>();
     let inst = tools::load(&hub.tools_dir, &id)?;
-    quit_tool(&hub, &inst).await
+    quit_tool(&hub, &inst, QUIT_WAIT).await
 }
 
-/// Quits the app when tuxhub knows how ([`can_quit`]).
-async fn quit_tool(hub: &Hub, inst: &Installed) -> Result<(), String> {
+/// Quits the app when tuxhub knows how ([`can_quit`]), waiting up to `wait`.
+async fn quit_tool(hub: &Hub, inst: &Installed, wait: std::time::Duration) -> Result<(), String> {
     can_quit(hub, inst)?;
-    quit_running(hub, inst, QUIT_WAIT).await
+    quit_running(hub, inst, wait).await
 }
 
 /// Whether tuxhub knows how to quit the app: by its live interface, its own
@@ -1359,7 +1359,8 @@ async fn embed_start(
         &inst.entry.name,
         restart,
         || run_state(&hub, false, &inst),
-        || quit_tool(&hub, &inst),
+        // An app like a daemon may need longer than `QUIT_WAIT` to quit.
+        || quit_tool(&hub, &inst, embed::STOP_WAIT),
     )
     .await
 }

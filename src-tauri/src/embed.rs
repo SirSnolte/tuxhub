@@ -13,10 +13,11 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Runtime};
 use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 const WATCHER: &str = include_str!("xpra_watch.py");
 const PORTALS_CONF: &str = "[preferred]\ndefault=gtk\n";
@@ -24,10 +25,17 @@ const PORTALS_CONF: &str = "[preferred]\ndefault=gtk\n";
 /// Error of [`start`] when the app already runs outside tuxhub. The app's
 /// own D-Bus in the session hides that instance, so it would start twice.
 pub const RUNNING_OUTSIDE: &str = "running-outside";
-/// How long a restart waits for the app to quit.
+/// How long a restart waits for the app to quit, quitting included.
 pub const STOP_WAIT: Duration = Duration::from_secs(10);
 /// How often a restart asks whether the app has quit.
-pub const STOP_POLL: Duration = Duration::from_millis(250);
+const STOP_POLL: Duration = Duration::from_millis(250);
+
+/// How long and how often a restart waits for the app to stop.
+#[derive(Clone, Copy)]
+struct Wait {
+    timeout: Duration,
+    poll: Duration,
+}
 
 struct Session {
     display: u32,
@@ -39,7 +47,26 @@ struct Session {
 }
 
 #[derive(Default)]
-pub struct Sessions(Mutex<HashMap<String, Session>>);
+pub struct Sessions {
+    running: Mutex<HashMap<String, Session>>,
+    /// Tool id -> lock held while tuxhub starts its session
+    starts: std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>,
+}
+
+impl Sessions {
+    /// One start per app at a time: whoever waited finds the session
+    /// running, instead of quitting the app a second time.
+    async fn start_turn(&self, id: &str) -> OwnedMutexGuard<()> {
+        let lock = self
+            .starts
+            .lock()
+            .unwrap()
+            .entry(id.to_string())
+            .or_default()
+            .clone();
+        lock.lock_owned().await
+    }
+}
 
 #[derive(Clone, Serialize)]
 pub struct EmbedInfo {
@@ -174,35 +201,39 @@ where
     if let Some(dep) = missing() {
         return Err(format!("{dep} is not installed"));
     }
-    if let Some(info) = status(app, id).await {
-        return Ok(info);
-    }
+    let _turn = app.state::<Hub>().embeds.start_turn(id).await;
     guarded(
         name,
         restart,
+        || status(app, id),
         probe,
         quit,
         || open(app, id),
-        STOP_WAIT,
-        STOP_POLL,
+        Wait {
+            timeout: STOP_WAIT,
+            poll: STOP_POLL,
+        },
     )
     .await
 }
 
-/// Runs `launch` unless the app runs outside tuxhub: then it fails with
-/// [`RUNNING_OUTSIDE`], or with `restart` quits the app and waits up to
-/// `timeout` until `probe` says it has stopped. A state that cannot be found
+/// Returns the `existing` session, or runs `launch` unless the app runs
+/// outside tuxhub: then it fails with [`RUNNING_OUTSIDE`], or with `restart`
+/// quits the app and waits until `probe` says it has stopped, at most
+/// `wait.timeout` from the start of quitting. A state that cannot be found
 /// out (a shared launcher) starts as before.
-async fn guarded<P, PF, Q, QF, L, LF, T>(
+async fn guarded<E, EF, P, PF, Q, QF, L, LF, T>(
     name: &str,
     restart: bool,
+    existing: E,
     mut probe: P,
     quit: Q,
     launch: L,
-    timeout: Duration,
-    poll: Duration,
+    wait: Wait,
 ) -> Result<T, String>
 where
+    E: FnOnce() -> EF,
+    EF: Future<Output = Option<T>>,
     P: FnMut() -> PF,
     PF: Future<Output = RunState>,
     Q: FnOnce() -> QF,
@@ -210,17 +241,20 @@ where
     L: FnOnce() -> LF,
     LF: Future<Output = Result<T, String>>,
 {
+    if let Some(running) = existing().await {
+        return Ok(running);
+    }
     if probe().await == RunState::Own {
         if !restart {
             return Err(RUNNING_OUTSIDE.into());
         }
+        let deadline = tokio::time::Instant::now() + wait.timeout;
         quit().await?;
-        let deadline = tokio::time::Instant::now() + timeout;
         while probe().await != RunState::Stopped {
             if tokio::time::Instant::now() >= deadline {
                 return Err(format!("{name} did not quit in time"));
             }
-            tokio::time::sleep(poll).await;
+            tokio::time::sleep(wait.poll).await;
         }
     }
     launch().await
@@ -229,7 +263,7 @@ where
 /// Starts a new session for the app, or returns the running one.
 async fn open<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<EmbedInfo, String> {
     let hub = app.state::<Hub>();
-    let mut sessions = hub.embeds.0.lock().await;
+    let mut sessions = hub.embeds.running.lock().await;
     if let Some(s) = sessions.get_mut(id) {
         if matches!(s.xpra.try_wait(), Ok(None)) {
             return Ok(EmbedInfo { url: url(s.port) });
@@ -344,7 +378,7 @@ async fn open<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<EmbedInfo, Str
 
 pub async fn status<R: Runtime>(app: &AppHandle<R>, id: &str) -> Option<EmbedInfo> {
     let hub = app.state::<Hub>();
-    let mut sessions = hub.embeds.0.lock().await;
+    let mut sessions = hub.embeds.running.lock().await;
     let s = sessions.get_mut(id)?;
     if matches!(s.xpra.try_wait(), Ok(None)) {
         Some(EmbedInfo { url: url(s.port) })
@@ -356,7 +390,7 @@ pub async fn status<R: Runtime>(app: &AppHandle<R>, id: &str) -> Option<EmbedInf
 }
 
 pub async fn stop<R: Runtime>(app: &AppHandle<R>, id: &str) {
-    let session = app.state::<Hub>().embeds.0.lock().await.remove(id);
+    let session = app.state::<Hub>().embeds.running.lock().await.remove(id);
     if let Some(s) = session {
         shutdown(s).await;
     }
@@ -366,7 +400,7 @@ pub async fn stop_all<R: Runtime>(app: &AppHandle<R>) {
     let all: Vec<Session> = app
         .state::<Hub>()
         .embeds
-        .0
+        .running
         .lock()
         .await
         .drain()
@@ -543,36 +577,41 @@ mod tests {
     type Calls = std::sync::Mutex<Vec<&'static str>>;
 
     const FAST: Duration = Duration::from_millis(5);
+    const SHORT: Wait = Wait {
+        timeout: Duration::from_millis(20),
+        poll: FAST,
+    };
 
     /// Runs the check before a session with fakes: `states` are the answers
     /// of the run state probe in turn (the last one repeats), `quit` the
-    /// result of quitting. Quitting moves the probe to its next answer.
+    /// result of quitting. No session runs yet.
     async fn guarded_with(
         restart: bool,
         states: &[RunState],
         quit: Result<(), String>,
         calls: &Calls,
+        wait: Wait,
     ) -> Result<u16, String> {
         let next = std::sync::Mutex::new(0usize);
         let next = &next;
         guarded(
             "Demo",
             restart,
+            || async { None },
             move || async move {
-                let i = *next.lock().unwrap();
-                states[i.min(states.len() - 1)]
+                let mut i = next.lock().unwrap();
+                *i += 1;
+                states[(*i - 1).min(states.len() - 1)]
             },
             move || async move {
                 calls.lock().unwrap().push("quit");
-                *next.lock().unwrap() += 1;
                 quit
             },
             move || async move {
                 calls.lock().unwrap().push("xpra");
                 Ok(4000)
             },
-            FAST * 4,
-            FAST,
+            wait,
         )
         .await
     }
@@ -580,7 +619,7 @@ mod tests {
     #[tokio::test]
     async fn embed_refuses_when_running_outside() {
         let calls = Calls::default();
-        let out = guarded_with(false, &[RunState::Own], Ok(()), &calls).await;
+        let out = guarded_with(false, &[RunState::Own], Ok(()), &calls, SHORT).await;
         assert_eq!(out, Err(RUNNING_OUTSIDE.to_string()));
         assert!(calls.lock().unwrap().is_empty(), "no session, nothing quit");
     }
@@ -588,7 +627,23 @@ mod tests {
     #[tokio::test]
     async fn embed_restart_quits_first() {
         let calls = Calls::default();
-        let out = guarded_with(true, &[RunState::Own, RunState::Stopped], Ok(()), &calls).await;
+        let states = [RunState::Own, RunState::Stopped];
+        let out = guarded_with(true, &states, Ok(()), &calls, SHORT).await;
+        assert_eq!(out, Ok(4000));
+        assert_eq!(*calls.lock().unwrap(), ["quit", "xpra"]);
+    }
+
+    /// An app that takes a while to quit after being asked still starts.
+    #[tokio::test]
+    async fn embed_restart_waits_for_a_slow_quit() {
+        let calls = Calls::default();
+        let mut states = vec![RunState::Own; 6];
+        states.push(RunState::Stopped);
+        let wait = Wait {
+            timeout: Duration::from_secs(5),
+            poll: Duration::from_millis(1),
+        };
+        let out = guarded_with(true, &states, Ok(()), &calls, wait).await;
         assert_eq!(out, Ok(4000));
         assert_eq!(*calls.lock().unwrap(), ["quit", "xpra"]);
     }
@@ -598,7 +653,7 @@ mod tests {
         for state in [RunState::Stopped, RunState::Unknown] {
             for restart in [false, true] {
                 let calls = Calls::default();
-                let out = guarded_with(restart, &[state], Ok(()), &calls).await;
+                let out = guarded_with(restart, &[state], Ok(()), &calls, SHORT).await;
                 assert_eq!(out, Ok(4000), "{state:?}");
                 assert_eq!(*calls.lock().unwrap(), ["xpra"], "{state:?}");
             }
@@ -608,7 +663,7 @@ mod tests {
     #[tokio::test]
     async fn embed_starts_nothing_when_quitting_fails() {
         let calls = Calls::default();
-        let out = guarded_with(true, &[RunState::Own], Err("refused".into()), &calls).await;
+        let out = guarded_with(true, &[RunState::Own], Err("refused".into()), &calls, SHORT).await;
         assert_eq!(out, Err("refused".to_string()));
         assert_eq!(*calls.lock().unwrap(), ["quit"]);
     }
@@ -617,10 +672,57 @@ mod tests {
     async fn embed_starts_nothing_when_the_app_keeps_running() {
         for after in [RunState::Own, RunState::Unknown] {
             let calls = Calls::default();
-            let out = guarded_with(true, &[RunState::Own, after], Ok(()), &calls).await;
+            let out = guarded_with(true, &[RunState::Own, after], Ok(()), &calls, SHORT).await;
             assert_eq!(out, Err("Demo did not quit in time".to_string()));
             assert_eq!(*calls.lock().unwrap(), ["quit"]);
         }
+    }
+
+    /// Two starts at the same time: the second waits for the first and finds
+    /// its session, instead of quitting the app (which `flatpak ps` also
+    /// sees inside tuxhub) a second time.
+    #[tokio::test]
+    async fn embed_starts_once_when_asked_twice() {
+        let sessions = Sessions::default();
+        let calls = Calls::default();
+        let outside = std::sync::Mutex::new(true);
+        let session = std::sync::Mutex::new(None::<u16>);
+        let (sessions, calls, outside, session) = (&sessions, &calls, &outside, &session);
+        let one = move || async move {
+            let _turn = sessions.start_turn("demo").await;
+            guarded(
+                "Demo",
+                true,
+                move || async move { *session.lock().unwrap() },
+                move || async move {
+                    if *outside.lock().unwrap() || session.lock().unwrap().is_some() {
+                        RunState::Own
+                    } else {
+                        RunState::Stopped
+                    }
+                },
+                move || async move {
+                    calls.lock().unwrap().push("quit");
+                    tokio::time::sleep(FAST).await;
+                    *outside.lock().unwrap() = false;
+                    Ok(())
+                },
+                move || async move {
+                    calls.lock().unwrap().push("xpra");
+                    tokio::time::sleep(FAST).await;
+                    *session.lock().unwrap() = Some(4000);
+                    Ok(4000)
+                },
+                Wait {
+                    timeout: Duration::from_secs(5),
+                    poll: FAST,
+                },
+            )
+            .await
+        };
+        let (a, b) = tokio::join!(one(), one());
+        assert_eq!((a, b), (Ok(4000), Ok(4000)));
+        assert_eq!(*calls.lock().unwrap(), ["quit", "xpra"]);
     }
 
     #[test]
