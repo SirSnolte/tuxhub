@@ -1,9 +1,7 @@
-#[allow(dead_code)] // wired up in a later installed-apps task
 mod appstream;
 mod embed;
 mod github;
 mod live;
-#[allow(dead_code)] // wired up in a later installed-apps task
 mod local_apps;
 mod manifest;
 mod native;
@@ -57,7 +55,6 @@ pub struct Hub {
     programs: tools::Programs,
     /// Installed apps found on this PC, with the newest application folder
     /// time and the `show_all` setting they were built for.
-    #[allow(dead_code)] // read by the IPC command of a later installed-apps task
     local_apps: std::sync::Mutex<local_apps::Cache>,
 }
 
@@ -608,6 +605,135 @@ async fn tool_adopt(app: AppHandle, id: String) -> Result<(), String> {
     Ok(())
 }
 
+// ---------------------------------------------------------- Installed apps
+
+/// An app of the start menu with what tuxhub knows about it.
+#[derive(Serialize)]
+struct LocalAppView {
+    app: local_apps::LocalApp,
+    /// The id it has in tuxhub: the catalog's id, or its own `local.…` id.
+    tool_id: String,
+    in_sidebar: bool,
+    /// A newer version, found by the update check.
+    update: Option<String>,
+    /// Where it runs; `stopped` for apps that are not in the sidebar.
+    run_state: RunState,
+}
+
+/// The catalog the installed apps are matched with. It is the bundled
+/// index: opening the workshop's installed apps needs no network.
+fn local_catalog() -> Vec<Entry> {
+    parse_workshop(WORKSHOP_BUNDLED).unwrap_or_default()
+}
+
+/// The id an app of this computer has in tuxhub.
+fn local_tool_id(app: &local_apps::LocalApp, catalog: &[Entry]) -> String {
+    match local_apps::catalog_entry(catalog, &app.source) {
+        Some(i) => catalog[i].id.clone(),
+        None => local_apps::local_entry(app).id,
+    }
+}
+
+/// The apps with their state in tuxhub; `in_hub`: tools shown in an xpra
+/// session.
+async fn local_app_views(
+    hub: &Hub,
+    apps: Vec<local_apps::LocalApp>,
+    catalog: &[Entry],
+    in_hub: &std::collections::HashSet<String>,
+) -> Vec<LocalAppView> {
+    let records = tools::load_all(&hub.tools_dir);
+    let updates = hub.updates.lock().unwrap().clone();
+    let views = apps.into_iter().map(|app| {
+        let tool_id = local_tool_id(&app, catalog);
+        let record = records.iter().find(|r| r.entry.id == tool_id);
+        let update = updates.get(&tool_id).cloned();
+        async move {
+            let run_state = match record {
+                Some(inst) => run_state(hub, in_hub.contains(&tool_id), inst).await,
+                None => RunState::Stopped,
+            };
+            LocalAppView {
+                app,
+                in_sidebar: record.is_some(),
+                tool_id,
+                update,
+                run_state,
+            }
+        }
+    });
+    futures_util::future::join_all(views).await
+}
+
+#[tauri::command]
+async fn local_apps_list(app: AppHandle, show_all: bool) -> Vec<LocalAppView> {
+    let hub = app.state::<Hub>();
+    let catalog = local_catalog();
+    let apps = local_apps::list_cached(&hub.local_apps, &hub.programs, &catalog, show_all).await;
+    let mut in_hub = std::collections::HashSet::new();
+    for inst in tools::load_all(&hub.tools_dir) {
+        if embed::status(&app, inst.id()).await.is_some() {
+            in_hub.insert(inst.entry.id);
+        }
+    }
+    local_app_views(&hub, apps, &catalog, &in_hub).await
+}
+
+/// Longest desktop file id accepted from the user interface.
+const MAX_DESKTOP_ID: usize = 255;
+
+/// Adds an app of `apps` to the sidebar, found by its desktop file id: an
+/// app the catalog knows the way the workshop adds it, any other with the
+/// command of its desktop entry. An app that starts at login opens in its
+/// own window, as it already runs.
+async fn add_local_app(
+    hub: &Hub,
+    apps: &[local_apps::LocalApp],
+    catalog: Vec<Entry>,
+    desktop_id: &str,
+) -> Result<Installed, String> {
+    let app = (desktop_id.len() <= MAX_DESKTOP_ID)
+        .then(|| apps.iter().find(|a| a.desktop_id == desktop_id))
+        .flatten()
+        .ok_or("this is not an app on this computer")?;
+    let mut inst = match local_apps::catalog_entry(&catalog, &app.source) {
+        Some(i) => {
+            let id = catalog[i].id.clone();
+            adopt_entry(hub, catalog, &id).await?
+        }
+        None => {
+            let entry = local_apps::local_entry(app);
+            if tools::load(&hub.tools_dir, &entry.id).is_ok() {
+                return Err(format!("{} is already in tuxhub", entry.name));
+            }
+            tools::adopt(&hub.tools_dir, &hub.programs, &entry).await?
+        }
+    };
+    if app.autostart {
+        inst.window = tools::WindowMode::Own;
+        tools::save(&hub.tools_dir, &inst)?;
+    }
+    Ok(inst)
+}
+
+#[tauri::command]
+async fn local_app_add(app: AppHandle, desktop_id: String) -> Result<String, String> {
+    let hub = app.state::<Hub>();
+    let catalog = local_catalog();
+    // The list the user chose from; usually cached, so nothing is scanned.
+    let show_all = hub
+        .local_apps
+        .lock()
+        .ok()
+        .and_then(|c| c.as_ref().map(|(_, all, _)| *all))
+        .unwrap_or(true);
+    let apps = local_apps::list_cached(&hub.local_apps, &hub.programs, &catalog, show_all).await;
+    let inst = add_local_app(&hub, &apps, catalog, &desktop_id).await?;
+    shortcuts::rebind(app.clone());
+    start_background_tools(app).await;
+    Ok(inst.entry.id)
+}
+
 // ------------------------------------------------------------------- Tools
 
 #[derive(Serialize)]
@@ -682,7 +808,10 @@ fn can_launch(inst: &Installed, manifest: &Manifest) -> bool {
         || inst.detected_run.is_some()
         || matches!(
             inst.entry.source,
-            Source::Flatpak { .. } | Source::SystemPackage { .. }
+            Source::Flatpak { .. }
+                | Source::SystemPackage { .. }
+                | Source::DistroPackage { .. }
+                | Source::Launcher { .. }
         )
 }
 
@@ -857,6 +986,8 @@ async fn tool_quit(app: AppHandle, id: String) -> Result<(), String> {
 async fn tool_uninstall(app: AppHandle, id: String) -> Result<(), String> {
     let hub = app.state::<Hub>();
     let inst = tools::load(&hub.tools_dir, &id)?;
+    // Before anything is stopped: an app tuxhub may not remove keeps running.
+    tools::check_removable(&inst)?;
     hub.runtime.stop(&id).await;
     embed::stop(&app, &id).await;
     quit_app(&hub, &inst, QUIT_WAIT).await?;
@@ -880,7 +1011,10 @@ fn forget(hub: &Hub, id: &str) -> Result<(), String> {
     let dir = hub.tools_dir.join(id);
     if !matches!(
         inst.entry.source,
-        Source::Flatpak { .. } | Source::SystemPackage { .. }
+        Source::Flatpak { .. }
+            | Source::SystemPackage { .. }
+            | Source::DistroPackage { .. }
+            | Source::Launcher { .. }
     ) || !dir.join("tool.json").is_file()
     {
         return Err(format!(
@@ -1385,6 +1519,8 @@ pub fn run() {
             workshop_readme,
             tool_install,
             tool_adopt,
+            local_apps_list,
+            local_app_add,
             tool_remove_copy,
             tool_dismiss_duplicate,
             tool_forget,
@@ -2154,6 +2290,197 @@ while True:
             .unwrap_err();
         assert!(err.contains("already in tuxhub"), "{err}");
         assert!(!recorded(&hub, "demo").unwrap().adopted);
+    }
+
+    fn installed_app(
+        desktop_id: &str,
+        source: local_apps::LocalSource,
+        command: &[&str],
+    ) -> local_apps::LocalApp {
+        local_apps::LocalApp {
+            desktop_id: desktop_id.into(),
+            name: format!("App {desktop_id}"),
+            summary: None,
+            description: None,
+            icon: None,
+            homepage: None,
+            repo: None,
+            categories: vec![],
+            source,
+            command: command.iter().map(|s| s.to_string()).collect(),
+            autostart: false,
+        }
+    }
+
+    fn installed_flatpak(desktop_id: &str, flatpak_id: &str) -> local_apps::LocalApp {
+        installed_app(
+            desktop_id,
+            local_apps::LocalSource::Flatpak {
+                flatpak_id: flatpak_id.into(),
+                installations: vec![tools::Installation::User],
+            },
+            &["/usr/bin/flatpak", "run", flatpak_id],
+        )
+    }
+
+    fn installed_program(desktop_id: &str, program: &str) -> local_apps::LocalApp {
+        installed_app(
+            desktop_id,
+            local_apps::LocalSource::Unknown {
+                program: program.into(),
+            },
+            &[program],
+        )
+    }
+
+    /// Only an app of the current list can be added; the string from the
+    /// user interface never names a file or a command.
+    #[tokio::test]
+    async fn local_app_add_needs_an_app_of_the_list() {
+        let (hub, f) = hub_with_fakes("local-add-unknown");
+        f.flatpak_with(&[tools::Installation::User]);
+        let apps = [installed_program("a.desktop", "/bin/sh")];
+        for bad in [
+            "b.desktop",
+            "/bin/sh",
+            "../a.desktop",
+            "",
+            &"x".repeat(5000),
+        ] {
+            let err = add_local_app(&hub, &apps, vec![], bad).await.unwrap_err();
+            assert!(err.contains("not an app on this computer"), "{err}");
+        }
+        assert!(!hub.tools_dir.exists());
+        assert!(f.calls().is_empty());
+    }
+
+    /// An app the catalog knows is added like from the workshop, under the
+    /// catalog id.
+    #[tokio::test]
+    async fn local_app_add_takes_the_catalog_way() {
+        let (hub, f) = hub_with_fakes("local-add-catalog");
+        f.flatpak_with(&[tools::Installation::System]);
+        let apps = [installed_flatpak("x.desktop", "net.example.demo")];
+        let inst = add_local_app(&hub, &apps, vec![flatpak_app("demo")], "x.desktop")
+            .await
+            .unwrap();
+        assert_eq!(inst.id(), "demo");
+        let saved = recorded(&hub, "demo").unwrap();
+        assert!(saved.adopted);
+        assert_eq!(saved.installation, tools::Installation::System);
+        assert_eq!(saved.window, tools::WindowMode::Hub);
+        assert!(f.calls().iter().all(|c| c.starts_with("flatpak info ")));
+        // Twice is refused.
+        let err = add_local_app(&hub, &apps, vec![flatpak_app("demo")], "x.desktop")
+            .await
+            .unwrap_err();
+        assert!(err.contains("already in tuxhub"), "{err}");
+    }
+
+    /// An app that starts at login already runs: it opens in its own window.
+    #[tokio::test]
+    async fn local_app_add_stores_the_command() {
+        let (hub, _f) = hub_with_fakes("local-add-launcher");
+        let mut app = installed_program("Some App.desktop", "/bin/sh");
+        app.autostart = true;
+        let inst = add_local_app(&hub, &[app.clone()], vec![], "Some App.desktop")
+            .await
+            .unwrap();
+        assert_eq!(inst.id(), "local.some-app");
+        let saved = recorded(&hub, "local.some-app").unwrap();
+        assert!(saved.adopted);
+        assert_eq!(saved.window, tools::WindowMode::Own);
+        assert!(matches!(
+            &saved.entry.source,
+            Source::Launcher { desktop_id, command }
+                if desktop_id == "Some App.desktop" && command == &["/bin/sh"]
+        ));
+        assert!(can_launch(&saved, &saved.manifest(&hub.tools_dir)));
+        let err = add_local_app(&hub, &[app], vec![], "Some App.desktop")
+            .await
+            .unwrap_err();
+        assert!(err.contains("already in tuxhub"), "{err}");
+
+        // Leaving the sidebar keeps the app on the computer.
+        forget(&hub, "local.some-app").unwrap();
+        assert!(recorded(&hub, "local.some-app").is_none());
+        assert!(Path::new("/bin/sh").is_file());
+    }
+
+    #[tokio::test]
+    async fn local_app_views_tell_the_sidebar_state() {
+        let (hub, f) = hub_with_fakes("local-views");
+        f.flatpak_with(&[tools::Installation::User]);
+        f.set(
+            "flatpak",
+            "[ \"$1\" = ps ] && echo net.example.demo\nexit 0",
+        );
+        // Programs of their own: a shared one like /bin/sh always runs somewhere.
+        f.set("run-a", "exit 0");
+        f.set("run-b", "exit 0");
+        let (run_a, run_b) = (f.dir.join("run-a"), f.dir.join("run-b"));
+        let apps = vec![
+            installed_flatpak("x.desktop", "net.example.demo"),
+            installed_program("a.desktop", run_a.to_str().unwrap()),
+            installed_program("b.desktop", run_b.to_str().unwrap()),
+        ];
+        let catalog = vec![flatpak_app("demo")];
+        record(
+            &hub,
+            &Installed {
+                adopted: true,
+                ..Installed::new(flatpak_app("demo"))
+            },
+        );
+        add_local_app(&hub, &apps, catalog.clone(), "a.desktop")
+            .await
+            .unwrap();
+        hub.updates
+            .lock()
+            .unwrap()
+            .insert("demo".into(), "2.0".into());
+        let views = local_app_views(&hub, apps, &catalog, &Default::default()).await;
+        let state: Vec<_> = views
+            .iter()
+            .map(|v| {
+                (
+                    v.app.desktop_id.as_str(),
+                    v.tool_id.as_str(),
+                    v.in_sidebar,
+                    v.update.as_deref(),
+                    v.run_state,
+                )
+            })
+            .collect();
+        assert_eq!(
+            state,
+            [
+                ("x.desktop", "demo", true, Some("2.0"), RunState::Own),
+                ("a.desktop", "local.a", true, None, RunState::Stopped),
+                ("b.desktop", "local.b", false, None, RunState::Stopped),
+            ]
+        );
+        let in_hub = ["demo".to_string()].into_iter().collect();
+        let views = local_app_views(
+            &hub,
+            vec![installed_flatpak("x.desktop", "net.example.demo")],
+            &catalog,
+            &in_hub,
+        )
+        .await;
+        assert_eq!(views[0].run_state, RunState::Hub);
+    }
+
+    /// tuxhub never removes an app it only added from this computer.
+    #[tokio::test]
+    async fn added_apps_are_not_uninstalled() {
+        let (hub, _f) = hub_with_fakes("local-uninstall");
+        let apps = [installed_program("a.desktop", "/bin/sh")];
+        let inst = add_local_app(&hub, &apps, vec![], "a.desktop")
+            .await
+            .unwrap();
+        assert!(tools::check_removable(&inst).is_err());
+        assert!(tools::check_removable(&Installed::new(flatpak_app("demo"))).is_ok());
     }
 
     /// (missing, duplicate) of a tool in the sidebar.

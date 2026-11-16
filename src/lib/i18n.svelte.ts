@@ -29,6 +29,8 @@ const en = {
   "source.local": "Local",
   "source.external": "Installed separately",
   "source.system-package": "System package",
+  "source.distro-package": "Distribution package",
+  "source.launcher": "Found on this computer",
 
 
   "integration.socket": "tuxhub menu",
@@ -367,6 +369,8 @@ const de: Record<Key, string> = {
   "source.local": "Lokal",
   "source.external": "Separat installiert",
   "source.system-package": "Systempaket",
+  "source.distro-package": "Distributionspaket",
+  "source.launcher": "Auf diesem PC gefunden",
 
 
   "integration.socket": "tuxhub-Menü",

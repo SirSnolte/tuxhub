@@ -1,7 +1,7 @@
 //! Reads the freedesktop `.desktop` entries of apps installed on this PC.
 
 use crate::appstream::AppInfo;
-use crate::tools::{Entry, Installation, Programs, Source};
+use crate::tools::{Entry, Installation, PackageFormat, Programs, Source};
 use futures_util::StreamExt;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -540,15 +540,99 @@ pub fn autostart_matches(app: &DesktopApp, autostart_dir: &Path) -> bool {
 
 /// Position of the catalog entry that stands for this app, found by Flatpak
 /// ID or package.
-fn catalog_entry(catalog: &[Entry], source: &LocalSource) -> Option<usize> {
+pub fn catalog_entry(catalog: &[Entry], source: &LocalSource) -> Option<usize> {
     catalog.iter().position(|e| match (&e.source, source) {
         (Source::Flatpak { flatpak_id, .. }, LocalSource::Flatpak { flatpak_id: id, .. }) => {
             flatpak_id == id
         }
-        (Source::SystemPackage { package, .. }, LocalSource::Rpm { package: p })
-        | (Source::SystemPackage { package, .. }, LocalSource::Deb { package: p }) => package == p,
+        (
+            Source::SystemPackage { package, .. } | Source::DistroPackage { package, .. },
+            LocalSource::Rpm { package: p } | LocalSource::Deb { package: p },
+        ) => package == p,
         _ => false,
     })
+}
+
+const LOCAL_PREFIX: &str = "local.";
+
+/// The tool id of an app added from this computer: `local.` and its desktop
+/// file name, lowercase, other characters as `-`, at most 64 characters.
+fn local_id(desktop_id: &str) -> String {
+    let stem = desktop_id.strip_suffix(".desktop").unwrap_or(desktop_id);
+    let mut id: String = stem
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    if id.is_empty() {
+        id.push_str("app");
+    }
+    id.insert_str(0, LOCAL_PREFIX);
+    while id.contains("..") {
+        id = id.replace("..", ".");
+    }
+    // Only ASCII is left, so any length is a character boundary.
+    id.truncate(64);
+    id
+}
+
+/// The start command with its program by absolute path, as far as it can be
+/// found; a program that cannot be found stays as it is.
+fn absolute_command(command: &[String]) -> Vec<String> {
+    let mut command = command.to_vec();
+    if let Some(program) = command.first_mut()
+        && !program.starts_with('/')
+        && let Some(path) = find_program(program)
+    {
+        *program = path.to_string_lossy().into_owned();
+    }
+    command
+}
+
+/// The entry an app of this computer gets in tuxhub: a Flatpak stays a
+/// Flatpak, a distribution package is updated by its package manager, and
+/// anything else is only started. It has no manifest.
+pub fn local_entry(app: &LocalApp) -> Entry {
+    let command = absolute_command(&app.command);
+    let source = match &app.source {
+        LocalSource::Flatpak { flatpak_id, .. } => Source::Flatpak {
+            flatpak_id: flatpak_id.clone(),
+            remote: "flathub".into(),
+        },
+        LocalSource::Rpm { package } => Source::DistroPackage {
+            package: package.clone(),
+            manager: PackageFormat::Rpm,
+            command,
+        },
+        LocalSource::Deb { package } => Source::DistroPackage {
+            package: package.clone(),
+            manager: PackageFormat::Deb,
+            command,
+        },
+        LocalSource::Appimage { .. } | LocalSource::Unknown { .. } => Source::Launcher {
+            desktop_id: app.desktop_id.clone(),
+            command,
+        },
+    };
+    Entry {
+        id: local_id(&app.desktop_id),
+        name: app.name.clone(),
+        description: app.summary.clone().unwrap_or_default(),
+        icon: app.icon.clone(),
+        category: None,
+        repo: app.repo.clone(),
+        homepage: app.homepage.clone(),
+        source,
+        manifest: None,
+        integration: None,
+        translations: Default::default(),
+    }
 }
 
 /// Whether the desktop file is named after the Flatpak ID or package.
@@ -675,6 +759,8 @@ async fn scan_apps(
     .await
 }
 
+/// [`list_cached`] for given folders, without a cache.
+#[cfg(test)]
 async fn list_in(
     dirs: &[PathBuf],
     desktop: &str,
@@ -691,22 +777,6 @@ async fn list_in(
 fn current_desktop() -> String {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
     desktop.split(':').next().unwrap_or("").to_string()
-}
-
-/// Every app of the start menu with its source, sorted by name. Apps the
-/// catalog knows (by Flatpak ID or package) take their texts, icon and repo
-/// from the catalog and show once; their `desktop_id` stays.
-pub async fn list(programs: &Programs, catalog: &[Entry], show_all: bool) -> Vec<LocalApp> {
-    let apps = scan_apps(
-        &application_dirs(),
-        &current_desktop(),
-        &autostart_dir(),
-        &crate::appstream::load_index(),
-        programs,
-        show_all,
-    )
-    .await;
-    apply_catalog(apps, catalog)
 }
 
 fn autostart_dir() -> PathBuf {
@@ -727,9 +797,13 @@ fn newest_mtime(dirs: &[PathBuf]) -> SystemTime {
         .unwrap_or(SystemTime::UNIX_EPOCH)
 }
 
-/// Like [`list`], but keeps the scanned apps in `cache` until an application
-/// folder changes (or `show_all` does). The catalog is not part of the cache:
-/// it is applied on every call.
+/// Every app of the start menu with its source, sorted by name. Apps the
+/// catalog knows (by Flatpak ID or package) take their texts, icon and repo
+/// from the catalog and show once; their `desktop_id` stays.
+///
+/// The scanned apps stay in `cache` until an application folder changes (or
+/// `show_all` does). The catalog is not part of the cache: it is applied on
+/// every call.
 pub async fn list_cached(
     cache: &std::sync::Mutex<Cache>,
     programs: &Programs,
@@ -754,7 +828,7 @@ async fn cached_apps(
     dirs: &[PathBuf],
     desktop: &str,
     autostart_dir: &Path,
-    load_index: &dyn Fn() -> HashMap<String, AppInfo>,
+    load_index: &(dyn Fn() -> HashMap<String, AppInfo> + Sync),
     programs: &Programs,
     show_all: bool,
 ) -> Vec<LocalApp> {
@@ -1260,5 +1334,168 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
             == LocalSource::Rpm {
                 package: "pkg".into()
             }));
+    }
+
+    fn local_app(desktop_id: &str, source: LocalSource, command: &[&str]) -> LocalApp {
+        LocalApp {
+            desktop_id: desktop_id.into(),
+            name: "Some App".into(),
+            summary: Some("Does things".into()),
+            description: Some("Long text".into()),
+            icon: Some("some-app".into()),
+            homepage: Some("https://example.org".into()),
+            repo: Some("owner/some-app".into()),
+            categories: vec!["Utility".into()],
+            source,
+            command: command.iter().map(|s| s.to_string()).collect(),
+            autostart: false,
+        }
+    }
+
+    fn unknown(program: &str) -> LocalSource {
+        LocalSource::Unknown {
+            program: program.into(),
+        }
+    }
+
+    #[test]
+    fn local_entry_id_is_valid() {
+        let e = local_entry(&local_app("Some App+Pro.desktop", unknown("/a"), &["/a"]));
+        assert_eq!(e.id, "local.some-app-pro");
+        assert!(crate::manifest::valid_id(&e.id));
+        let long = format!("{}.desktop", "N".repeat(80));
+        let e = local_entry(&local_app(&long, unknown("/a"), &["/a"]));
+        assert!(e.id.len() <= 64, "{}", e.id);
+        assert!(crate::manifest::valid_id(&e.id));
+        for odd in [
+            "a..b.desktop",
+            ".hidden.desktop",
+            "Ünïcode Äpp.desktop",
+            "kde-org.kde.dolphin.desktop",
+            ".desktop",
+        ] {
+            let e = local_entry(&local_app(odd, unknown("/a"), &["/a"]));
+            assert!(crate::manifest::valid_id(&e.id), "{odd} -> {}", e.id);
+            assert!(e.id.starts_with("local."), "{}", e.id);
+        }
+        assert_eq!(
+            local_entry(&local_app(
+                "kde-org.kde.dolphin.desktop",
+                unknown("/a"),
+                &["/a"]
+            ))
+            .id,
+            "local.kde-org.kde.dolphin"
+        );
+    }
+
+    #[test]
+    fn local_entry_follows_the_source() {
+        let flatpak = LocalSource::Flatpak {
+            flatpak_id: "org.x.App".into(),
+            installations: vec![Installation::User],
+        };
+        let e = local_entry(&local_app(
+            "org.x.App.desktop",
+            flatpak,
+            &["/usr/bin/flatpak", "run", "org.x.App"],
+        ));
+        assert!(matches!(&e.source, Source::Flatpak { flatpak_id, remote }
+            if flatpak_id == "org.x.App" && remote == "flathub"));
+        assert_eq!(e.name, "Some App");
+        assert_eq!(e.description, "Does things");
+        assert_eq!(e.icon.as_deref(), Some("some-app"));
+        assert_eq!(e.repo.as_deref(), Some("owner/some-app"));
+        assert_eq!(e.homepage.as_deref(), Some("https://example.org"));
+        assert!(e.manifest.is_none());
+        assert!(e.validate().is_ok());
+
+        let rpm = LocalSource::Rpm {
+            package: "clock".into(),
+        };
+        let e = local_entry(&local_app("clock.desktop", rpm, &["/usr/bin/clock", "--x"]));
+        let Source::DistroPackage {
+            package,
+            manager,
+            command,
+        } = &e.source
+        else {
+            panic!("{:?}", e.source)
+        };
+        assert_eq!((package.as_str(), *manager), ("clock", PackageFormat::Rpm));
+        assert_eq!(command, &["/usr/bin/clock", "--x"]);
+        let deb = LocalSource::Deb {
+            package: "clock".into(),
+        };
+        let e = local_entry(&local_app("clock.desktop", deb, &["/usr/bin/clock"]));
+        assert!(matches!(
+            e.source,
+            Source::DistroPackage {
+                manager: PackageFormat::Deb,
+                ..
+            }
+        ));
+
+        for source in [
+            LocalSource::Appimage {
+                path: "/opt/a.AppImage".into(),
+            },
+            unknown("/opt/a/run"),
+        ] {
+            let e = local_entry(&local_app("a.desktop", source, &["/opt/a/run", "-v"]));
+            let Source::Launcher {
+                desktop_id,
+                command,
+            } = &e.source
+            else {
+                panic!("{:?}", e.source)
+            };
+            assert_eq!(desktop_id, "a.desktop");
+            assert_eq!(command, &["/opt/a/run", "-v"]);
+        }
+    }
+
+    /// The stored command names its program by absolute path, so the start
+    /// never depends on `PATH`.
+    #[test]
+    fn local_entry_resolves_the_program() {
+        let sh = find_program("sh").expect("sh is installed");
+        let e = local_entry(&local_app(
+            "s.desktop",
+            unknown("sh"),
+            &["sh", "-c", "true"],
+        ));
+        let Source::Launcher { command, .. } = &e.source else {
+            panic!()
+        };
+        assert_eq!(command[0], sh.to_string_lossy());
+        assert_eq!(command[1..], ["-c", "true"]);
+        // An unknown program stays as it is and the entry does not validate.
+        let e = local_entry(&local_app(
+            "n.desktop",
+            unknown("no-such-program-x"),
+            &["no-such-program-x"],
+        ));
+        assert!(e.validate().is_err());
+    }
+
+    #[test]
+    fn catalog_matches_distro_packages() {
+        let catalog = [entry(
+            r#"{"id":"clock","name":"Clock",
+            "source":{"type":"distro-package","package":"clock","manager":"rpm","command":["/usr/bin/clock"]}}"#,
+        )];
+        let rpm = LocalSource::Rpm {
+            package: "clock".into(),
+        };
+        assert_eq!(catalog_entry(&catalog, &rpm), Some(0));
+        let deb = LocalSource::Deb {
+            package: "clock".into(),
+        };
+        assert_eq!(catalog_entry(&catalog, &deb), Some(0));
+        let other = LocalSource::Rpm {
+            package: "watch".into(),
+        };
+        assert_eq!(catalog_entry(&catalog, &other), None);
     }
 }

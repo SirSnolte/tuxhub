@@ -388,7 +388,9 @@ fn parse_full(xml: &[u8], lang: &str) -> Vec<(AppInfo, Vec<String>)> {
 }
 
 /// Parses an AppStream collection (Flathub) or a single metainfo file.
-/// Broken or truncated XML yields an empty list.
+/// Broken or truncated XML yields an empty list. The index uses
+/// [`parse_full`], which also keeps the launchables.
+#[cfg(test)]
 pub fn parse(xml: &[u8], lang: &str) -> Vec<AppInfo> {
     parse_full(xml, lang).into_iter().map(|(a, _)| a).collect()
 }

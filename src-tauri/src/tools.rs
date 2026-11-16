@@ -95,6 +95,55 @@ pub enum Source {
         #[serde(default)]
         user: bool,
     },
+    /// A package from the distribution's repositories, found on this
+    /// computer; it is updated with the package manager, never from GitHub.
+    DistroPackage {
+        package: String,
+        manager: PackageFormat,
+        /// The start command of its desktop entry; the program by absolute path.
+        command: Vec<String>,
+    },
+    /// An app found on this computer that tuxhub only starts (an AppImage
+    /// or a program of unknown origin); it updates itself.
+    Launcher {
+        desktop_id: String,
+        /// The start command of its desktop entry; the program by absolute path.
+        command: Vec<String>,
+    },
+}
+
+/// The package format of a distribution package, which tells the package
+/// manager that owns it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PackageFormat {
+    Rpm,
+    Deb,
+}
+
+/// Longest stored start command, in arguments and in bytes per argument.
+const MAX_COMMAND_ARGS: usize = 64;
+const MAX_ARG_BYTES: usize = 4096;
+
+/// Whether a stored start command can be run without a shell: a program by
+/// absolute path and a bounded list of arguments.
+fn valid_command(command: &[String]) -> bool {
+    command
+        .first()
+        .is_some_and(|program| program.starts_with('/') && !program.split('/').any(|c| c == ".."))
+        && command.len() <= MAX_COMMAND_ARGS
+        && command
+            .iter()
+            .all(|a| a.len() <= MAX_ARG_BYTES && !a.contains('\0'))
+}
+
+/// Whether a package name can be passed to a package manager as an argument.
+fn valid_package_name(package: &str) -> bool {
+    !package.is_empty()
+        && !package.starts_with('-')
+        && package
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._+-".contains(c))
 }
 
 /// How deeply tuxhub integrates an app.
@@ -178,13 +227,7 @@ impl Entry {
             command,
         } = &self.source
         {
-            // The name is passed to the package manager as an argument.
-            let name_ok = !package.is_empty()
-                && !package.starts_with('-')
-                && package
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "._+-".contains(c));
-            if !name_ok {
+            if !valid_package_name(package) {
                 return Err(format!("{}: invalid package name {package:?}", self.id));
             }
             if rpm.is_none() && deb.is_none() {
@@ -196,6 +239,25 @@ impl Entry {
             if !command.starts_with('/') || command.split('/').any(|c| c == "..") {
                 return Err(format!("{}: `command` must be an absolute path", self.id));
             }
+        }
+        if let Source::DistroPackage { package, .. } = &self.source
+            && !valid_package_name(package)
+        {
+            return Err(format!("{}: invalid package name {package:?}", self.id));
+        }
+        if let Source::DistroPackage { command, .. } | Source::Launcher { command, .. } =
+            &self.source
+            && !valid_command(command)
+        {
+            return Err(format!(
+                "{}: `command` must start with an absolute path",
+                self.id
+            ));
+        }
+        if let Source::Launcher { desktop_id, .. } = &self.source
+            && (desktop_id.is_empty() || desktop_id.len() > 255)
+        {
+            return Err(format!("{}: invalid desktop file id", self.id));
         }
         if let Source::Flatpak { flatpak_id, remote } = &self.source {
             // Never let an id start with "-": it would be parsed as a flatpak option.
@@ -324,7 +386,10 @@ impl Installed {
                     .join(&self.entry.id)
                     .join(self.root.as_deref().unwrap_or("files")),
             ),
-            Source::Flatpak { .. } | Source::SystemPackage { .. } => None,
+            Source::Flatpak { .. }
+            | Source::SystemPackage { .. }
+            | Source::DistroPackage { .. }
+            | Source::Launcher { .. } => None,
         }
     }
 
@@ -664,8 +729,27 @@ pub async fn detect(entry: &Entry, programs: &Programs) -> Detected {
             package: (rpm.is_some() && programs.rpm_installed(package).await)
                 || (deb.is_some() && programs.deb_installed(package).await),
         },
+        Source::DistroPackage {
+            package, manager, ..
+        } => Detected {
+            flatpak: vec![],
+            package: match manager {
+                PackageFormat::Rpm => programs.rpm_installed(package).await,
+                PackageFormat::Deb => programs.deb_installed(package).await,
+            },
+        },
         _ => Detected::default(),
     }
+}
+
+/// Whether `path` is a file this user may run.
+fn is_executable(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+/// Whether the program of a launcher is still there.
+fn launcher_present(command: &[String]) -> bool {
+    command.first().is_some_and(|p| is_executable(Path::new(p)))
 }
 
 /// Adds an app that is already on this computer to tuxhub, without
@@ -701,6 +785,28 @@ pub async fn adopt(
                 version: programs
                     .package_version(package, rpm.is_some(), deb.is_some())
                     .await,
+                ..Installed::new(entry.clone())
+            }
+        }
+        Source::DistroPackage {
+            package, manager, ..
+        } => {
+            if !found.package {
+                return Err(missing());
+            }
+            let rpm = *manager == PackageFormat::Rpm;
+            Installed {
+                adopted: true,
+                version: programs.package_version(package, rpm, !rpm).await,
+                ..Installed::new(entry.clone())
+            }
+        }
+        Source::Launcher { command, .. } => {
+            if !launcher_present(command) {
+                return Err(missing());
+            }
+            Installed {
+                adopted: true,
                 ..Installed::new(entry.clone())
             }
         }
@@ -754,8 +860,12 @@ pub async fn check_installation(
                 duplicate: found.len() > 1 && !inst.duplicate_dismissed,
             }
         }
-        Source::SystemPackage { .. } => InstallState {
+        Source::SystemPackage { .. } | Source::DistroPackage { .. } => InstallState {
             missing: !detect(&inst.entry, programs).await.package,
+            duplicate: false,
+        },
+        Source::Launcher { command, .. } => InstallState {
+            missing: !launcher_present(command),
             duplicate: false,
         },
         _ => InstallState::default(),
@@ -812,6 +922,10 @@ pub async fn install<R: Runtime>(
         Source::SystemPackage { .. } => install_system_package(app, tools_dir, entry).await,
         Source::Local { .. } => Err("local tools are linked, not installed".into()),
         Source::External { .. } => Err("this tool is installed outside tuxhub".into()),
+        Source::DistroPackage { .. } | Source::Launcher { .. } => Err(format!(
+            "{} is added from this computer, not installed",
+            entry.name
+        )),
     }
 }
 
@@ -1307,6 +1421,18 @@ fn flatpak_already_gone(stderr: &str) -> bool {
     stderr.contains("No installed refs found")
 }
 
+/// Whether tuxhub may uninstall the app. An app added from this computer
+/// belongs to its package manager or installer: tuxhub only forgets it.
+pub fn check_removable(inst: &Installed) -> Result<(), String> {
+    match inst.entry.source {
+        Source::DistroPackage { .. } | Source::Launcher { .. } => Err(format!(
+            "{} was added from this computer; remove it from tuxhub instead",
+            inst.entry.name
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Removes a tool. The tool's own `uninstall` command runs first, so it can
 /// remove what it set up itself. Tools installed outside tuxhub are removed
 /// by that command alone.
@@ -1315,6 +1441,7 @@ pub async fn uninstall(
     programs: &Programs,
     inst: &Installed,
 ) -> Result<(), String> {
+    check_removable(inst)?;
     let hook = inst.manifest(tools_dir).uninstall;
     if let Source::External { user, .. } = &inst.entry.source
         && (!user || hook.is_none())
@@ -1387,6 +1514,18 @@ pub fn launch_cmd(tools_dir: &Path, inst: &Installed) -> Result<LaunchCmd, Strin
             Ok(LaunchCmd {
                 program: exe,
                 args: vec![],
+                cwd: None,
+                flatpak: false,
+            })
+        }
+        // The command stored when the app was added, never one from elsewhere.
+        Source::DistroPackage { command, .. } | Source::Launcher { command, .. } => {
+            let (program, args) = command
+                .split_first()
+                .ok_or("this app has no start command")?;
+            Ok(LaunchCmd {
+                program: program.into(),
+                args: args.to_vec(),
                 cwd: None,
                 flatpak: false,
             })
@@ -2223,6 +2362,304 @@ mod tests {
         };
         assert!(!detect(&e, &f.programs).await.any());
         assert!(f.calls().is_empty());
+    }
+
+    fn local_entry_with(id: &str, source: Value) -> Entry {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "name": "Some App",
+            "source": source,
+        }))
+        .unwrap()
+    }
+
+    fn distro_entry(manager: &str) -> Entry {
+        local_entry_with(
+            "local.clock",
+            serde_json::json!({
+                "type": "distro-package",
+                "package": "clock",
+                "manager": manager,
+                // Never a real program: a test must not start anything.
+                "command": ["/nonexistent/tuxhub-test/clock", "--start"],
+            }),
+        )
+    }
+
+    fn launcher_entry(command: &[&str]) -> Entry {
+        local_entry_with(
+            "local.some-app",
+            serde_json::json!({
+                "type": "launcher",
+                "desktop_id": "some-app.desktop",
+                "command": command,
+            }),
+        )
+    }
+
+    #[test]
+    fn validates_distro_packages_and_launchers() {
+        assert!(distro_entry("rpm").validate().is_ok());
+        assert!(distro_entry("deb").validate().is_ok());
+        assert!(
+            serde_json::from_value::<Source>(serde_json::json!({
+                "type": "distro-package", "package": "clock", "manager": "pacman",
+                "command": ["/usr/bin/clock"],
+            }))
+            .is_err()
+        );
+        for package in ["", "-x", "a b", "a;b"] {
+            let mut e = distro_entry("rpm");
+            let Source::DistroPackage { package: p, .. } = &mut e.source else {
+                unreachable!()
+            };
+            *p = package.into();
+            assert!(e.validate().is_err(), "{package:?}");
+        }
+        assert!(launcher_entry(&["/opt/a/run", "--x"]).validate().is_ok());
+        let mut e = launcher_entry(&["/opt/a/run"]);
+        if let Source::Launcher { desktop_id, .. } = &mut e.source {
+            desktop_id.clear();
+        }
+        assert!(e.validate().is_err());
+        // An argument list without bounds is refused.
+        let many: Vec<String> = vec!["/opt/a/run".into(); 65];
+        let refs: Vec<&str> = many.iter().map(String::as_str).collect();
+        assert!(launcher_entry(&refs).validate().is_err());
+        for command in [&[][..], &["run"], &["./run"], &["/opt/../bin/sh"], &[""]] {
+            assert!(launcher_entry(command).validate().is_err(), "{command:?}");
+            let mut e = distro_entry("rpm");
+            let Source::DistroPackage { command: c, .. } = &mut e.source else {
+                unreachable!()
+            };
+            *c = command.iter().map(|s| s.to_string()).collect();
+            assert!(e.validate().is_err(), "{command:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn adopts_distro_package() {
+        let f = Fakes::new("adopt-distro");
+        let tools = f.dir.join("tools");
+        f.set("rpm", "[ \"$2\" = --quiet ] && exit 0\nprintf 2.1");
+        // An rpm package is never looked up with dpkg.
+        f.set("dpkg-query", "exit 0");
+        let inst = adopt(&tools, &f.programs, &distro_entry("rpm"))
+            .await
+            .unwrap();
+        assert!(inst.adopted);
+        assert_eq!(inst.version.as_deref(), Some("2.1"));
+        let saved = load(&tools, "local.clock").unwrap();
+        assert!(saved.adopted);
+        assert!(matches!(
+            saved.entry.source,
+            Source::DistroPackage {
+                manager: PackageFormat::Rpm,
+                ..
+            }
+        ));
+        assert!(f.calls().contains(&"rpm -q --quiet clock".to_string()));
+        // Adding never installs or removes anything.
+        assert!(f.calls().iter().all(|c| c.starts_with("rpm -q")));
+
+        let _ = std::fs::remove_dir_all(&tools);
+        f.set("rpm", "exit 1");
+        let err = adopt(&tools, &f.programs, &distro_entry("rpm"))
+            .await
+            .unwrap_err();
+        assert!(err.contains("is not installed on this computer"), "{err}");
+        assert!(!tools.join("local.clock").exists());
+    }
+
+    #[tokio::test]
+    async fn adopts_deb_distro_package() {
+        let f = Fakes::new("adopt-distro-deb");
+        let tools = f.dir.join("tools");
+        f.set("rpm", "exit 0");
+        f.set("dpkg-query", "printf 'deinstall ok config-files'");
+        assert!(
+            adopt(&tools, &f.programs, &distro_entry("deb"))
+                .await
+                .is_err()
+        );
+        f.set("dpkg-query", "printf 'install ok installed'");
+        assert!(
+            adopt(&tools, &f.programs, &distro_entry("deb"))
+                .await
+                .is_ok()
+        );
+        // A deb package is never looked up with rpm.
+        assert!(!f.calls().iter().any(|c| c.starts_with("rpm")));
+    }
+
+    #[tokio::test]
+    async fn adopts_local_command_only_if_executable() {
+        let f = Fakes::new("adopt-launcher");
+        let tools = f.dir.join("tools");
+        let missing = f.dir.join("nothing-here");
+        let entry = launcher_entry(&[missing.to_str().unwrap()]);
+        assert!(adopt(&tools, &f.programs, &entry).await.is_err());
+        assert!(!tools.join("local.some-app").exists());
+
+        // A file that cannot be run is refused, too.
+        let plain = f.dir.join("plain");
+        std::fs::write(&plain, "text").unwrap();
+        let entry = launcher_entry(&[plain.to_str().unwrap()]);
+        assert!(adopt(&tools, &f.programs, &entry).await.is_err());
+
+        f.set("run", "exit 0");
+        let run = f.dir.join("run");
+        let entry = launcher_entry(&[run.to_str().unwrap(), "--x"]);
+        let inst = adopt(&tools, &f.programs, &entry).await.unwrap();
+        assert!(inst.adopted);
+        assert!(tools.join("local.some-app/tool.json").is_file());
+        assert!(f.calls().is_empty(), "{:?}", f.calls());
+    }
+
+    #[test]
+    fn launches_stored_command() {
+        for entry in [launcher_entry(&["/opt/a/run", "--x"]), {
+            let mut e = distro_entry("rpm");
+            if let Source::DistroPackage { command, .. } = &mut e.source {
+                *command = vec!["/opt/a/run".into(), "--x".into()];
+            }
+            e
+        }] {
+            let inst = Installed::new(entry);
+            assert!(inst.root_dir(Path::new("/tools")).is_none());
+            let lc = launch_cmd(Path::new("/tools"), &inst).unwrap();
+            assert_eq!(lc.program, PathBuf::from("/opt/a/run"));
+            assert_eq!(lc.args, ["--x"]);
+            assert!(lc.cwd.is_none());
+            assert!(!lc.flatpak);
+        }
+    }
+
+    #[tokio::test]
+    async fn distro_package_missing_after_removal() {
+        let f = Fakes::new("distro-missing");
+        let tools = f.dir.join("tools");
+        f.set("rpm", "exit 0");
+        let mut inst = adopt(&tools, &f.programs, &distro_entry("rpm"))
+            .await
+            .unwrap();
+        assert!(
+            !check_installation(&tools, &f.programs, &mut inst)
+                .await
+                .missing
+        );
+        f.set("rpm", "exit 1");
+        let state = check_installation(&tools, &f.programs, &mut inst).await;
+        assert!(state.missing);
+        assert!(!state.duplicate);
+        // Starting it fails with an error, nothing panics.
+        assert!(launch(&tools, &inst).is_err());
+    }
+
+    #[tokio::test]
+    async fn launcher_missing_after_removal() {
+        let f = Fakes::new("launcher-missing");
+        let tools = f.dir.join("tools");
+        f.set("run", "exit 0");
+        let run = f.dir.join("run");
+        let mut inst = adopt(
+            &tools,
+            &f.programs,
+            &launcher_entry(&[run.to_str().unwrap()]),
+        )
+        .await
+        .unwrap();
+        assert!(
+            !check_installation(&tools, &f.programs, &mut inst)
+                .await
+                .missing
+        );
+        std::fs::remove_file(&run).unwrap();
+        assert!(
+            check_installation(&tools, &f.programs, &mut inst)
+                .await
+                .missing
+        );
+    }
+
+    /// Apps added from this computer belong to their package manager or
+    /// installer: tuxhub only forgets them, it never removes or installs them.
+    #[tokio::test]
+    async fn added_apps_are_never_uninstalled_or_installed() {
+        let f = Fakes::new("added-uninstall");
+        let tools = f.dir.join("tools");
+        f.set("rpm", "exit 0");
+        for entry in [distro_entry("rpm"), launcher_entry(&["/bin/sh"])] {
+            let inst = adopt(&tools, &f.programs, &entry).await.unwrap();
+            let err = uninstall(&tools, &f.programs, &inst).await.unwrap_err();
+            assert!(err.contains("remove it from tuxhub"), "{err}");
+            assert!(tools.join(inst.id()).join("tool.json").is_file());
+            let app = tauri::test::mock_app();
+            assert!(
+                install(app.handle(), &tools, &f.programs, &entry)
+                    .await
+                    .is_err()
+            );
+        }
+        assert!(f.calls().iter().all(|c| c.starts_with("rpm -q")));
+    }
+
+    /// tool.json files written before the new sources existed load as before.
+    #[test]
+    fn old_records_still_load() {
+        // Each written with every field a record had, so it reads back as is.
+        let records = [
+            serde_json::json!({
+                "entry": {
+                    "id": "demo", "name": "Demo", "description": "",
+                    "source": { "type": "flatpak", "flatpak_id": "net.example.App",
+                                "remote": "flathub" },
+                },
+                "version": null, "installation": "system",
+            }),
+            serde_json::json!({
+                "entry": {
+                    "id": "clock", "name": "Clock", "description": "", "repo": "owner/clock",
+                    "source": { "type": "system-package", "package": "clock",
+                                "rpm": "*.rpm", "command": "/usr/bin/clock" },
+                },
+                "version": "1.0", "adopted": true,
+            }),
+            serde_json::json!({
+                "entry": { "id": "dev", "name": "Dev", "description": "",
+                           "source": { "type": "local", "path": "/home/u/dev" } },
+                "version": null, "root": null, "detected_run": "run.sh",
+            }),
+            serde_json::json!({
+                "entry": { "id": "rel", "name": "Rel", "description": "", "repo": "owner/rel",
+                           "source": { "type": "github-release", "asset": "*.AppImage" } },
+                "version": "v2", "root": "files", "window": "own",
+            }),
+        ];
+        for record in records {
+            let inst: Installed = serde_json::from_value(record.clone()).unwrap();
+            let again = serde_json::to_value(&inst).unwrap();
+            assert_eq!(again["entry"], record["entry"]);
+            assert_eq!(again["version"], record["version"]);
+            assert_eq!(inst.adopted, record["adopted"] == true);
+        }
+    }
+
+    #[test]
+    fn new_sources_round_trip() {
+        for entry in [distro_entry("deb"), launcher_entry(&["/opt/a/run"])] {
+            let json = serde_json::to_value(&entry).unwrap();
+            let back: Entry = serde_json::from_value(json.clone()).unwrap();
+            assert_eq!(serde_json::to_value(&back).unwrap(), json);
+        }
+        assert_eq!(
+            serde_json::to_value(distro_entry("deb")).unwrap()["source"]["type"],
+            "distro-package"
+        );
+        assert_eq!(
+            serde_json::to_value(launcher_entry(&["/a"])).unwrap()["source"]["type"],
+            "launcher"
+        );
     }
 
     fn flatpak_record(installation: &str) -> Value {

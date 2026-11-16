@@ -46,7 +46,11 @@ export type Source =
   | { type: "system-package"; package: string; rpm?: string; deb?: string; command: string }
   | { type: "local"; path: string }
   /** Installed outside tuxhub; `user` marks an installation in the user's home. */
-  | { type: "external"; path: string; asset?: string; user: boolean };
+  | { type: "external"; path: string; asset?: string; user: boolean }
+  /** A package of the distribution, found on this computer; `command` starts it. */
+  | { type: "distro-package"; package: string; manager: "rpm" | "deb"; command: string[] }
+  /** An app found on this computer that tuxhub only starts with `command`. */
+  | { type: "launcher"; desktop_id: string; command: string[] };
 
 export type Entry = {
   id: string;
@@ -179,6 +183,42 @@ export type LiveEvent =
  * application's own ones for its interface in tuxhub. */
 export type LiveNote = { tool: string; method: string; params: unknown };
 
+/** Where an app of this computer comes from. */
+export type LocalSource =
+  | { kind: "flatpak"; flatpak_id: string; installations: ("user" | "system")[] }
+  | { kind: "rpm"; package: string }
+  | { kind: "deb"; package: string }
+  | { kind: "appimage"; path: string }
+  | { kind: "unknown"; program: string };
+
+/** An app of the start menu, with its source. */
+export type LocalApp = {
+  desktop_id: string;
+  name: string;
+  summary: string | null;
+  description: string | null;
+  icon: string | null;
+  homepage: string | null;
+  repo: string | null;
+  categories: string[];
+  source: LocalSource;
+  command: string[];
+  /** It starts when the user logs in. */
+  autostart: boolean;
+};
+
+/** An app of the start menu with its state in tuxhub. */
+export type LocalAppView = {
+  app: LocalApp;
+  /** Its id in tuxhub: the catalog's id, or its own `local.…` id. */
+  tool_id: string;
+  in_sidebar: boolean;
+  /** A newer version found by the update check. */
+  update: string | null;
+  /** Where it runs; `stopped` for apps that are not in the sidebar. */
+  run_state: RunState;
+};
+
 /** Tool-ID → neue Version */
 export type Updates = Record<string, string>;
 
@@ -191,6 +231,10 @@ export const api = {
   removeCopy: (id: string) => invoke<void>("tool_remove_copy", { id }),
   dismissDuplicate: (id: string) => invoke<void>("tool_dismiss_duplicate", { id }),
   forget: (id: string) => invoke<void>("tool_forget", { id }),
+  /** The apps of the start menu; `showAll` adds system, settings and console apps. */
+  localAppsList: (showAll: boolean) => invoke<LocalAppView[]>("local_apps_list", { showAll }),
+  /** Adds an app of the start menu to the sidebar and returns its tool id. */
+  localAppAdd: (desktopId: string) => invoke<string>("local_app_add", { desktopId }),
   tools: () => invoke<Tool[]>("tool_list"),
   launch: (id: string) => invoke<void>("tool_launch", { id }),
   setWindow: (id: string, mode: WindowMode) => invoke<void>("tool_set_window", { id, mode }),
