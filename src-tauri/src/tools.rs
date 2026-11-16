@@ -92,6 +92,31 @@ fn default_remote() -> String {
     "flathub".into()
 }
 
+/// Brings the stored workshop entries of installed tools up to date with
+/// the workshop (new descriptions, new settings, …). Only entries of the
+/// same kind of installation are replaced; how the tool is installed stays.
+/// Returns the number of updated tools.
+pub fn refresh_entries(tools_dir: &Path, entries: &[Entry]) -> usize {
+    let mut updated = 0;
+    for mut inst in load_all(tools_dir) {
+        let Some(entry) = entries.iter().find(|e| e.id == inst.entry.id) else {
+            continue;
+        };
+        let same_kind =
+            std::mem::discriminant(&entry.source) == std::mem::discriminant(&inst.entry.source);
+        let changed = serde_json::to_value(entry).ok() != serde_json::to_value(&inst.entry).ok();
+        if !same_kind || !changed {
+            continue;
+        }
+        inst.entry = entry.clone();
+        match save(tools_dir, &inst) {
+            Ok(()) => updated += 1,
+            Err(e) => eprintln!("{}: could not update the stored entry: {e}", inst.entry.id),
+        }
+    }
+    updated
+}
+
 impl Entry {
     pub fn validate(&self) -> Result<(), String> {
         if !valid_id(&self.id) {
@@ -1801,6 +1826,52 @@ mod tests {
             ["--non-interactive", "remove", "clock"]
         );
         assert_eq!(Apt.remove_args("clock"), ["remove", "-y", "clock"]);
+    }
+
+    #[test]
+    fn stored_entries_follow_the_workshop() {
+        let base = std::env::temp_dir().join(format!("tuxhub-refresh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let source = serde_json::json!({
+            "type": "system-package",
+            "package": "clock",
+            "rpm": "*.x86_64.rpm",
+            "command": "/usr/bin/clock",
+        });
+        let old = system_package(source.clone());
+        let mut inst = Installed::new(old.clone());
+        inst.version = Some("v2.0.0".into());
+        inst.adopted = true;
+        std::fs::create_dir_all(base.join("clock")).unwrap();
+        save(&base, &inst).unwrap();
+
+        let mut new = system_package(source);
+        new.description = "New text".into();
+        // A workshop entry of another kind never replaces an installed one.
+        let mut other_kind: Entry = serde_json::from_value(serde_json::json!({
+            "id": "clock",
+            "name": "Clock",
+            "repo": "owner/clock",
+            "source": { "type": "github-release", "asset": "*.tar.gz" },
+        }))
+        .unwrap();
+        other_kind.description = "Other".into();
+
+        assert_eq!(refresh_entries(&base, &[other_kind]), 0);
+        assert_eq!(
+            load(&base, "clock").unwrap().entry.description,
+            old.description
+        );
+
+        assert_eq!(refresh_entries(&base, std::slice::from_ref(&new)), 1);
+        let stored = load(&base, "clock").unwrap();
+        assert_eq!(stored.entry.description, "New text");
+        // Everything else about the installation stays.
+        assert_eq!(stored.version.as_deref(), Some("v2.0.0"));
+        assert!(stored.adopted);
+        // Nothing to do the second time.
+        assert_eq!(refresh_entries(&base, &[new]), 0);
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

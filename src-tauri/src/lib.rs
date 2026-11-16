@@ -386,6 +386,7 @@ async fn workshop_items(hub: &Hub, entries: Vec<Entry>) -> Vec<WorkshopItem> {
 #[tauri::command]
 async fn workshop_list(app: AppHandle) -> WorkshopView {
     let (entries, live) = workshop_entries().await;
+    tools::refresh_entries(&app.state::<Hub>().tools_dir, &entries);
     WorkshopView {
         entries: workshop_items(&app.state::<Hub>(), entries).await,
         live,
@@ -879,6 +880,21 @@ async fn live_set(
     hub.live.set(&id, &key, &value).await
 }
 
+/// A request of tuxhub's own menu for an application; only the methods of
+/// `live::menu_call` pass.
+#[tauri::command]
+async fn live_call(
+    app: AppHandle,
+    id: String,
+    method: String,
+    params: Value,
+) -> Result<Value, live::LiveError> {
+    let hub = app.state::<Hub>();
+    live_tool(&hub, &id)?;
+    live::menu_call(&method, &params)?;
+    hub.live.call(&id, &method, params).await
+}
+
 #[tauri::command]
 async fn live_action(app: AppHandle, id: String, action: String) -> Result<Value, live::LiveError> {
     let hub = app.state::<Hub>();
@@ -1196,6 +1212,7 @@ pub fn run() {
             live_get,
             live_set,
             live_action,
+            live_call,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

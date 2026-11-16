@@ -641,6 +641,38 @@ pub fn bridge_method(m: &str) -> Result<(), LiveError> {
     Ok(())
 }
 
+/// Methods tuxhub's own menu for an application (e.g. the Fliq menu) may
+/// send: the stored settings of the application, nothing else.
+const MENU_METHODS: [&str; 3] = ["settings.get", "settings.set", "settings.reset"];
+/// Largest request of a menu, in bytes of JSON (a clock layout is a few KiB).
+const MAX_MENU_PARAMS: usize = 256 * 1024;
+
+/// Checks a request of tuxhub's own menu for an application.
+pub fn menu_call(m: &str, params: &Value) -> Result<(), LiveError> {
+    if !MENU_METHODS.contains(&m) {
+        return Err(LiveError::new(
+            "refused",
+            format!(
+                "method {:?} is not allowed",
+                m.chars().take(MAX_KEY).collect::<String>()
+            ),
+        ));
+    }
+    if !params.is_object() {
+        return Err(LiveError::new(
+            "refused",
+            "the parameters must be an object",
+        ));
+    }
+    if params.to_string().len() > MAX_MENU_PARAMS {
+        return Err(LiveError::new(
+            "too-large",
+            "the request is larger than 256 KiB",
+        ));
+    }
+    Ok(())
+}
+
 /// Notification for the interface: `changed`, `schema-changed`, `closed`, or
 /// one of the application's own (for its interface, and `shortcuts`).
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -2330,6 +2362,47 @@ mod conn_tests {
             );
         }
         assert!(bridge_method(&"a".repeat(64)).is_ok());
+    }
+
+    /// Fliq menu, edge case 18: tuxhub's own menus may only send the
+    /// stored-settings methods, with an object of limited size.
+    #[test]
+    fn menu_calls_are_checked() {
+        for ok in ["settings.get", "settings.set", "settings.reset"] {
+            assert!(menu_call(ok, &json!({})).is_ok(), "{ok} refused");
+        }
+        for bad in [
+            "get",
+            "set",
+            "quit",
+            "hello",
+            "schema",
+            "action",
+            "status",
+            "settings",
+            "settings.drop",
+            "",
+        ] {
+            assert_eq!(
+                menu_call(bad, &json!({})).unwrap_err().code,
+                "refused",
+                "{bad:?} accepted"
+            );
+        }
+        for bad in [json!(null), json!([]), json!("x"), json!(1)] {
+            assert_eq!(
+                menu_call("settings.get", &bad).unwrap_err().code,
+                "refused",
+                "{bad} accepted"
+            );
+        }
+        let big = json!({ "key": "clockLayout", "value": "x".repeat(MAX_MENU_PARAMS) });
+        assert_eq!(
+            menu_call("settings.set", &big).unwrap_err().code,
+            "too-large"
+        );
+        let fits = json!({ "key": "k", "value": "x".repeat(MAX_MENU_PARAMS - 100) });
+        assert!(menu_call("settings.set", &fits).is_ok());
     }
 
     /// Edge case 7: the schemas of the own tools, as they answer `schema`,

@@ -1,7 +1,7 @@
 // Logic of the live settings page (src/lib/live.ts). Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { afterStatus, delayFor, keepKnown, mergeChanged, PAUSE_MS, Sender } from "../src/lib/live.ts";
+import { afterStatus, delayFor, keepKnown, mergeChanged, PAUSE_MS, Sender, noteKind } from "../src/lib/live.ts";
 
 const field = (type, extra = {}) => ({ key: "k", label: "K", disabled: false, type, ...extra });
 
@@ -114,3 +114,15 @@ test("mergeChanged leaves the original object alone", () => {
   assert.deepEqual(out, { a: 2 });
 });
 
+
+test("the settings page reacts only to the notifications meant for it", () => {
+  assert.equal(noteKind({ method: "changed", params: { values: {} } }), "changed");
+  assert.equal(noteKind({ method: "schema-changed", params: {} }), "schema-changed");
+  assert.equal(noteKind({ method: "closed", params: { code: "closed", message: "gone" } }), "closed");
+  assert.equal(noteKind({ method: "closed", params: { code: "timeout", message: "late" } }), "failure");
+  // Notifications an application sends to its own page are none of the page's business:
+  // they must never show up as an error.
+  assert.equal(noteKind({ method: "settings-changed", params: { values: { clockScale: 120 } } }), "ignore");
+  assert.equal(noteKind({ method: "status", params: null }), "ignore");
+  assert.equal(noteKind({ method: "shortcuts", params: [] }), "ignore");
+});

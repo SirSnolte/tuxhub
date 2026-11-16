@@ -61,6 +61,8 @@
     api.updates().then((u) => (updates = u));
     const unlisten = [
       listen<Updates>("updates-changed", ({ payload }) => (updates = payload)),
+      // Stored workshop entries were brought up to date (new texts, settings).
+      listen("tools-changed", () => refresh()),
       listen<ShortcutStatus>("shortcuts-changed", ({ payload }) => (shortcuts = payload)),
       // Keep the running state current when a tool process starts or exits.
       listen<{ addon: string; method: string }>("addon-event", ({ payload }) => {

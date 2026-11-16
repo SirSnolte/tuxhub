@@ -254,7 +254,11 @@
     result
       .then((value) => post({ reply: msg.id, result: value ?? null }))
       .catch((e) => post({ reply: msg.id, error: errText(e) }))
-      .finally(onchanged);
+      // A request to the tool changes nothing tuxhub lists; refreshing the
+      // tools after each one would query every installation per edit.
+      .finally(() => {
+        if (msg.op !== "call") onchanged();
+      });
   }
 
   $effect(() => {

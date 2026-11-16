@@ -107,3 +107,18 @@ export class Sender {
     this.#waiting.clear();
   }
 }
+
+/**
+ * What a notification of a live application means to the settings page.
+ * Anything the application sends for its own page in tuxhub is ignored
+ * here; only an end of the connection can be an error.
+ */
+export function noteKind(note: {
+  method: string;
+  params: unknown;
+}): "changed" | "schema-changed" | "closed" | "failure" | "ignore" {
+  if (note.method === "changed" || note.method === "schema-changed") return note.method;
+  if (note.method !== "closed") return "ignore";
+  const code = (note.params as { code?: unknown } | null)?.code;
+  return code === "closed" ? "closed" : "failure";
+}

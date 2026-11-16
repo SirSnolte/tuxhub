@@ -202,6 +202,9 @@ export const api = {
   liveGet: (id: string) => invoke<Record<string, unknown>>("live_get", { id }),
   liveSet: (id: string, key: string, value: unknown) => invoke<unknown>("live_set", { id, key, value }),
   liveAction: (id: string, action: string) => invoke<unknown>("live_action", { id, action }),
+  /** A request of tuxhub's own menu for the app: only `settings.get/set/reset`. */
+  liveCall: (id: string, method: string, params: Record<string, unknown>) =>
+    invoke<unknown>("live_call", { id, method, params }),
 };
 
 export function isLiveError(e: unknown): e is LiveError {
