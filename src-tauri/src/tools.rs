@@ -1520,6 +1520,13 @@ pub fn launch_cmd(tools_dir: &Path, inst: &Installed) -> Result<LaunchCmd, Strin
         }
         // The command stored when the app was added, never one from elsewhere.
         Source::DistroPackage { command, .. } | Source::Launcher { command, .. } => {
+            // tool.json may have been edited by hand since the app was added.
+            if !valid_command(command) {
+                return Err(format!(
+                    "{}: the start command must start with an absolute path",
+                    inst.entry.name
+                ));
+            }
             let (program, args) = command
                 .split_first()
                 .ok_or("this app has no start command")?;
@@ -1578,10 +1585,72 @@ pub fn app_program(tools_dir: &Path, inst: &Installed) -> Option<PathBuf> {
     if manifest.embed != Some(false) && manifest.level() != 0 {
         return None;
     }
+    // A shared launcher runs many unrelated processes: never watch or quit them.
+    if shared_launcher(inst) {
+        return None;
+    }
     launch_cmd(tools_dir, inst)
         .ok()
         .filter(|lc| !lc.flatpak)
         .map(|lc| lc.program)
+}
+
+/// Programs that start other programs: shells, interpreters and launchers.
+/// Many unrelated processes run them, so an app started through one is
+/// never found or quit by its program. A trailing `*` matches any ending
+/// (`python*` matches `python3.13`).
+const SHARED_LAUNCHERS: &[&str] = &[
+    "sh",
+    "bash",
+    "dash",
+    "zsh",
+    "fish",
+    "ksh",
+    "csh",
+    "tcsh",
+    "env",
+    "python*",
+    "perl*",
+    "ruby*",
+    "node",
+    "java",
+    "wine*",
+    "steam",
+    "flatpak",
+    "xdg-open",
+    "gtk-launch",
+    "gio",
+    "kioclient*",
+    "mono",
+    "dotnet",
+    "electron*",
+    "busybox",
+];
+
+/// Whether `program` is a shell, interpreter or launcher of
+/// [`SHARED_LAUNCHERS`], by its own name or the name of the file it links to
+/// (`/bin/sh` is often `bash`).
+pub fn is_shared_launcher(program: &Path) -> bool {
+    let shared = |p: &Path| {
+        p.file_name().and_then(|n| n.to_str()).is_some_and(|name| {
+            SHARED_LAUNCHERS.iter().any(|l| match l.strip_suffix('*') {
+                Some(prefix) => name.starts_with(prefix),
+                None => name == *l,
+            })
+        })
+    };
+    shared(program) || program.canonicalize().is_ok_and(|real| shared(&real))
+}
+
+/// Whether the app was added from this computer and starts through a shared
+/// launcher, so tuxhub cannot tell its processes from others.
+pub fn shared_launcher(inst: &Installed) -> bool {
+    match &inst.entry.source {
+        Source::DistroPackage { command, .. } | Source::Launcher { command, .. } => command
+            .first()
+            .is_some_and(|p| is_shared_launcher(Path::new(p))),
+        _ => false,
+    }
 }
 
 /// Whether the app of [`app_program`] is running, also when it was started
@@ -2533,6 +2602,91 @@ mod tests {
             assert!(lc.cwd.is_none());
             assert!(!lc.flatpak);
         }
+    }
+
+    /// A hand-edited tool.json never starts a relative or unbounded command.
+    #[test]
+    fn launch_checks_the_stored_command() {
+        for command in [vec![], vec!["run".to_string()], vec!["./run".into()]] {
+            let mut e = launcher_entry(&["/opt/a/run"]);
+            if let Source::Launcher { command: c, .. } = &mut e.source {
+                *c = command.clone();
+            }
+            assert!(
+                launch_cmd(Path::new("/tools"), &Installed::new(e)).is_err(),
+                "{command:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn knows_shared_launchers() {
+        for shared in [
+            "/bin/sh",
+            "/usr/bin/bash",
+            "zsh",
+            "/usr/bin/python3",
+            "/usr/bin/python3.13",
+            "/usr/bin/perl5.40",
+            "ruby3.3",
+            "node",
+            "/usr/bin/java",
+            "/usr/bin/wine64",
+            "/usr/bin/steam",
+            "/usr/bin/flatpak",
+            "/usr/bin/env",
+            "xdg-open",
+            "kioclient5",
+            "electron33",
+            "/usr/bin/dotnet",
+            "busybox",
+        ] {
+            assert!(is_shared_launcher(Path::new(shared)), "{shared}");
+        }
+        for own in [
+            "/opt/a/run",
+            "/usr/bin/dolphin",
+            "steamcmd-gui",
+            "nodejs-app",
+            "/usr/bin/gimp",
+        ] {
+            assert!(!is_shared_launcher(Path::new(own)), "{own}");
+        }
+    }
+
+    /// An app started through a shell, interpreter or launcher shares its
+    /// program with unrelated processes: tuxhub never watches or quits it.
+    #[tokio::test]
+    async fn shared_launchers_are_never_watched() {
+        let f = Fakes::new("shared-launcher");
+        let tools = f.dir.join("tools");
+        // A link named like the app does not hide that it runs bash.
+        let link = f.dir.join("my-app");
+        std::os::unix::fs::symlink("/bin/sh", &link).unwrap();
+        for command in [
+            vec!["/bin/sh", "-c", "x"],
+            vec![link.to_str().unwrap(), "-c", "x"],
+        ] {
+            let inst = adopt(&tools, &f.programs, &launcher_entry(&command))
+                .await
+                .unwrap();
+            assert!(app_program(&tools, &inst).is_none(), "{command:?}");
+            assert!(!app_running(&tools, &inst));
+            assert!(shared_launcher(&inst));
+            let _ = std::fs::remove_dir_all(tools.join(inst.id()));
+        }
+        let mut e = distro_entry("rpm");
+        if let Source::DistroPackage { command, .. } = &mut e.source {
+            *command = vec!["/usr/bin/python3".into(), "/opt/x/app.py".into()];
+        }
+        assert!(app_program(&tools, &Installed::new(e)).is_none());
+
+        // An app's own program is watched as before.
+        f.set("own-app", "exit 0");
+        let own = f.dir.join("own-app");
+        let inst = Installed::new(launcher_entry(&[own.to_str().unwrap()]));
+        assert_eq!(app_program(&tools, &inst), Some(own));
+        assert!(!shared_launcher(&inst));
     }
 
     #[tokio::test]

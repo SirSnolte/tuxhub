@@ -630,7 +630,7 @@ fn local_catalog() -> Vec<Entry> {
 fn local_tool_id(app: &local_apps::LocalApp, catalog: &[Entry]) -> String {
     match local_apps::catalog_entry(catalog, &app.source) {
         Some(i) => catalog[i].id.clone(),
-        None => local_apps::local_entry(app).id,
+        None => local_apps::local_id(&app.desktop_id),
     }
 }
 
@@ -859,6 +859,10 @@ async fn run_state(hub: &Hub, in_hub: bool, inst: &Installed) -> RunState {
     if in_hub {
         return RunState::Hub;
     }
+    // Its processes cannot be told from others that run the same launcher.
+    if tools::shared_launcher(inst) {
+        return RunState::Unknown;
+    }
     if let Source::Flatpak { flatpak_id, .. } = &inst.entry.source
         && !inst.manifest(&hub.tools_dir).is_live()
     {
@@ -973,13 +977,23 @@ async fn tool_app_running(app: AppHandle, id: String) -> Result<bool, String> {
 async fn tool_quit(app: AppHandle, id: String) -> Result<(), String> {
     let hub = app.state::<Hub>();
     let inst = tools::load(&hub.tools_dir, &id)?;
+    can_quit(&hub, &inst)?;
+    quit_running(&hub, &inst, QUIT_WAIT).await
+}
+
+/// Whether tuxhub knows how to quit the app: by its live interface, its own
+/// program or as a Flatpak.
+fn can_quit(hub: &Hub, inst: &Installed) -> Result<(), String> {
     if !inst.manifest(&hub.tools_dir).is_live()
-        && tools::app_program(&hub.tools_dir, &inst).is_none()
+        && tools::app_program(&hub.tools_dir, inst).is_none()
         && !matches!(inst.entry.source, Source::Flatpak { .. })
     {
-        return Err(format!("{id} is not started and stopped by tuxhub"));
+        return Err(format!(
+            "{} is not started and stopped by tuxhub",
+            inst.id()
+        ));
     }
-    quit_running(&hub, &inst, QUIT_WAIT).await
+    Ok(())
 }
 
 #[tauri::command]
@@ -2469,6 +2483,25 @@ while True:
         )
         .await;
         assert_eq!(views[0].run_state, RunState::Hub);
+    }
+
+    /// An app started through a shell runs as bash, like the user's terminals:
+    /// tuxhub cannot tell whether it runs and never quits it.
+    #[tokio::test]
+    async fn shared_launchers_are_never_quit() {
+        let (hub, _f) = hub_with_fakes("local-shared-quit");
+        let mut app = installed_program("s.desktop", "/bin/sh");
+        app.command = vec!["/bin/sh".into(), "-c".into(), "x".into()];
+        let inst = add_local_app(&hub, &[app], vec![], "s.desktop")
+            .await
+            .unwrap();
+        assert_eq!(run_state(&hub, false, &inst).await, RunState::Unknown);
+        assert_eq!(run_state(&hub, true, &inst).await, RunState::Hub);
+        assert!(!app_is_running(&hub, &inst).await);
+        let err = can_quit(&hub, &inst).unwrap_err();
+        assert!(err.contains("not started and stopped by tuxhub"), "{err}");
+        // `quit_app` is not called here: a regression would end the user's shells.
+        assert!(tools::app_program(&hub.tools_dir, &inst).is_none());
     }
 
     /// tuxhub never removes an app it only added from this computer.

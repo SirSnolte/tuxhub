@@ -1,7 +1,7 @@
 //! Reads the freedesktop `.desktop` entries of apps installed on this PC.
 
 use crate::appstream::AppInfo;
-use crate::tools::{Entry, Installation, PackageFormat, Programs, Source};
+use crate::tools::{Entry, Installation, PackageFormat, Programs, Source, is_shared_launcher};
 use futures_util::StreamExt;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -405,7 +405,15 @@ pub async fn resolve_source(app: &DesktopApp, programs: &Programs) -> LocalSourc
         return flatpak_source(id, &app.path, programs).await;
     }
     let program = app.exec.first().cloned().unwrap_or_default();
-    if let Some(file) = find_program(&program) {
+    let file = find_program(&program);
+    // A shell, interpreter or launcher belongs to its own package, not to the app.
+    if file.as_deref().map_or_else(
+        || is_shared_launcher(Path::new(&program)),
+        is_shared_launcher,
+    ) {
+        return LocalSource::Unknown { program };
+    }
+    if let Some(file) = file {
         let mut candidates = vec![file.clone()];
         if let Ok(real) = file.canonicalize()
             && real != file
@@ -546,8 +554,25 @@ pub fn catalog_entry(catalog: &[Entry], source: &LocalSource) -> Option<usize> {
             flatpak_id == id
         }
         (
-            Source::SystemPackage { package, .. } | Source::DistroPackage { package, .. },
+            Source::SystemPackage { package, .. },
             LocalSource::Rpm { package: p } | LocalSource::Deb { package: p },
+        ) => package == p,
+        // The same name in the other package format is another package.
+        (
+            Source::DistroPackage {
+                package,
+                manager: PackageFormat::Rpm,
+                ..
+            },
+            LocalSource::Rpm { package: p },
+        )
+        | (
+            Source::DistroPackage {
+                package,
+                manager: PackageFormat::Deb,
+                ..
+            },
+            LocalSource::Deb { package: p },
         ) => package == p,
         _ => false,
     })
@@ -557,7 +582,7 @@ const LOCAL_PREFIX: &str = "local.";
 
 /// The tool id of an app added from this computer: `local.` and its desktop
 /// file name, lowercase, other characters as `-`, at most 64 characters.
-fn local_id(desktop_id: &str) -> String {
+pub(crate) fn local_id(desktop_id: &str) -> String {
     let stem = desktop_id.strip_suffix(".desktop").unwrap_or(desktop_id);
     let mut id: String = stem
         .to_lowercase()
@@ -1489,13 +1514,46 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
             package: "clock".into(),
         };
         assert_eq!(catalog_entry(&catalog, &rpm), Some(0));
+        // The same name in the other package format is another package.
         let deb = LocalSource::Deb {
             package: "clock".into(),
         };
-        assert_eq!(catalog_entry(&catalog, &deb), Some(0));
+        assert_eq!(catalog_entry(&catalog, &deb), None);
         let other = LocalSource::Rpm {
             package: "watch".into(),
         };
         assert_eq!(catalog_entry(&catalog, &other), None);
+    }
+
+    /// A desktop entry that starts through a shell, interpreter or launcher
+    /// does not belong to that program's package.
+    #[tokio::test]
+    async fn shared_launchers_have_no_package() {
+        let f = Fakes::new("local-shared-launcher");
+        f.set("rpm", "echo bash");
+        f.set("dpkg", "echo 'bash: /usr/bin/bash'");
+        for exec in [
+            "sh -c 'exec /opt/x/run'",
+            "/usr/bin/env FOO=1 bash -c x",
+            "python3 /opt/x/app.py",
+        ] {
+            let mut a = app(&[]);
+            a.exec = split_exec(exec);
+            let program = a.exec[0].clone();
+            assert_eq!(
+                resolve_source(&a, &f.programs).await,
+                LocalSource::Unknown { program },
+                "{exec}"
+            );
+        }
+        assert!(f.calls().is_empty(), "{:?}", f.calls());
+        // A Flatpak is still found by its id.
+        f.flatpak_with(&[Installation::User]);
+        let mut a = exec_app("/usr/bin/flatpak run org.x.App");
+        a.flatpak_id = Some("org.x.App".into());
+        assert!(matches!(
+            resolve_source(&a, &f.programs).await,
+            LocalSource::Flatpak { .. }
+        ));
     }
 }
