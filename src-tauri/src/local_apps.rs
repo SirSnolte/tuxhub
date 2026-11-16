@@ -226,7 +226,8 @@ fn is_env_assignment(a: &str) -> bool {
 
 /// Whether the start menu shows the app. `desktop` is the colon-separated
 /// `XDG_CURRENT_DESKTOP` (for example `KDE` or `ubuntu:GNOME`). Settings, system
-/// and console apps, Wine's own tools and help screens are hidden unless
+/// and console apps, Wine's own tools, help screens and game shortcuts of
+/// store clients are hidden unless
 /// `show_all`; `NoDisplay` apps, ones not
 /// meant for this desktop and tuxhub itself are always hidden.
 pub fn is_visible(app: &DesktopApp, desktop: &str, show_all: bool) -> bool {
@@ -272,7 +273,24 @@ pub fn is_visible(app: &DesktopApp, desktop: &str, show_all: bool) -> bool {
     // and welcome screens name no main category of their own.
     let main = APP_CATEGORIES.iter().any(|c| has(c));
     let side_tool = !main && (has("X-Wine") || has("Documentation"));
-    !(settings || system_only || side_tool || has("ConsoleOnly"))
+    !(settings || system_only || side_tool || has("ConsoleOnly") || is_game_shortcut(&app.exec))
+}
+
+/// Links a store client uses to start one of its games.
+const GAME_SHORTCUT_URLS: [&str; 4] = [
+    "steam://rungameid/",
+    "steam://run/",
+    "heroic://launch/",
+    "lutris:rungame",
+];
+
+/// Whether the entry is a game shortcut a store client (Steam, Heroic,
+/// Lutris) made: it starts the game through the client, so it is a game, not
+/// an app tuxhub could show or update.
+fn is_game_shortcut(exec: &[String]) -> bool {
+    exec.iter()
+        .skip(1)
+        .any(|a| GAME_SHORTCUT_URLS.iter().any(|u| a.starts_with(u)))
 }
 
 /// Main categories of the Desktop Menu spec an app is filed under, without
@@ -1016,6 +1034,32 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
         let mut a = app(&["Game"]);
         a.desktop_id = "io.github.sirsnolte.tuxhub.desktop".into();
         assert!(!is_visible(&a, "KDE", true));
+    }
+
+    #[test]
+    fn hides_game_shortcuts_of_store_clients() {
+        let shortcut = |exec: &[&str]| DesktopApp {
+            exec: exec.iter().map(|s| s.to_string()).collect(),
+            ..app(&["Game"])
+        };
+        for exec in [
+            &["steam", "steam://rungameid/620"][..],
+            &["xdg-open", "steam://rungameid/990080"],
+            &["xdg-open", "heroic://launch/legendary/Fortnite"],
+            &["lutris", "lutris:rungameid/12"],
+        ] {
+            let a = shortcut(exec);
+            assert!(!is_visible(&a, "KDE", false), "{exec:?}");
+            assert!(is_visible(&a, "KDE", true), "{exec:?}");
+        }
+        // The store clients themselves and games with their own program stay.
+        assert!(is_visible(&shortcut(&["steam", "%U"]), "KDE", false));
+        assert!(is_visible(&shortcut(&["/usr/bin/steam"]), "KDE", false));
+        assert!(is_visible(
+            &shortcut(&["/mnt/Games/reclaimer.sh"]),
+            "KDE",
+            false
+        ));
     }
 
     #[test]
