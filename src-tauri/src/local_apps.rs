@@ -2,6 +2,7 @@
 
 use crate::appstream::AppInfo;
 use crate::tools::{Entry, Installation, Programs, Source};
+use futures_util::StreamExt;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
@@ -537,9 +538,10 @@ pub fn autostart_matches(app: &DesktopApp, autostart_dir: &Path) -> bool {
     })
 }
 
-/// The catalog entry that stands for this app, found by Flatpak ID or package.
-fn catalog_entry<'a>(catalog: &'a [Entry], source: &LocalSource) -> Option<&'a Entry> {
-    catalog.iter().find(|e| match (&e.source, source) {
+/// Position of the catalog entry that stands for this app, found by Flatpak
+/// ID or package.
+fn catalog_entry(catalog: &[Entry], source: &LocalSource) -> Option<usize> {
+    catalog.iter().position(|e| match (&e.source, source) {
         (Source::Flatpak { flatpak_id, .. }, LocalSource::Flatpak { flatpak_id: id, .. }) => {
             flatpak_id == id
         }
@@ -547,6 +549,68 @@ fn catalog_entry<'a>(catalog: &'a [Entry], source: &LocalSource) -> Option<&'a E
         | (Source::SystemPackage { package, .. }, LocalSource::Deb { package: p }) => package == p,
         _ => false,
     })
+}
+
+/// Whether the desktop file is named after the Flatpak ID or package.
+fn named_after_source(app: &LocalApp) -> bool {
+    let id = app
+        .desktop_id
+        .strip_suffix(".desktop")
+        .unwrap_or(&app.desktop_id);
+    match &app.source {
+        LocalSource::Flatpak { flatpak_id, .. } => id == flatpak_id,
+        LocalSource::Rpm { package } | LocalSource::Deb { package } => id == package,
+        _ => false,
+    }
+}
+
+/// Gives apps the catalog knows (by Flatpak ID or package) the catalog's name,
+/// texts, icon and repo, keeping their `desktop_id`. A catalog app shows as one
+/// entry: when several desktop files belong to it, the one named after the
+/// Flatpak ID or package stays, otherwise the first by name. Sorted by name.
+fn apply_catalog(mut apps: Vec<LocalApp>, catalog: &[Entry]) -> Vec<LocalApp> {
+    let mut matched: Vec<Option<usize>> = Vec::with_capacity(apps.len());
+    for app in &mut apps {
+        let found = catalog_entry(catalog, &app.source);
+        if let Some(i) = found {
+            let e = &catalog[i];
+            app.name = e.name.clone();
+            if !e.description.is_empty() {
+                app.summary = Some(e.description.clone());
+            }
+            if e.icon.is_some() {
+                app.icon = e.icon.clone();
+            }
+            if e.repo.is_some() {
+                app.repo = e.repo.clone();
+            }
+            if e.homepage.is_some() {
+                app.homepage = e.homepage.clone();
+            }
+        }
+        matched.push(found);
+    }
+    let mut rows: Vec<(LocalApp, Option<usize>)> = apps.into_iter().zip(matched).collect();
+    rows.sort_by_cached_key(|(a, _)| (a.name.to_lowercase(), a.desktop_id.clone()));
+    let mut chosen: HashMap<usize, usize> = HashMap::new();
+    for (pos, (app, entry)) in rows.iter().enumerate() {
+        if let Some(entry) = *entry {
+            match chosen.get(&entry) {
+                None => {
+                    chosen.insert(entry, pos);
+                }
+                Some(&kept) if !named_after_source(&rows[kept].0) && named_after_source(app) => {
+                    chosen.insert(entry, pos);
+                }
+                Some(_) => {}
+            }
+        }
+    }
+    rows.into_iter()
+        .enumerate()
+        .filter(|(pos, (_, entry))| entry.is_none_or(|e| chosen.get(&e) == Some(pos)))
+        .map(|(_, (app, _))| app)
+        .collect()
 }
 
 async fn build_app(
@@ -584,6 +648,33 @@ async fn build_app(
     }
 }
 
+/// How many apps resolve their source at once: each needs a few short
+/// processes, and too many at once run into the timeout.
+const RESOLVE_CONCURRENCY: usize = 16;
+
+/// The apps of the start menu with their source, without the catalog.
+async fn scan_apps(
+    dirs: &[PathBuf],
+    desktop: &str,
+    autostart_dir: &Path,
+    index: &HashMap<String, AppInfo>,
+    programs: &Programs,
+    show_all: bool,
+) -> Vec<LocalApp> {
+    let visible: Vec<DesktopApp> = scan_dirs(dirs)
+        .into_iter()
+        .filter(|a| is_visible(a, desktop, show_all))
+        .collect();
+    futures_util::stream::iter(
+        visible
+            .into_iter()
+            .map(|a| build_app(a, autostart_dir, index, programs)),
+    )
+    .buffered(RESOLVE_CONCURRENCY)
+    .collect()
+    .await
+}
+
 async fn list_in(
     dirs: &[PathBuf],
     desktop: &str,
@@ -593,53 +684,29 @@ async fn list_in(
     catalog: &[Entry],
     show_all: bool,
 ) -> Vec<LocalApp> {
-    let visible: Vec<DesktopApp> = scan_dirs(dirs)
-        .into_iter()
-        .filter(|a| is_visible(a, desktop, show_all))
-        .collect();
-    let mut apps = futures_util::future::join_all(
-        visible
-            .into_iter()
-            .map(|a| build_app(a, autostart_dir, index, programs)),
-    )
-    .await;
-    for app in &mut apps {
-        if let Some(e) = catalog_entry(catalog, &app.source) {
-            app.name = e.name.clone();
-            if !e.description.is_empty() {
-                app.summary = Some(e.description.clone());
-            }
-            if e.icon.is_some() {
-                app.icon = e.icon.clone();
-            }
-            if e.repo.is_some() {
-                app.repo = e.repo.clone();
-            }
-            if e.homepage.is_some() {
-                app.homepage = e.homepage.clone();
-            }
-        }
-    }
-    apps.sort_by_cached_key(|a| a.name.to_lowercase());
-    apps
+    let apps = scan_apps(dirs, desktop, autostart_dir, index, programs, show_all).await;
+    apply_catalog(apps, catalog)
+}
+
+fn current_desktop() -> String {
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    desktop.split(':').next().unwrap_or("").to_string()
 }
 
 /// Every app of the start menu with its source, sorted by name. Apps the
 /// catalog knows (by Flatpak ID or package) take their texts, icon and repo
-/// from the catalog; their `desktop_id` stays.
+/// from the catalog and show once; their `desktop_id` stays.
 pub async fn list(programs: &Programs, catalog: &[Entry], show_all: bool) -> Vec<LocalApp> {
-    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-    let desktop = desktop.split(':').next().unwrap_or("");
-    list_in(
+    let apps = scan_apps(
         &application_dirs(),
-        desktop,
+        &current_desktop(),
         &autostart_dir(),
         &crate::appstream::load_index(),
         programs,
-        catalog,
         show_all,
     )
-    .await
+    .await;
+    apply_catalog(apps, catalog)
 }
 
 fn autostart_dir() -> PathBuf {
@@ -660,15 +727,38 @@ fn newest_mtime(dirs: &[PathBuf]) -> SystemTime {
         .unwrap_or(SystemTime::UNIX_EPOCH)
 }
 
-/// Like [`list`], but keeps the result in `cache` until an application folder
-/// changes (or `show_all` does). The catalog texts are applied on every call.
+/// Like [`list`], but keeps the scanned apps in `cache` until an application
+/// folder changes (or `show_all` does). The catalog is not part of the cache:
+/// it is applied on every call.
 pub async fn list_cached(
     cache: &std::sync::Mutex<Cache>,
     programs: &Programs,
     catalog: &[Entry],
     show_all: bool,
 ) -> Vec<LocalApp> {
-    let stamp = newest_mtime(&application_dirs());
+    let apps = cached_apps(
+        cache,
+        &application_dirs(),
+        &current_desktop(),
+        &autostart_dir(),
+        &crate::appstream::load_index,
+        programs,
+        show_all,
+    )
+    .await;
+    apply_catalog(apps, catalog)
+}
+
+async fn cached_apps(
+    cache: &std::sync::Mutex<Cache>,
+    dirs: &[PathBuf],
+    desktop: &str,
+    autostart_dir: &Path,
+    load_index: &dyn Fn() -> HashMap<String, AppInfo>,
+    programs: &Programs,
+    show_all: bool,
+) -> Vec<LocalApp> {
+    let stamp = newest_mtime(dirs);
     if let Ok(guard) = cache.lock()
         && let Some((t, all, apps)) = guard.as_ref()
         && *t == stamp
@@ -676,7 +766,15 @@ pub async fn list_cached(
     {
         return apps.clone();
     }
-    let apps = list(programs, catalog, show_all).await;
+    let apps = scan_apps(
+        dirs,
+        desktop,
+        autostart_dir,
+        &load_index(),
+        programs,
+        show_all,
+    )
+    .await;
     if let Ok(mut guard) = cache.lock() {
         *guard = Some((stamp, show_all, apps.clone()));
     }
@@ -1018,5 +1116,149 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
         .unwrap();
         assert!(scan_dirs(&[d1, d2]).is_empty());
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn desktop_file(dir: &Path, file: &str, name: &str, exec: &str) {
+        std::fs::write(
+            dir.join(file),
+            format!("[Desktop Entry]\nType=Application\nName={name}\nExec={exec}\n"),
+        )
+        .unwrap();
+    }
+
+    fn set_mtime(dir: &Path, secs: u64) {
+        std::fs::File::open(dir)
+            .unwrap()
+            .set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn cache_keeps_scan_until_folder_changes_and_catalog_stays_fresh() {
+        let f = Fakes::new("local-cache");
+        let dir = f.dir.join("apps");
+        std::fs::create_dir_all(&dir).unwrap();
+        desktop_file(&dir, "a.desktop", "Alpha", "a");
+        set_mtime(&dir, 1000);
+        let dirs = [dir.clone()];
+        let cache = std::sync::Mutex::new(None);
+        let none = f.dir.join("none");
+        let scan = || {
+            cached_apps(
+                &cache,
+                &dirs,
+                "KDE",
+                &none,
+                &HashMap::new,
+                &f.programs,
+                true,
+            )
+        };
+        let first = scan().await;
+        assert_eq!(first.len(), 1);
+
+        // A new file without a changed folder time is not seen: the cache hit.
+        desktop_file(&dir, "b.desktop", "Beta", "b");
+        set_mtime(&dir, 1000);
+        assert_eq!(scan().await.len(), 1);
+        // A changed folder time scans again.
+        set_mtime(&dir, 2000);
+        assert_eq!(scan().await.len(), 2);
+
+        // The catalog applies to the cached scan on every call.
+        let flatpak_dir = f.dir.join("fp");
+        std::fs::create_dir_all(&flatpak_dir).unwrap();
+        std::fs::write(flatpak_dir.join("sc.desktop"), FLATPAK).unwrap();
+        f.flatpak_with(&[Installation::User]);
+        let dirs = [flatpak_dir];
+        let cache = std::sync::Mutex::new(None);
+        let scan = || {
+            cached_apps(
+                &cache,
+                &dirs,
+                "KDE",
+                &none,
+                &HashMap::new,
+                &f.programs,
+                true,
+            )
+        };
+        let apps = scan().await;
+        assert_eq!(apply_catalog(apps, &[])[0].name, "StreamController");
+        let catalog = [entry(
+            r#"{"id":"sc","name":"Deck","source":{"type":"flatpak","flatpak_id":"com.core447.StreamController"}}"#,
+        )];
+        let apps = scan().await;
+        assert_eq!(apply_catalog(apps, &catalog)[0].name, "Deck");
+    }
+
+    #[tokio::test]
+    async fn catalog_app_shows_once() {
+        let f = Fakes::new("local-catalog-once");
+        f.set("rpm", "echo foo");
+        let dir = f.dir.join("apps");
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = program_file(&f, "foo");
+        desktop_file(&dir, "a-helper.desktop", "Foo Helper", &exe);
+        desktop_file(&dir, "foo.desktop", "Foo", &exe);
+        desktop_file(&dir, "z-other.desktop", "Foo Other", &exe);
+        let catalog = [entry(
+            r#"{"id":"foo","name":"Foo App","source":{"type":"system-package","package":"foo","command":"/usr/bin/foo"}}"#,
+        )];
+        let apps = list_in(
+            std::slice::from_ref(&dir),
+            "KDE",
+            &f.dir.join("none"),
+            &HashMap::new(),
+            &f.programs,
+            &catalog,
+            true,
+        )
+        .await;
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].desktop_id, "foo.desktop");
+        assert_eq!(apps[0].name, "Foo App");
+
+        // Without a file named after the package, the first by name stays.
+        std::fs::remove_file(dir.join("foo.desktop")).unwrap();
+        let apps = list_in(
+            &[dir],
+            "KDE",
+            &f.dir.join("none"),
+            &HashMap::new(),
+            &f.programs,
+            &catalog,
+            true,
+        )
+        .await;
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].desktop_id, "a-helper.desktop");
+    }
+
+    #[tokio::test]
+    async fn many_apps_resolve_with_bounded_concurrency() {
+        let f = Fakes::new("local-bounded");
+        f.set("rpm", "echo pkg");
+        let dir = f.dir.join("apps");
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = program_file(&f, "p");
+        for i in 0..60 {
+            desktop_file(&dir, &format!("app{i}.desktop"), &format!("App {i}"), &exe);
+        }
+        let apps = list_in(
+            &[dir],
+            "KDE",
+            &f.dir.join("none"),
+            &HashMap::new(),
+            &f.programs,
+            &[],
+            true,
+        )
+        .await;
+        assert_eq!(apps.len(), 60);
+        assert!(apps.iter().all(|a| a.source
+            == LocalSource::Rpm {
+                package: "pkg".into()
+            }));
     }
 }
