@@ -4,6 +4,14 @@ All notable changes to tuxhub are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- The hint above the generic settings page of an application without its own
+  menu support no longer asks to update it, since no such version may exist
+  yet; it says that the full menu comes with a newer version.
+
 ## [0.9.0] - 2026-11-16
 
 ### Added
