@@ -19,6 +19,7 @@
   import SettingsForm from "./SettingsForm.svelte";
   import WebPanel from "./WebPanel.svelte";
   import EmbedPanel from "./EmbedPanel.svelte";
+  import { needsRestartDialog } from "./installed-apps";
   import LaunchPanel from "./LaunchPanel.svelte";
   import LivePanel from "./LivePanel.svelte";
   import { asksHowToRemove, installHint, needsPassword } from "./install-state";
@@ -134,7 +135,10 @@
   /** Starts the app inside tuxhub, in this page when it shows the app. */
   export async function startInHub() {
     if (embedPanel) await embedPanel.startInHub();
-    else await api.embedStart(id);
+    else
+      await api.embedStart(id, false).catch((e) => {
+        throw needsRestartDialog(e) ? t("embed.runningOutside.title", { name: tool.entry.name }) : e;
+      });
   }
 
   /** The question before quitting a running app for an update. */
@@ -389,6 +393,10 @@
         </div>
       </div>
     </wa-callout>
+  {/if}
+
+  {#if tool.autostart}
+    <p class="small muted">{t("tool.autostartNote")}</p>
   {/if}
 
   {#if m.notice && dismissedNotice !== m.notice}

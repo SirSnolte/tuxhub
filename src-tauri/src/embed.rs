@@ -7,9 +7,10 @@
 //! virtual display, and a watcher maximizes the main window so it fills the
 //! available area. All sessions listen on 127.0.0.1 only.
 
-use crate::{Hub, tools};
+use crate::{Hub, RunState, tools};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -19,6 +20,14 @@ use tokio::sync::Mutex;
 
 const WATCHER: &str = include_str!("xpra_watch.py");
 const PORTALS_CONF: &str = "[preferred]\ndefault=gtk\n";
+
+/// Error of [`start`] when the app already runs outside tuxhub. The app's
+/// own D-Bus in the session hides that instance, so it would start twice.
+pub const RUNNING_OUTSIDE: &str = "running-outside";
+/// How long a restart waits for the app to quit.
+pub const STOP_WAIT: Duration = Duration::from_secs(10);
+/// How often a restart asks whether the app has quit.
+pub const STOP_POLL: Duration = Duration::from_millis(250);
 
 struct Session {
     display: u32,
@@ -142,10 +151,83 @@ fn url(port: u16) -> String {
     )
 }
 
-pub async fn start<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<EmbedInfo, String> {
+/// Shows the app inside tuxhub, in its running session or a new one. An app
+/// that already runs outside tuxhub (`probe` says [`RunState::Own`]) is not
+/// started a second time: without `restart` this fails with
+/// [`RUNNING_OUTSIDE`]; with it, the app is quit first (`quit`) and started
+/// once it has stopped.
+pub async fn start<R, P, PF, Q, QF>(
+    app: &AppHandle<R>,
+    id: &str,
+    name: &str,
+    restart: bool,
+    probe: P,
+    quit: Q,
+) -> Result<EmbedInfo, String>
+where
+    R: Runtime,
+    P: FnMut() -> PF,
+    PF: Future<Output = RunState>,
+    Q: FnOnce() -> QF,
+    QF: Future<Output = Result<(), String>>,
+{
     if let Some(dep) = missing() {
         return Err(format!("{dep} is not installed"));
     }
+    if let Some(info) = status(app, id).await {
+        return Ok(info);
+    }
+    guarded(
+        name,
+        restart,
+        probe,
+        quit,
+        || open(app, id),
+        STOP_WAIT,
+        STOP_POLL,
+    )
+    .await
+}
+
+/// Runs `launch` unless the app runs outside tuxhub: then it fails with
+/// [`RUNNING_OUTSIDE`], or with `restart` quits the app and waits up to
+/// `timeout` until `probe` says it has stopped. A state that cannot be found
+/// out (a shared launcher) starts as before.
+async fn guarded<P, PF, Q, QF, L, LF, T>(
+    name: &str,
+    restart: bool,
+    mut probe: P,
+    quit: Q,
+    launch: L,
+    timeout: Duration,
+    poll: Duration,
+) -> Result<T, String>
+where
+    P: FnMut() -> PF,
+    PF: Future<Output = RunState>,
+    Q: FnOnce() -> QF,
+    QF: Future<Output = Result<(), String>>,
+    L: FnOnce() -> LF,
+    LF: Future<Output = Result<T, String>>,
+{
+    if probe().await == RunState::Own {
+        if !restart {
+            return Err(RUNNING_OUTSIDE.into());
+        }
+        quit().await?;
+        let deadline = tokio::time::Instant::now() + timeout;
+        while probe().await != RunState::Stopped {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(format!("{name} did not quit in time"));
+            }
+            tokio::time::sleep(poll).await;
+        }
+    }
+    launch().await
+}
+
+/// Starts a new session for the app, or returns the running one.
+async fn open<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<EmbedInfo, String> {
     let hub = app.state::<Hub>();
     let mut sessions = hub.embeds.0.lock().await;
     if let Some(s) = sessions.get_mut(id) {
@@ -416,9 +498,16 @@ mod tests {
         assert!(root.exists());
         app.manage(crate::Hub::for_test(tools_dir, base.join("settings")));
 
-        let info = start(app.handle(), "gif-color-changer")
-            .await
-            .expect("session starts");
+        let info = start(
+            app.handle(),
+            "gif-color-changer",
+            "GIF Color Changer",
+            false,
+            || async { RunState::Stopped },
+            || async { Ok(()) },
+        )
+        .await
+        .expect("session starts");
         println!("URL: {}", info.url);
         assert!(
             info.url
@@ -448,6 +537,90 @@ mod tests {
         stop(app.handle(), "gif-color-changer").await;
         assert!(status(app.handle(), "gif-color-changer").await.is_none());
         std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// Calls of the fakes, in order.
+    type Calls = std::sync::Mutex<Vec<&'static str>>;
+
+    const FAST: Duration = Duration::from_millis(5);
+
+    /// Runs the check before a session with fakes: `states` are the answers
+    /// of the run state probe in turn (the last one repeats), `quit` the
+    /// result of quitting. Quitting moves the probe to its next answer.
+    async fn guarded_with(
+        restart: bool,
+        states: &[RunState],
+        quit: Result<(), String>,
+        calls: &Calls,
+    ) -> Result<u16, String> {
+        let next = std::sync::Mutex::new(0usize);
+        let next = &next;
+        guarded(
+            "Demo",
+            restart,
+            move || async move {
+                let i = *next.lock().unwrap();
+                states[i.min(states.len() - 1)]
+            },
+            move || async move {
+                calls.lock().unwrap().push("quit");
+                *next.lock().unwrap() += 1;
+                quit
+            },
+            move || async move {
+                calls.lock().unwrap().push("xpra");
+                Ok(4000)
+            },
+            FAST * 4,
+            FAST,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn embed_refuses_when_running_outside() {
+        let calls = Calls::default();
+        let out = guarded_with(false, &[RunState::Own], Ok(()), &calls).await;
+        assert_eq!(out, Err(RUNNING_OUTSIDE.to_string()));
+        assert!(calls.lock().unwrap().is_empty(), "no session, nothing quit");
+    }
+
+    #[tokio::test]
+    async fn embed_restart_quits_first() {
+        let calls = Calls::default();
+        let out = guarded_with(true, &[RunState::Own, RunState::Stopped], Ok(()), &calls).await;
+        assert_eq!(out, Ok(4000));
+        assert_eq!(*calls.lock().unwrap(), ["quit", "xpra"]);
+    }
+
+    #[tokio::test]
+    async fn embed_starts_a_stopped_or_unknown_app_as_before() {
+        for state in [RunState::Stopped, RunState::Unknown] {
+            for restart in [false, true] {
+                let calls = Calls::default();
+                let out = guarded_with(restart, &[state], Ok(()), &calls).await;
+                assert_eq!(out, Ok(4000), "{state:?}");
+                assert_eq!(*calls.lock().unwrap(), ["xpra"], "{state:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn embed_starts_nothing_when_quitting_fails() {
+        let calls = Calls::default();
+        let out = guarded_with(true, &[RunState::Own], Err("refused".into()), &calls).await;
+        assert_eq!(out, Err("refused".to_string()));
+        assert_eq!(*calls.lock().unwrap(), ["quit"]);
+    }
+
+    #[tokio::test]
+    async fn embed_starts_nothing_when_the_app_keeps_running() {
+        for after in [RunState::Own, RunState::Unknown] {
+            let calls = Calls::default();
+            let out = guarded_with(true, &[RunState::Own, after], Ok(()), &calls).await;
+            assert_eq!(out, Err("Demo did not quit in time".to_string()));
+            assert_eq!(*calls.lock().unwrap(), ["quit"]);
+        }
     }
 
     #[test]

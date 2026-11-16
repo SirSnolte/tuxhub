@@ -56,6 +56,8 @@ pub struct Hub {
     /// Installed apps found on this PC, with the newest application folder
     /// time and the `show_all` setting they were built for.
     local_apps: std::sync::Mutex<local_apps::Cache>,
+    /// The folder of the entries the desktop starts at login.
+    autostart_dir: PathBuf,
 }
 
 impl Hub {
@@ -63,6 +65,7 @@ impl Hub {
     pub(crate) fn for_test(tools_dir: PathBuf, settings_dir: PathBuf) -> Self {
         Self {
             hub_settings_path: settings_dir.join("hub.json"),
+            autostart_dir: settings_dir.join("autostart"),
             tools_dir,
             settings_dir,
             runtime: native::Runtime::default(),
@@ -771,6 +774,8 @@ struct ToolView {
     integration: tools::Integration,
     /// Where an embedded app runs when it is started.
     window: tools::WindowMode,
+    /// The app was on this computer before and starts at login.
+    autostart: bool,
 }
 
 #[tauri::command]
@@ -800,6 +805,7 @@ async fn tool_views(hub: &Hub) -> Vec<ToolView> {
             can_launch: can_launch(&inst, &manifest),
             integration: tools::integration_of(&manifest),
             window: inst.window,
+            autostart: inst.adopted && starts_at_login(&inst, &hub.autostart_dir),
             path: inst
                 .root_dir(&hub.tools_dir)
                 .map(|p| p.to_string_lossy().into_owned()),
@@ -809,6 +815,20 @@ async fn tool_views(hub: &Hub) -> Vec<ToolView> {
         });
     }
     out
+}
+
+/// Whether an autostart entry starts the app: found by its Flatpak ID, or
+/// by the program of its start command.
+fn starts_at_login(inst: &Installed, autostart_dir: &Path) -> bool {
+    match &inst.entry.source {
+        Source::Flatpak { flatpak_id, .. } => {
+            local_apps::autostart_starts(Some(flatpak_id), None, autostart_dir)
+        }
+        Source::DistroPackage { command, .. } | Source::Launcher { command, .. } => {
+            local_apps::autostart_starts(None, command.first().map(String::as_str), autostart_dir)
+        }
+        _ => false,
+    }
 }
 
 /// Whether tuxhub can start the tool as an application.
@@ -986,8 +1006,13 @@ async fn tool_app_running(app: AppHandle, id: String) -> Result<bool, String> {
 async fn tool_quit(app: AppHandle, id: String) -> Result<(), String> {
     let hub = app.state::<Hub>();
     let inst = tools::load(&hub.tools_dir, &id)?;
-    can_quit(&hub, &inst)?;
-    quit_running(&hub, &inst, QUIT_WAIT).await
+    quit_tool(&hub, &inst).await
+}
+
+/// Quits the app when tuxhub knows how ([`can_quit`]).
+async fn quit_tool(hub: &Hub, inst: &Installed) -> Result<(), String> {
+    can_quit(hub, inst)?;
+    quit_running(hub, inst, QUIT_WAIT).await
 }
 
 /// Whether tuxhub knows how to quit the app: by its live interface, its own
@@ -1317,9 +1342,26 @@ fn embed_missing() -> Option<String> {
     embed::missing()
 }
 
+/// Shows the app inside tuxhub. An app that runs outside tuxhub fails with
+/// [`embed::RUNNING_OUTSIDE`]; with `restart` (the user's yes) it is quit
+/// first and started here.
 #[tauri::command]
-async fn embed_start(app: AppHandle, id: String) -> Result<embed::EmbedInfo, String> {
-    embed::start(&app, &id).await
+async fn embed_start(
+    app: AppHandle,
+    id: String,
+    restart: bool,
+) -> Result<embed::EmbedInfo, String> {
+    let hub = app.state::<Hub>();
+    let inst = tools::load(&hub.tools_dir, &id)?;
+    embed::start(
+        &app,
+        &id,
+        &inst.entry.name,
+        restart,
+        || run_state(&hub, false, &inst),
+        || quit_tool(&hub, &inst),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1501,6 +1543,7 @@ pub fn run() {
                 live_starts: Default::default(),
                 programs: Default::default(),
                 local_apps: Default::default(),
+                autostart_dir: local_apps::autostart_dir(),
             });
 
             if let Err(e) = system::setup_tray(app.handle()) {
@@ -3003,6 +3046,54 @@ while True:
         let view = views.iter().find(|v| v.entry.id == "demo").unwrap();
         assert_eq!(view.integration, tools::Integration::Embedded);
         assert_eq!(view.window, tools::WindowMode::Own);
+    }
+
+    /// An adopted app that starts at login is marked, found by its Flatpak
+    /// ID or its program; an app tuxhub installed is not.
+    #[tokio::test]
+    async fn tool_view_tells_autostart() {
+        let (hub, f) = hub_with_fakes("tool-view-autostart");
+        f.flatpak_with(&[tools::Installation::User]);
+        std::fs::create_dir_all(&hub.autostart_dir).unwrap();
+        std::fs::write(
+            hub.autostart_dir.join("a.desktop"),
+            "[Desktop Entry]\nType=Application\nName=A\nExec=flatpak run net.example.demo\nX-Flatpak=net.example.demo\n",
+        )
+        .unwrap();
+        std::fs::write(
+            hub.autostart_dir.join("b.desktop"),
+            "[Desktop Entry]\nType=Application\nName=B\nExec=/usr/bin/launched --background\n",
+        )
+        .unwrap();
+        let mut demo = Installed::new(flatpak_app("demo"));
+        demo.adopted = true;
+        record(&hub, &demo);
+        let mut own = Installed::new(flatpak_app("own"));
+        own.adopted = true;
+        record(&hub, &own);
+        let installed = Installed::new(workshop_entry(
+            "installed",
+            json!({ "type": "flatpak", "flatpak_id": "net.example.demo" }),
+        ));
+        record(&hub, &installed);
+        for (id, program) in [
+            ("launched", "/usr/bin/launched"),
+            ("other", "/usr/bin/other"),
+        ] {
+            let mut inst = Installed::new(workshop_entry(
+                id,
+                json!({ "type": "launcher", "desktop_id": format!("{id}.desktop"), "command": [program] }),
+            ));
+            inst.adopted = true;
+            record(&hub, &inst);
+        }
+        let views = tool_views(&hub).await;
+        let autostart = |id: &str| views.iter().find(|v| v.entry.id == id).unwrap().autostart;
+        assert!(autostart("demo"));
+        assert!(!autostart("own"));
+        assert!(!autostart("installed"));
+        assert!(autostart("launched"));
+        assert!(!autostart("other"));
     }
 
     /// Edge case 9: an app in the hub that the user runs in its own window

@@ -88,6 +88,8 @@ export type Tool = {
   integration: Integration;
   /** Where an embedded app runs when it is started. */
   window: WindowMode;
+  /** The app was on this computer before and starts at login. */
+  autostart: boolean;
 };
 
 export type WindowMode = "hub" | "own";
@@ -260,7 +262,9 @@ export const api = {
   webStatus: (id: string) => invoke<boolean>("tool_web_status", { id }),
   webWindow: (id: string) => invoke<void>("tool_web_window", { id }),
   embedMissing: () => invoke<string | null>("embed_missing"),
-  embedStart: (id: string) => invoke<{ url: string }>("embed_start", { id }),
+  /** Fails with `running-outside` when the app runs outside tuxhub;
+   * `restart` closes it first. */
+  embedStart: (id: string, restart = false) => invoke<{ url: string }>("embed_start", { id, restart }),
   embedStatus: (id: string) => invoke<{ url: string } | null>("embed_status", { id }),
   embedStop: (id: string) => invoke<void>("embed_stop", { id }),
   liveStatus: (id: string, locale: string) => invoke<LiveStatus>("live_status", { id, locale }),

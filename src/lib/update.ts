@@ -37,7 +37,7 @@ export async function installAndRestart(
   const where = restartTarget(outcome.state);
   if (where === "hub") {
     if (startInHub) await startInHub();
-    else await api.embedStart(id);
+    else await api.embedStart(id, false);
   } else if (where === "own") {
     await api.launch(id);
   }

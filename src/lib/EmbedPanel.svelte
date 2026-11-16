@@ -7,6 +7,7 @@
   import { api, describe, errText, type Tool, type WindowMode } from "./api";
   import { toast } from "./state.svelte";
   import { canToggleWindow } from "./apps/integration";
+  import { needsRestartDialog } from "./installed-apps";
   import { valueOf } from "./wa";
 
   let {
@@ -54,6 +55,9 @@
   /** The mode the user switches to while the app runs in the other one. */
   let switching = $state<WindowMode | null>(null);
   let switchBusy = $state(false);
+  /** The app already runs outside tuxhub: ask to close it and start it here. */
+  let outside = $state(false);
+  let outsideBusy = $state(false);
 
   /** Where the app runs right now, or null when it does not run. An app
    * whose state is unknown counts as running in its own window, so the
@@ -254,13 +258,35 @@
     }
   }
 
-  /** Starts the app inside tuxhub and shows it; throws when that fails. */
-  export async function startInHub() {
+  /** Starts the app inside tuxhub and shows it; throws when that fails.
+   * An app that already runs outside tuxhub is not started a second time:
+   * the user is asked to close it first (`restart`). */
+  export async function startInHub(restart = false) {
     starting = true;
     try {
-      attach((await api.embedStart(id)).url);
+      attach((await api.embedStart(id, restart)).url);
+    } catch (e) {
+      if (!restart && needsRestartDialog(e)) {
+        outside = true;
+        return;
+      }
+      throw e;
     } finally {
       starting = false;
+    }
+  }
+
+  /** Closes the app running outside tuxhub and starts it here. */
+  async function confirmOutside() {
+    outsideBusy = true;
+    try {
+      await startInHub(true);
+    } catch (e) {
+      toast(errText(e));
+    } finally {
+      outside = false;
+      outsideBusy = false;
+      onchanged?.();
     }
   }
 
@@ -406,6 +432,27 @@
   <div slot="footer" class="dialog-buttons">
     <wa-button appearance="outlined" disabled={switchBusy} onclick={cancelSwitch}>{t("common.cancel")}</wa-button>
     <wa-button variant="brand" loading={switchBusy} onclick={confirmSwitch}>{t("embed.switch")}</wa-button>
+  </div>
+</wa-dialog>
+
+<wa-dialog
+  label={t("embed.runningOutside.title", { name: tool.entry.name })}
+  open={outside}
+  onwa-after-hide={(e: Event) => {
+    if (e.target === e.currentTarget && !outsideBusy) outside = false;
+  }}
+>
+  <p>{t("embed.runningOutside.body", { name: tool.entry.name })}</p>
+  {#if tool.autostart}
+    <wa-callout variant="warning">{t("embed.runningOutside.autostartHint", { name: tool.entry.name })}</wa-callout>
+  {/if}
+  <div slot="footer" class="dialog-buttons">
+    <wa-button appearance="outlined" disabled={outsideBusy} onclick={() => (outside = false)}>
+      {t("embed.runningOutside.cancel")}
+    </wa-button>
+    <wa-button variant="brand" loading={outsideBusy} onclick={confirmOutside}>
+      {t("embed.runningOutside.confirm")}
+    </wa-button>
   </div>
 </wa-dialog>
 

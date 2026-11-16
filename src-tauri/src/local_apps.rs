@@ -523,6 +523,20 @@ async fn deb_owner(programs: &Programs, file: &Path) -> Option<String> {
 /// Whether an autostart entry of `autostart_dir` starts this app: the same
 /// Flatpak, or (for non-Flatpak apps) the same program.
 pub fn autostart_matches(app: &DesktopApp, autostart_dir: &Path) -> bool {
+    autostart_starts(
+        app.flatpak_id.as_deref(),
+        app.exec.first().map(String::as_str),
+        autostart_dir,
+    )
+}
+
+/// Whether an autostart entry of `autostart_dir` starts the Flatpak with
+/// this ID or, without one, this program.
+pub fn autostart_starts(
+    flatpak_id: Option<&str>,
+    program: Option<&str>,
+    autostart_dir: &Path,
+) -> bool {
     let Ok(rd) = std::fs::read_dir(autostart_dir) else {
         return false;
     };
@@ -537,11 +551,13 @@ pub fn autostart_matches(app: &DesktopApp, autostart_dir: &Path) -> bool {
         let Some(other) = parse_desktop(&text, "autostart.desktop", &path) else {
             return false;
         };
-        match (&app.flatpak_id, &other.flatpak_id) {
+        match (flatpak_id, &other.flatpak_id) {
             (Some(a), Some(b)) => a == b,
             // Every Flatpak starts with `flatpak run`: the program says nothing.
             (Some(_), None) | (None, Some(_)) => false,
-            (None, None) => !app.exec.is_empty() && app.exec.first() == other.exec.first(),
+            (None, None) => {
+                program.is_some_and(|p| other.exec.first().map(String::as_str) == Some(p))
+            }
         }
     })
 }
@@ -804,7 +820,7 @@ fn current_desktop() -> String {
     desktop.split(':').next().unwrap_or("").to_string()
 }
 
-fn autostart_dir() -> PathBuf {
+pub fn autostart_dir() -> PathBuf {
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     env("XDG_CONFIG_HOME")
         .map(PathBuf::from)
