@@ -546,10 +546,19 @@ async fn install_entry<R: tauri::Runtime>(
         _ => {}
     }
     let inst = tools::install(app, &hub.tools_dir, &hub.programs, entry).await?;
-    let inst = carry_over(previous.as_ref(), found.package, inst);
-    if inst.adopted {
-        tools::save(&hub.tools_dir, &inst)?;
-    }
+    record_after_install(hub, previous.as_ref(), found.package, inst)
+}
+
+/// Stores the record of a new installation with what it keeps from the
+/// previous one (see [`carry_over`]).
+fn record_after_install(
+    hub: &Hub,
+    previous: Option<&Installed>,
+    present: bool,
+    inst: Installed,
+) -> Result<Installed, String> {
+    let inst = carry_over(previous, present, inst);
+    tools::save(&hub.tools_dir, &inst)?;
     Ok(inst)
 }
 
@@ -2735,5 +2744,24 @@ while True:
             );
             assert!(steps.lock().unwrap().is_empty(), "{before:?}");
         }
+    }
+
+    /// An update of a downloaded app keeps "Own window" in its record.
+    #[test]
+    fn an_update_stores_the_kept_window() {
+        let (hub, _f) = hub_with_fakes("update-stores-window");
+        let release = workshop_entry("demo", json!({ "type": "github-release", "asset": "*" }));
+        let mut previous = Installed::new(release.clone());
+        previous.window = tools::WindowMode::Own;
+        previous.version = Some("v1".into());
+        // What tools::install leaves behind: a fresh record of the new version.
+        let mut fresh = Installed::new(release);
+        fresh.version = Some("v2".into());
+        record(&hub, &fresh);
+        let inst = record_after_install(&hub, Some(&previous), false, fresh).unwrap();
+        assert_eq!(inst.window, tools::WindowMode::Own);
+        let saved = recorded(&hub, "demo").unwrap();
+        assert_eq!(saved.window, tools::WindowMode::Own);
+        assert_eq!(saved.version.as_deref(), Some("v2"));
     }
 }
