@@ -53,6 +53,7 @@
     source.type === "github-release" ||
       source.type === "system-package" ||
       source.type === "flatpak" ||
+      source.type === "distro-package" ||
       (ownedExternal && source.type === "external" && !!source.asset && !!tool.entry.repo),
   );
   const removable = $derived(source.type !== "external" || (ownedExternal && !!m.uninstall));

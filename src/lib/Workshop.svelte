@@ -9,7 +9,7 @@
   import InstalledApps from "./InstalledApps.svelte";
   import { integrationInfo } from "./apps/integration";
   import { installAndRestart } from "./update";
-  import { workshopAction } from "./install-state";
+  import { markInSidebar, workshopAction } from "./install-state";
   import { valueOf } from "./wa";
 
   let {
@@ -28,6 +28,14 @@
   let tab = $state<"catalog" | "installed">("catalog");
   /** How many installed apps are loaded; null until they are. */
   let installedCount = $state<number | null>(null);
+  let installedApps = $state<InstalledApps>();
+
+  /** The installed tab changed the sidebar: the catalog follows without loading again. */
+  function onsidebar(toolId: string, inSidebar: boolean) {
+    if (!data) return;
+    data = { ...data, entries: markInSidebar(data.entries, toolId, inSidebar) };
+    if (selected) selected = data.entries.find((e) => e.entry.id === selected!.entry.id) ?? null;
+  }
 
   function ontabshow(e: Event) {
     if (e.target !== e.currentTarget) return;
@@ -68,6 +76,7 @@
       await installAndRestart(item.entry.id, false);
       toast(t("workshop.installedToast", { name: item.entry.name }), "info");
       await load();
+      await installedApps?.reload();
       onchanged();
     } catch (e) {
       toast(`${item.entry.name}: ${errText(e)}`);
@@ -83,6 +92,7 @@
       await api.adopt(item.entry.id);
       toast(t("workshop.adoptedToast", { name: item.entry.name }), "info");
       await load();
+      await installedApps?.reload();
       onchanged();
     } catch (e) {
       toast(`${item.entry.name}: ${errText(e)}`);
@@ -272,7 +282,15 @@
     </wa-tab-panel>
 
     <wa-tab-panel name="installed">
-      <InstalledApps {query} {tools} {onopen} {onchanged} bind:count={installedCount} />
+      <InstalledApps
+        bind:this={installedApps}
+        {query}
+        {tools}
+        {onopen}
+        {onchanged}
+        {onsidebar}
+        bind:count={installedCount}
+      />
     </wa-tab-panel>
   </wa-tab-group>
 </div>

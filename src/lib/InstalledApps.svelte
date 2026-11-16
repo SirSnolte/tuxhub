@@ -11,7 +11,7 @@
   import IntegrationTag from "./IntegrationTag.svelte";
   import { canToggleWindow } from "./apps/integration";
   import { canUpdate, filterApps, sourceLabelKey } from "./installed-apps";
-  import { updateApp } from "./update";
+  import { runStateOf, updateApp } from "./update";
   import { checkedOf, valueOf } from "./wa";
 
   let {
@@ -19,6 +19,7 @@
     tools,
     onopen,
     onchanged,
+    onsidebar,
     count = $bindable(null),
   }: {
     /** The workshop's search; it always covers every loaded app. */
@@ -27,6 +28,8 @@
     tools: Tool[];
     onopen: (id: string) => void;
     onchanged: () => void;
+    /** An app was added to the sidebar (`true`) or removed from it. */
+    onsidebar: (toolId: string, inSidebar: boolean) => void;
     /** How many apps are loaded, for the tab's label. */
     count?: number | null;
   } = $props();
@@ -39,6 +42,11 @@
   let busy = $state<string | null>(null);
   /** The desktop file id of the app the detail dialog shows. */
   let selectedId = $state<string | null>(null);
+
+  /** Reads the list again, after a change elsewhere in the workshop. */
+  export function reload() {
+    return load();
+  }
 
   async function load() {
     error = "";
@@ -67,10 +75,11 @@
     busy = view.app.desktop_id;
     try {
       if (on) {
-        await api.localAppAdd(view.app.desktop_id);
+        onsidebar(await api.localAppAdd(view.app.desktop_id), true);
         toast(t("workshop.adoptedToast", { name: view.app.name }), "info");
       } else {
         await api.forget(view.tool_id);
+        onsidebar(view.tool_id, false);
         toast(t("tool.forgotten", { name: view.app.name }), "info");
       }
       await load();
@@ -114,6 +123,16 @@
     const mode = valueOf(e) as WindowMode;
     if (mode === tool.window) return;
     const group = e.currentTarget as unknown as { value: string };
+    // The list may be old: an app that runs now keeps where it runs. An
+    // unknown state (a shared launcher) is never moved, so the choice only
+    // applies to the next start.
+    const state = await runStateOf(view.tool_id);
+    if (state === "hub" || state === "own") {
+      group.value = tool.window;
+      toast(t("installed.windowLocked", { name: view.app.name }));
+      await load();
+      return;
+    }
     try {
       await api.setWindow(view.tool_id, mode);
       onchanged();
@@ -142,6 +161,13 @@
     }
   }
 </script>
+
+<!-- Not selectable yet: tuxhub has no menu of its own for these apps. -->
+{#snippet comingSoon()}
+  <wa-tag size="s" appearance="outlined" class="soon">
+    <span class="tag-row"><Plug size={12} aria-hidden="true" />{t("installed.comingSoon")}</span>
+  </wa-tag>
+{/snippet}
 
 {#if error}
   <wa-callout variant="danger">
@@ -176,7 +202,11 @@
       </button>
       <span class="tags">
         <wa-tag size="s" appearance="filled">{t(sourceLabelKey(view.app.source))}</wa-tag>
-        <IntegrationTag level={view.integration} anchor={`installed-integration-${id}`} />
+        {#if view.integration === "socket"}
+          {@render comingSoon()}
+        {:else}
+          <IntegrationTag level={view.integration} anchor={`installed-integration-${id}`} />
+        {/if}
       </span>
       <div class="controls">
         <wa-switch
@@ -238,12 +268,10 @@
         <ToolIcon icon={app.icon ?? undefined} size={56} />
         <div class="tags">
           <wa-tag size="s" appearance="filled">{t(sourceLabelKey(app.source))}</wa-tag>
-          <IntegrationTag level={selected.integration} />
           {#if selected.integration !== "socket"}
-            <wa-tag size="s" appearance="outlined" class="soon">
-              <span class="tag-row"><Plug size={12} aria-hidden="true" />{t("installed.comingSoon")}</span>
-            </wa-tag>
+            <IntegrationTag level={selected.integration} />
           {/if}
+          {@render comingSoon()}
         </div>
       </div>
       {#if app.description || app.summary}
