@@ -359,15 +359,16 @@ struct WorkshopItem {
     installed: bool,
     /// On this computer, but not in tuxhub: it can be added to the sidebar.
     present: bool,
+    /// How deeply tuxhub integrates the app; none when the workshop does
+    /// not say and the app is not installed.
+    integration: Option<tools::Integration>,
 }
 
 /// The workshop entries with their state. Installations are looked for side
 /// by side, so a hanging query delays the list by the timeout at most.
 async fn workshop_items(hub: &Hub, entries: Vec<Entry>) -> Vec<WorkshopItem> {
-    let installed: Vec<String> = tools::load_all(&hub.tools_dir)
-        .into_iter()
-        .map(|t| t.entry.id)
-        .collect();
+    let records = tools::load_all(&hub.tools_dir);
+    let installed: Vec<String> = records.iter().map(|t| t.entry.id.clone()).collect();
     let present = futures_util::future::join_all(entries.iter().map(|e| async {
         !installed.contains(&e.id) && tools::detect(e, &hub.programs).await.any()
     }))
@@ -375,12 +376,38 @@ async fn workshop_items(hub: &Hub, entries: Vec<Entry>) -> Vec<WorkshopItem> {
     entries
         .into_iter()
         .zip(present)
-        .map(|(entry, present)| WorkshopItem {
-            installed: installed.contains(&entry.id),
-            present,
-            entry,
+        .map(|(entry, present)| {
+            let record = records.iter().find(|t| t.entry.id == entry.id);
+            WorkshopItem {
+                installed: record.is_some(),
+                integration: workshop_integration(&hub.tools_dir, &entry, record),
+                present,
+                entry,
+            }
         })
         .collect()
+}
+
+/// The integration a workshop card shows: the installed app's manifest
+/// wins over what the workshop says.
+fn workshop_integration(
+    tools_dir: &Path,
+    entry: &Entry,
+    installed: Option<&Installed>,
+) -> Option<tools::Integration> {
+    let Some(inst) = installed else {
+        return entry.integration;
+    };
+    let actual = tools::integration_of(&inst.manifest(tools_dir));
+    if let Some(listed) = entry.integration
+        && listed != actual
+    {
+        eprintln!(
+            "{}: the workshop says {listed:?}, the installed app is {actual:?}",
+            entry.id
+        );
+    }
+    Some(actual)
 }
 
 #[tauri::command]
@@ -2282,6 +2309,44 @@ while True:
             matches!(saved.entry.source, Source::Flatpak { .. }),
             "{:?}",
             saved.entry.source
+        );
+    }
+
+    #[test]
+    fn an_unknown_integration_keeps_the_workshop() {
+        let entries = parse_workshop(
+            r#"[
+                {"id": "a", "name": "A", "integration": "foo",
+                 "source": {"type": "flatpak", "flatpak_id": "net.example.A"}},
+                {"id": "b", "name": "B", "integration": "embedded",
+                 "source": {"type": "flatpak", "flatpak_id": "net.example.B"}}
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].integration, None);
+        assert_eq!(entries[1].integration, Some(tools::Integration::Embedded));
+    }
+
+    #[tokio::test]
+    async fn workshop_integration_prefers_the_installed_manifest() {
+        let (hub, _f) = hub_with_fakes("workshop-integration");
+        let mut live = flatpak_app("live");
+        live.manifest = Some(toml::from_str("live = true").unwrap());
+        record(&hub, &Installed::new(live.clone()));
+        let mut listed = flatpak_app("live");
+        listed.integration = Some(tools::Integration::Embedded);
+        let mut other = flatpak_app("other");
+        other.integration = Some(tools::Integration::Standalone);
+        let items = workshop_items(&hub, vec![listed, other, flatpak_app("plain")]).await;
+        let levels: Vec<_> = items.iter().map(|i| i.integration).collect();
+        assert_eq!(
+            levels,
+            [
+                Some(tools::Integration::Socket),
+                Some(tools::Integration::Standalone),
+                None
+            ]
         );
     }
 }

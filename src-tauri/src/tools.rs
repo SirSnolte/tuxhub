@@ -43,6 +43,15 @@ pub struct Entry {
     /// be integrated without changes to their repository.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manifest: Option<Manifest>,
+    /// How deeply tuxhub integrates the app, shown in the workshop while it
+    /// is not installed (the installed manifest wins). An unknown value, for
+    /// example a level of a newer tuxhub, counts as missing.
+    #[serde(
+        default,
+        deserialize_with = "lenient_integration",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub integration: Option<Integration>,
     /// Localized texts by language code, for example `{"de": {"description": "…"}}`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub translations: BTreeMap<String, Value>,
@@ -86,6 +95,39 @@ pub enum Source {
         #[serde(default)]
         user: bool,
     },
+}
+
+/// How deeply tuxhub integrates an app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Integration {
+    /// tuxhub's own menu, live with the app over its socket.
+    Socket,
+    /// Runs inside tuxhub (xpra or its own page) or in its own window.
+    Embedded,
+    /// Always runs in its own window; tuxhub installs, starts and updates it.
+    Standalone,
+}
+
+/// The integration a manifest describes.
+pub fn integration_of(manifest: &Manifest) -> Integration {
+    if manifest.is_live() {
+        Integration::Socket
+    } else if manifest.embed == Some(false) {
+        Integration::Standalone
+    } else {
+        Integration::Embedded
+    }
+}
+
+/// Reads `integration` without failing on unknown values: one bad entry must
+/// not drop the whole workshop.
+fn lenient_integration<'de, D>(de: D) -> Result<Option<Integration>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<Value>::deserialize(de)?;
+    Ok(v.and_then(|v| serde_json::from_value(v).ok()))
 }
 
 fn default_remote() -> String {
@@ -430,6 +472,7 @@ fn announced(file: &Path, user: bool) -> Result<Installed, String> {
             user,
         },
         manifest: None,
+        integration: None,
         translations: BTreeMap::new(),
         id: a.id,
     };
@@ -1185,6 +1228,7 @@ pub fn link_local(tools_dir: &Path, path: &Path) -> Result<Installed, String> {
             path: path.to_string_lossy().into_owned(),
         },
         manifest: None,
+        integration: None,
         translations: BTreeMap::new(),
         id,
     };
@@ -2163,5 +2207,65 @@ mod tests {
         assert!(!flatpak_already_gone(
             "error: Could not unmount revokefs-fuse"
         ));
+    }
+
+    fn manifest(toml: &str) -> Manifest {
+        toml::from_str(toml).unwrap()
+    }
+
+    #[test]
+    fn integration_follows_the_manifest() {
+        assert_eq!(
+            integration_of(&manifest("live = true")),
+            Integration::Socket
+        );
+        assert_eq!(
+            integration_of(&manifest("live = true\nembed = false")),
+            Integration::Socket
+        );
+        assert_eq!(
+            integration_of(&manifest("embed = false")),
+            Integration::Standalone
+        );
+        assert_eq!(integration_of(&Manifest::default()), Integration::Embedded);
+        assert_eq!(
+            integration_of(&manifest("web_url = \"http://localhost:1/\"")),
+            Integration::Embedded
+        );
+    }
+
+    #[test]
+    fn every_workshop_entry_names_its_integration() {
+        let entries: Vec<Entry> =
+            serde_json::from_str(include_str!("../../registry/index.json")).unwrap();
+        assert!(!entries.is_empty());
+        for e in &entries {
+            let level = e
+                .integration
+                .unwrap_or_else(|| panic!("{} has no valid integration", e.id));
+            if let Some(m) = &e.manifest {
+                assert_eq!(level, integration_of(m), "{}", e.id);
+            }
+        }
+    }
+
+    #[test]
+    fn an_unknown_integration_counts_as_missing() {
+        let e: Entry = serde_json::from_value(serde_json::json!({
+            "id": "demo",
+            "name": "Demo",
+            "integration": "foo",
+            "source": { "type": "flatpak", "flatpak_id": "net.example.Demo" },
+        }))
+        .unwrap();
+        assert_eq!(e.integration, None);
+        let e: Entry = serde_json::from_value(serde_json::json!({
+            "id": "demo",
+            "name": "Demo",
+            "integration": "socket",
+            "source": { "type": "flatpak", "flatpak_id": "net.example.Demo" },
+        }))
+        .unwrap();
+        assert_eq!(e.integration, Some(Integration::Socket));
     }
 }
