@@ -219,6 +219,8 @@ export type LocalAppView = {
   update: string | null;
   /** Where it runs; `stopped` for apps that are not in the sidebar. */
   run_state: RunState;
+  /** How deeply tuxhub integrates it; null when the catalog does not say. */
+  integration: Integration | null;
 };
 
 /** Tool-ID → neue Version */

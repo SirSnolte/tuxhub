@@ -25,3 +25,10 @@ export function needsPassword(tool: { entry: Pick<Tool["entry"], "source">; inst
   const { source } = tool.entry;
   return source.type === "system-package" || (source.type === "flatpak" && tool.installation === "system");
 }
+
+/** tuxhub installs and uninstalls an app itself, unless it is a package of
+ * the distribution or an app it found on the computer and only starts. */
+export function tuxhubInstalls(tool: { entry: Pick<Tool["entry"], "source"> }): boolean {
+  const { type } = tool.entry.source;
+  return type !== "distro-package" && type !== "launcher";
+}

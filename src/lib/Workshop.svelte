@@ -1,17 +1,22 @@
 <script lang="ts">
   import { Search, SearchX, X } from "@lucide/svelte";
-  import { api, describe, errText, type Workshop, type WorkshopItem } from "./api";
+  import { api, describe, errText, type Tool, type Workshop, type WorkshopItem } from "./api";
   import { hub, progressText, toast } from "./state.svelte";
   import { category as categoryLabel, t, type Key } from "./i18n.svelte";
   import Readme from "./Readme.svelte";
   import ToolIcon from "./ToolIcon.svelte";
   import IntegrationTag from "./IntegrationTag.svelte";
+  import InstalledApps from "./InstalledApps.svelte";
   import { integrationInfo } from "./apps/integration";
   import { installAndRestart } from "./update";
   import { workshopAction } from "./install-state";
   import { valueOf } from "./wa";
 
-  let { onopen, onchanged }: { onopen: (id: string) => void; onchanged: () => void } = $props();
+  let {
+    tools,
+    onopen,
+    onchanged,
+  }: { tools: Tool[]; onopen: (id: string) => void; onchanged: () => void } = $props();
 
   let data = $state<Workshop | null>(null);
   let error = $state("");
@@ -19,6 +24,15 @@
   let category = $state<string | null>(null);
   let selected = $state<WorkshopItem | null>(null);
   let installing = $state<string | null>(null);
+  /** The open tab: the catalog or the apps already on this computer. */
+  let tab = $state<"catalog" | "installed">("catalog");
+  /** How many installed apps are loaded; null until they are. */
+  let installedCount = $state<number | null>(null);
+
+  function ontabshow(e: Event) {
+    if (e.target !== e.currentTarget) return;
+    tab = (e as CustomEvent<{ name: "catalog" | "installed" }>).detail.name;
+  }
 
   async function load() {
     error = "";
@@ -101,151 +115,166 @@
     </wa-input>
   </header>
 
-  {#if categories.length > 1}
-    <wa-radio-group
-      class="categories"
-      orientation="horizontal"
-      label={t("workshop.categories")}
-      value={category ?? ""}
-      onchange={(e: Event) => (category = valueOf(e) || null)}
-    >
-      <wa-radio appearance="button" size="s" value="">{t("workshop.all")}</wa-radio>
-      {#each categories as c (c)}
-        <wa-radio appearance="button" size="s" value={c}>{categoryLabel(c)}</wa-radio>
-      {/each}
-    </wa-radio-group>
-  {/if}
+  <wa-tab-group active={tab} onwa-tab-show={ontabshow}>
+    <wa-tab slot="nav" panel="catalog">{t("workshop.catalog")}</wa-tab>
+    <wa-tab slot="nav" panel="installed">
+      {t("workshop.installedTab", { count: installedCount ?? "…" })}
+    </wa-tab>
 
-  {#if error}
-    <wa-callout variant="danger">
-      <div class="callout-row">
-        <div>
-          <strong>{t("workshop.loadFailed")}</strong>
-          <p class="small">{error}</p>
-        </div>
-        <wa-button size="s" appearance="outlined" onclick={load}>{t("common.retry")}</wa-button>
-      </div>
-    </wa-callout>
-  {/if}
+    <wa-tab-panel name="catalog">
+      <div class="catalog">
+        {#if categories.length > 1}
+          <wa-radio-group
+            class="categories"
+            orientation="horizontal"
+            label={t("workshop.categories")}
+            value={category ?? ""}
+            onchange={(e: Event) => (category = valueOf(e) || null)}
+          >
+            <wa-radio appearance="button" size="s" value="">{t("workshop.all")}</wa-radio>
+            {#each categories as c (c)}
+              <wa-radio appearance="button" size="s" value={c}>{categoryLabel(c)}</wa-radio>
+            {/each}
+          </wa-radio-group>
+        {/if}
 
-  <div class="layout" class:with-detail={selected}>
-    <div class="grid" aria-busy={!data && !error}>
-      {#if !data && !error}
-        {#each { length: 6 }, i (i)}
-          <div class="card tile skeleton" aria-hidden="true">
-            <wa-skeleton effect="sheen" class="sk-icon"></wa-skeleton>
-            <wa-skeleton effect="sheen" class="sk-name"></wa-skeleton>
-            <wa-skeleton effect="sheen"></wa-skeleton>
-            <wa-skeleton effect="sheen" class="sk-short"></wa-skeleton>
-          </div>
-        {/each}
-        <span class="wa-visually-hidden">{t("workshop.loading")}</span>
-      {/if}
-      {#each visible as item (item.entry.id)}
-        <button
-          class="bare card tile"
-          class:selected={selected?.entry.id === item.entry.id}
-          aria-pressed={selected?.entry.id === item.entry.id}
-          onclick={() => (selected = item)}
-        >
-          <ToolIcon icon={item.entry.icon} category={item.entry.category} size={44} />
-          <span class="name">{item.entry.name}</span>
-          <span class="desc">{describe(item.entry)}</span>
-          <span class="tags">
-            {#if item.entry.category}
-              <wa-tag size="s" appearance="filled">{categoryLabel(item.entry.category)}</wa-tag>
-            {/if}
-            <IntegrationTag level={item.integration} anchor={`integration-${item.entry.id}`} />
-            {#if item.installed}
-              <wa-tag size="s" appearance="filled" variant="success">{t("workshop.installed")}</wa-tag>
-            {:else if item.present}
-              <!-- Outlined: the brand colour is the green of "Installed". -->
-              <wa-tag size="s" appearance="outlined" variant="brand">{t("workshop.present")}</wa-tag>
-            {/if}
-          </span>
-        </button>
-      {/each}
-      {#if data && visible.length === 0}
-        <div class="empty">
-          <SearchX size={32} strokeWidth={1.5} aria-hidden="true" />
-          <p>{t("workshop.noResults")}</p>
-          {#if filtered}
-            <wa-button size="s" appearance="outlined" onclick={showAll}>{t("workshop.showAll")}</wa-button>
-          {/if}
-        </div>
-      {/if}
-    </div>
-
-    {#if selected}
-      {@const e = selected.entry}
-      {@const action = workshopAction(selected)}
-      <aside class="card detail">
-        <div class="detail-head">
-          <ToolIcon icon={e.icon} category={e.category} size={56} />
-          <div class="detail-title">
-            <h2>{e.name}</h2>
-            <div class="tags">
-              <wa-tag size="s" appearance="filled">{t(`source.${e.source.type}` as Key)}</wa-tag>
-              {#if e.repo}<wa-tag size="s" appearance="filled">{e.repo}</wa-tag>{/if}
+        {#if error}
+          <wa-callout variant="danger">
+            <div class="callout-row">
+              <div>
+                <strong>{t("workshop.loadFailed")}</strong>
+                <p class="small">{error}</p>
+              </div>
+              <wa-button size="s" appearance="outlined" onclick={load}>{t("common.retry")}</wa-button>
             </div>
-          </div>
-          <wa-button appearance="plain" size="s" onclick={() => (selected = null)}>
-            <X size={18} aria-hidden="true" />
-            <span class="wa-visually-hidden">{t("workshop.close")}</span>
-          </wa-button>
-        </div>
-        <p>{describe(e)}</p>
-        {#if integrationInfo(selected.integration)}
-          {@const info = integrationInfo(selected.integration)!}
-          <div class="integration">
-            <IntegrationTag level={selected.integration} />
-            <span class="small muted">{t(info.hint)}</span>
-          </div>
+          </wa-callout>
         {/if}
-        {#if action === "adopt"}
-          <p class="small muted">{t("workshop.presentHint", { name: e.name })}</p>
-        {/if}
-        <div class="detail-actions">
-          {#if action === "open"}
-            <wa-button variant="brand" onclick={() => onopen(e.id)}>{t("workshop.open")}</wa-button>
-          {:else if action === "adopt"}
-            <wa-button
-              variant="brand"
-              loading={installing === e.id}
-              disabled={installing !== null && installing !== e.id}
-              onclick={() => adopt(selected!)}
-            >
-              {installing === e.id ? t("workshop.adopting") : t("workshop.adopt")}
-            </wa-button>
-          {:else}
-            <wa-button
-              variant="brand"
-              loading={installing === e.id}
-              disabled={installing !== null && installing !== e.id}
-              onclick={() => install(selected!)}
-            >
-              {installing === e.id ? t("workshop.installing") : t("workshop.install")}
-            </wa-button>
+
+        <div class="layout" class:with-detail={selected}>
+          <div class="grid" aria-busy={!data && !error}>
+            {#if !data && !error}
+              {#each { length: 6 }, i (i)}
+                <div class="card tile skeleton" aria-hidden="true">
+                  <wa-skeleton effect="sheen" class="sk-icon"></wa-skeleton>
+                  <wa-skeleton effect="sheen" class="sk-name"></wa-skeleton>
+                  <wa-skeleton effect="sheen"></wa-skeleton>
+                  <wa-skeleton effect="sheen" class="sk-short"></wa-skeleton>
+                </div>
+              {/each}
+              <span class="wa-visually-hidden">{t("workshop.loading")}</span>
+            {/if}
+            {#each visible as item (item.entry.id)}
+              <button
+                class="bare card tile"
+                class:selected={selected?.entry.id === item.entry.id}
+                aria-pressed={selected?.entry.id === item.entry.id}
+                onclick={() => (selected = item)}
+              >
+                <ToolIcon icon={item.entry.icon} category={item.entry.category} size={44} />
+                <span class="name">{item.entry.name}</span>
+                <span class="desc">{describe(item.entry)}</span>
+                <span class="tags">
+                  {#if item.entry.category}
+                    <wa-tag size="s" appearance="filled">{categoryLabel(item.entry.category)}</wa-tag>
+                  {/if}
+                  <IntegrationTag level={item.integration} anchor={`integration-${item.entry.id}`} />
+                  {#if item.installed}
+                    <wa-tag size="s" appearance="filled" variant="success">{t("workshop.installed")}</wa-tag>
+                  {:else if item.present}
+                    <!-- Outlined: the brand colour is the green of "Installed". -->
+                    <wa-tag size="s" appearance="outlined" variant="brand">{t("workshop.present")}</wa-tag>
+                  {/if}
+                </span>
+              </button>
+            {/each}
+            {#if data && visible.length === 0}
+              <div class="empty">
+                <SearchX size={32} strokeWidth={1.5} aria-hidden="true" />
+                <p>{t("workshop.noResults")}</p>
+                {#if filtered}
+                  <wa-button size="s" appearance="outlined" onclick={showAll}>{t("workshop.showAll")}</wa-button>
+                {/if}
+              </div>
+            {/if}
+          </div>
+
+          {#if selected}
+            {@const e = selected.entry}
+            {@const action = workshopAction(selected)}
+            <aside class="card detail">
+              <div class="detail-head">
+                <ToolIcon icon={e.icon} category={e.category} size={56} />
+                <div class="detail-title">
+                  <h2>{e.name}</h2>
+                  <div class="tags">
+                    <wa-tag size="s" appearance="filled">{t(`source.${e.source.type}` as Key)}</wa-tag>
+                    {#if e.repo}<wa-tag size="s" appearance="filled">{e.repo}</wa-tag>{/if}
+                  </div>
+                </div>
+                <wa-button appearance="plain" size="s" onclick={() => (selected = null)}>
+                  <X size={18} aria-hidden="true" />
+                  <span class="wa-visually-hidden">{t("workshop.close")}</span>
+                </wa-button>
+              </div>
+              <p>{describe(e)}</p>
+              {#if integrationInfo(selected.integration)}
+                {@const info = integrationInfo(selected.integration)!}
+                <div class="integration">
+                  <IntegrationTag level={selected.integration} />
+                  <span class="small muted">{t(info.hint)}</span>
+                </div>
+              {/if}
+              {#if action === "adopt"}
+                <p class="small muted">{t("workshop.presentHint", { name: e.name })}</p>
+              {/if}
+              <div class="detail-actions">
+                {#if action === "open"}
+                  <wa-button variant="brand" onclick={() => onopen(e.id)}>{t("workshop.open")}</wa-button>
+                {:else if action === "adopt"}
+                  <wa-button
+                    variant="brand"
+                    loading={installing === e.id}
+                    disabled={installing !== null && installing !== e.id}
+                    onclick={() => adopt(selected!)}
+                  >
+                    {installing === e.id ? t("workshop.adopting") : t("workshop.adopt")}
+                  </wa-button>
+                {:else}
+                  <wa-button
+                    variant="brand"
+                    loading={installing === e.id}
+                    disabled={installing !== null && installing !== e.id}
+                    onclick={() => install(selected!)}
+                  >
+                    {installing === e.id ? t("workshop.installing") : t("workshop.install")}
+                  </wa-button>
+                {/if}
+              </div>
+              {#if installing === e.id && hub.progress[e.id]}
+                {@const p = hub.progress[e.id]}
+                <div class="progress">
+                  <span class="small muted">{progressText(p)}</span>
+                  <wa-progress-bar
+                    value={p.fraction != null ? Math.round(p.fraction * 100) : 0}
+                    indeterminate={p.fraction == null}
+                    label={progressText(p)}
+                  ></wa-progress-bar>
+                </div>
+              {/if}
+              {#if e.repo}
+                <wa-divider></wa-divider>
+                <Readme repo={e.repo} />
+              {/if}
+            </aside>
           {/if}
         </div>
-        {#if installing === e.id && hub.progress[e.id]}
-          {@const p = hub.progress[e.id]}
-          <div class="progress">
-            <span class="small muted">{progressText(p)}</span>
-            <wa-progress-bar
-              value={p.fraction != null ? Math.round(p.fraction * 100) : 0}
-              indeterminate={p.fraction == null}
-              label={progressText(p)}
-            ></wa-progress-bar>
-          </div>
-        {/if}
-        {#if e.repo}
-          <wa-divider></wa-divider>
-          <Readme repo={e.repo} />
-        {/if}
-      </aside>
-    {/if}
-  </div>
+      </div>
+    </wa-tab-panel>
+
+    <wa-tab-panel name="installed">
+      <InstalledApps {query} {tools} {onopen} {onchanged} bind:count={installedCount} />
+    </wa-tab-panel>
+  </wa-tab-group>
 </div>
 
 <style>
@@ -258,6 +287,14 @@
     display: flex;
     align-items: center;
     gap: var(--wa-space-xs);
+  }
+  .catalog {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-l);
+  }
+  wa-tab-panel::part(base) {
+    padding: var(--wa-space-l) 0 0;
   }
   .search {
     width: 280px;

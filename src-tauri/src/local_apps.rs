@@ -141,7 +141,8 @@ pub fn parse_desktop_for(
             .map(|(_, v)| v)
             .or(comment)
             .filter(|c| !c.is_empty()),
-        icon: icon.filter(|i| !i.is_empty()),
+        // A name or a file, never a URL: nothing is fetched when the workshop opens.
+        icon: icon.filter(|i| !i.is_empty() && !i.contains("://")),
         exec,
         categories,
         flatpak_id: flatpak_id.filter(|f| !f.is_empty()),
@@ -950,6 +951,21 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
         let link = "[Desktop Entry]\nType=Link\nName=A\nURL=http://x\n";
         assert!(parse_desktop_for(hidden, "a.desktop", p, "en").is_none());
         assert!(parse_desktop_for(link, "a.desktop", p, "en").is_none());
+    }
+
+    /// A desktop entry names its icon or a file; a URL would be fetched when
+    /// the workshop shows the app.
+    #[test]
+    fn never_takes_a_remote_desktop_icon() {
+        let p = Path::new("/a.desktop");
+        let entry = |icon: &str| {
+            let t = format!("[Desktop Entry]\nType=Application\nName=A\nExec=a\nIcon={icon}\n");
+            parse_desktop_for(&t, "a.desktop", p, "en").unwrap().icon
+        };
+        assert_eq!(entry("org.example.A").as_deref(), Some("org.example.A"));
+        assert_eq!(entry("/opt/a/a.png").as_deref(), Some("/opt/a/a.png"));
+        assert_eq!(entry("https://example.com/a.png"), None);
+        assert_eq!(entry("file:///opt/a/a.png"), None);
     }
 
     #[test]

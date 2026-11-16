@@ -630,6 +630,8 @@ struct LocalAppView {
     update: Option<String>,
     /// Where it runs; `stopped` for apps that are not in the sidebar.
     run_state: RunState,
+    /// How deeply tuxhub integrates it; none when the catalog does not say.
+    integration: Option<tools::Integration>,
 }
 
 /// The catalog the installed apps are matched with. It is the bundled
@@ -660,6 +662,13 @@ async fn local_app_views(
         let tool_id = local_tool_id(&app, catalog);
         let record = records.iter().find(|r| r.entry.id == tool_id);
         let update = updates.get(&tool_id).cloned();
+        let integration = match catalog.iter().find(|e| e.id == tool_id) {
+            Some(entry) => workshop_integration(&hub.tools_dir, entry, record),
+            // Without a manifest an app runs inside tuxhub or in its own window.
+            None => Some(record.map_or(tools::Integration::Embedded, |inst| {
+                tools::integration_of(&inst.manifest(&hub.tools_dir))
+            })),
+        };
         async move {
             let run_state = match record {
                 Some(inst) => run_state(hub, in_hub.contains(&tool_id), inst).await,
@@ -671,6 +680,7 @@ async fn local_app_views(
                 tool_id,
                 update,
                 run_state,
+                integration,
             }
         }
     });
@@ -2536,6 +2546,40 @@ while True:
         )
         .await;
         assert_eq!(views[0].run_state, RunState::Hub);
+    }
+
+    /// The level tag of the installed apps: what the catalog says, the
+    /// installed manifest once it is in tuxhub, and "embedded" for an app
+    /// tuxhub only starts, as it has no manifest.
+    #[tokio::test]
+    async fn local_app_views_tell_the_integration() {
+        let (hub, f) = hub_with_fakes("local-integration");
+        f.set("run-a", "exit 0");
+        let run_a = f.dir.join("run-a");
+        let mut listed = flatpak_app("demo");
+        listed.integration = Some(tools::Integration::Standalone);
+        let unlisted = flatpak_app("other");
+        let apps = vec![
+            installed_flatpak("x.desktop", "net.example.demo"),
+            installed_flatpak("y.desktop", "net.example.other"),
+            installed_program("a.desktop", run_a.to_str().unwrap()),
+        ];
+        let catalog = vec![listed, unlisted];
+        let views = local_app_views(&hub, apps.clone(), &catalog, &Default::default()).await;
+        let levels: Vec<_> = views.iter().map(|v| v.integration).collect();
+        assert_eq!(
+            levels,
+            [
+                Some(tools::Integration::Standalone),
+                None,
+                Some(tools::Integration::Embedded),
+            ]
+        );
+        add_local_app(&hub, &apps, catalog.clone(), "a.desktop")
+            .await
+            .unwrap();
+        let views = local_app_views(&hub, apps, &catalog, &Default::default()).await;
+        assert_eq!(views[2].integration, Some(tools::Integration::Embedded));
     }
 
     /// An app started through a shell runs as bash, like the user's terminals:

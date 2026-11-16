@@ -2,7 +2,7 @@
 // computer (src/lib/install-state.ts). Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { asksHowToRemove, installHint, needsPassword, workshopAction } from "../src/lib/install-state.ts";
+import { asksHowToRemove, installHint, needsPassword, tuxhubInstalls, workshopAction } from "../src/lib/install-state.ts";
 
 test("the workshop opens tools in tuxhub, adds apps on the computer and installs the rest", () => {
   assert.equal(workshopAction({ installed: true, present: false }), "open");
@@ -30,4 +30,17 @@ test("changes to system-wide installations ask for the password", () => {
   const pkg = { type: "system-package", package: "clock", command: "/usr/bin/clock" };
   assert.equal(needsPassword({ entry: { source: pkg }, installation: "user" }), true);
   assert.equal(needsPassword({ entry: { source: { type: "github-release", asset: "*" } }, installation: "user" }), false);
+});
+
+test("tuxhub neither installs nor uninstalls distribution packages and found apps", () => {
+  const sources = [
+    [{ type: "distro-package", package: "obs-studio", manager: "rpm", command: ["obs"] }, false],
+    [{ type: "launcher", desktop_id: "a.desktop", command: ["/opt/a/a"] }, false],
+    [{ type: "flatpak", flatpak_id: "net.example.App" }, true],
+    [{ type: "system-package", package: "clock", command: "/usr/bin/clock" }, true],
+    [{ type: "github-release", asset: "a.tar.gz" }, true],
+  ];
+  for (const [source, expected] of sources) {
+    assert.equal(tuxhubInstalls({ entry: { source } }), expected, source.type);
+  }
 });

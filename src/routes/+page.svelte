@@ -169,7 +169,7 @@
   <main class:tool={view.kind === "tool"}>
     <SelfUpdate />
     {#if view.kind === "workshop"}
-      <Workshop onopen={open} onchanged={refresh} />
+      <Workshop {tools} onopen={open} onchanged={refresh} />
     {:else if view.kind === "settings"}
       <HubSettings {shortcuts} onopen={open} onchanged={refresh} />
     {:else if current}
