@@ -42,6 +42,9 @@ All notable changes to tuxhub are documented in this file. The format follows
   tuxhub cannot tell whether an installed app runs (it starts through a
   script such as `/usr/bin/libreoffice` or a shared launcher), it does not
   start it inside tuxhub and suggests "Own window" instead.
+- "Own window" of an installed app that already runs starts it anyway, so
+  the app brings up its own window. tuxhub only says "started" when it
+  started something; otherwise it says the app is already running.
 - Shared launchers (shells, interpreters, `flatpak`, `snap`, Wine, Steam
   and similar) are never treated as an app's own program, so tuxhub never
   quits or watches them.

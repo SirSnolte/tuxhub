@@ -23,6 +23,12 @@ export function runningUnknown(err: unknown): boolean {
   return err === RUNNING_UNKNOWN;
 }
 
+/** The message after starting an app in its own window: `key` when it
+ * started (`api.launch` says `true`), otherwise that it already runs. */
+export function launchedKey<K extends string>(started: boolean, key: K): K | "tool.alreadyRunning" {
+  return started ? key : "tool.alreadyRunning";
+}
+
 /** The installed apps whose name, summary, desktop file id, Flatpak ID or
  * package contains `query`, ignoring case; all of them for an empty query. */
 export function filterApps(apps: LocalAppView[], query: string): LocalAppView[] {

@@ -11,6 +11,7 @@ import {
   systemUpdateOf,
   updateWithConsent,
   filterApps,
+  launchedKey,
   listedApps,
   needsRestartDialog,
   runningUnknown,
@@ -129,6 +130,14 @@ test("the search finds installed apps by name, summary, desktop id and package",
   assert.deepEqual(filterApps(apps, ""), apps);
   assert.deepEqual(filterApps(apps, "   "), apps);
   assert.deepEqual(filterApps(apps, "nothing like it"), []);
+});
+
+test("starting an app that already runs does not claim it started", () => {
+  assert.equal(launchedKey(true, "tool.started"), "tool.started");
+  assert.equal(launchedKey(true, "embed.startedWindow"), "embed.startedWindow");
+  assert.equal(launchedKey(false, "tool.started"), "tool.alreadyRunning");
+  assert.ok(en.includes(`"tool.alreadyRunning": "{name} is already running",`));
+  assert.ok(de.includes(`"tool.alreadyRunning":`));
 });
 
 test("system apps show with Show more, in the search and while in the sidebar", () => {

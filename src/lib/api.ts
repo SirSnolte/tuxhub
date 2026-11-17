@@ -244,7 +244,9 @@ export const api = {
   /** Adds an app of the start menu to the sidebar and returns its tool id. */
   localAppAdd: (desktopId: string) => invoke<string>("local_app_add", { desktopId }),
   tools: () => invoke<Tool[]>("tool_list"),
-  launch: (id: string) => invoke<void>("tool_launch", { id }),
+  /** Starts the app in its own window; `false` when it already runs and
+   * nothing was started. */
+  launch: (id: string) => invoke<boolean>("tool_launch", { id }),
   setWindow: (id: string, mode: WindowMode) => invoke<void>("tool_set_window", { id, mode }),
   runState: (id: string) => invoke<RunState>("tool_run_state", { id }),
   appRunning: (id: string) => invoke<boolean>("tool_app_running", { id }),

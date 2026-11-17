@@ -1027,15 +1027,28 @@ async fn quit_running(
     quit_app(hub, inst, wait).await
 }
 
+/// Starts the app in its own window; `false` when it already runs and
+/// nothing was started. An application that tuxhub only starts and stops
+/// runs once. An app added from this computer starts anyway: it finds its
+/// running instance and raises its window.
+async fn launch_tool(hub: &Hub, inst: &Installed) -> Result<bool, String> {
+    let added = inst.adopted
+        && matches!(
+            inst.entry.source,
+            Source::DistroPackage { .. } | Source::Launcher { .. }
+        );
+    if !added && window_is_open(hub, inst).await {
+        return Ok(false);
+    }
+    tools::launch(&hub.tools_dir, inst)?;
+    Ok(true)
+}
+
 #[tauri::command]
-async fn tool_launch(app: AppHandle, id: String) -> Result<(), String> {
+async fn tool_launch(app: AppHandle, id: String) -> Result<bool, String> {
     let hub = app.state::<Hub>();
     let inst = tools::load(&hub.tools_dir, &id)?;
-    // An application that tuxhub only starts and stops runs once.
-    if window_is_open(&hub, &inst).await {
-        return Ok(());
-    }
-    tools::launch(&hub.tools_dir, &inst)
+    launch_tool(&hub, &inst).await
 }
 
 #[tauri::command]
@@ -2726,6 +2739,35 @@ while True:
         assert!(err.contains("not started and stopped by tuxhub"), "{err}");
         // `quit_app` is not called here: a regression would end the user's shells.
         assert!(tools::app_program(&hub.tools_dir, &inst).is_none());
+    }
+
+    /// "Own window" of an app added from this computer starts it even when
+    /// it runs: the app raises its own window. A tuxhub tool that runs is
+    /// not started a second time, and the caller learns nothing started.
+    #[tokio::test]
+    async fn own_window_starts_a_running_adopted_app() {
+        let (hub, f) = hub_with_fakes("local-own-window");
+        let program = f.dir.join("app");
+        std::fs::copy("/usr/bin/sleep", &program).unwrap();
+        let mut running = tools::spawn_copied(&program, &["30"]).await;
+        let mut app = installed_program("s.desktop", program.to_str().unwrap());
+        app.command = vec![program.to_str().unwrap().into(), "0".into()];
+        let inst = add_local_app(&hub, &[app], vec![], "s.desktop")
+            .await
+            .unwrap();
+        assert_eq!(run_state(&hub, false, &inst).await, RunState::Own);
+        assert_eq!(launch_tool(&hub, &inst).await, Ok(true));
+        running.kill().unwrap();
+        running.wait().unwrap();
+
+        let (hub, base, tool) =
+            hub_with_tool("own-window-tool", json!({ "run": { "command": "app" } }));
+        let inst = tools::load(&hub.tools_dir, "livedemo").unwrap();
+        let mut child = tools::spawn_copied(&tool.join("app"), &["30"]).await;
+        assert_eq!(launch_tool(&hub, &inst).await, Ok(false));
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// An app whose program is a `#!` script runs as its interpreter: tuxhub

@@ -7,7 +7,7 @@
   import { api, describe, errText, type Tool, type WindowMode } from "./api";
   import { toast } from "./state.svelte";
   import { canToggleWindow } from "./apps/integration";
-  import { needsRestartDialog, runningUnknown } from "./installed-apps";
+  import { launchedKey, needsRestartDialog, runningUnknown } from "./installed-apps";
   import { valueOf } from "./wa";
 
   let {
@@ -241,8 +241,8 @@
     if (toggle && mode === "own") {
       starting = true;
       try {
-        await api.launch(id);
-        toast(t("embed.startedWindow", { name: tool.entry.name }), "info");
+        const started = await api.launch(id);
+        toast(t(launchedKey(started, "embed.startedWindow"), { name: tool.entry.name }), "info");
       } catch (e) {
         toast(errText(e));
       } finally {
@@ -314,7 +314,7 @@
   export async function ownWindow() {
     if (url) await stop();
     api.launch(id).then(
-      () => toast(t("embed.startedWindow", { name: tool.entry.name }), "info"),
+      (started) => toast(t(launchedKey(started, "embed.startedWindow"), { name: tool.entry.name }), "info"),
       (e) => toast(errText(e)),
     );
   }

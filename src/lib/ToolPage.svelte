@@ -19,7 +19,7 @@
   import SettingsForm from "./SettingsForm.svelte";
   import WebPanel from "./WebPanel.svelte";
   import EmbedPanel from "./EmbedPanel.svelte";
-  import { needsRestartDialog, runningUnknown, systemUpdateOf, updateWithConsent, type SystemUpdate } from "./installed-apps";
+  import { launchedKey, needsRestartDialog, runningUnknown, systemUpdateOf, updateWithConsent, type SystemUpdate } from "./installed-apps";
   import SystemUpdateDialog from "./SystemUpdateDialog.svelte";
   import LaunchPanel from "./LaunchPanel.svelte";
   import LivePanel from "./LivePanel.svelte";
@@ -267,7 +267,11 @@
     if (webTool) webPanel?.openWindow();
     else if (plainApp && !launchOnly) embedPanel?.ownWindow();
     else if (livePage) launcher?.start();
-    else run(() => api.launch(id), t("tool.started", { name: tool.entry.name }));
+    else
+      run(async () => {
+        const started = await api.launch(id);
+        toast(t(launchedKey(started, "tool.started"), { name: tool.entry.name }), "info");
+      });
   }
 
   function uninstall() {
