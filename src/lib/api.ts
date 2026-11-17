@@ -106,6 +106,8 @@ export type Integration = "socket" | "embedded" | "standalone";
 export type WorkshopItem = {
   entry: Entry;
   installed: boolean;
+  /** Installed and shown in the sidebar. */
+  pinned: boolean;
   present: boolean;
   integration?: Integration | null;
 };
@@ -124,6 +126,10 @@ export type HubSettings = {
   start_minimized: boolean;
   close_to_tray: boolean;
   check_updates: boolean;
+  /** Desktop id -> workshop area the user chose (kept by the backend). */
+  app_areas?: Record<string, string>;
+  workshop_view?: "grid" | "list";
+  workshop_collapsed?: string[];
 };
 
 /** Error of the live interface: `code` selects the text, `message` has the details. */
@@ -186,13 +192,30 @@ export type LiveEvent =
 export type LiveNote = { tool: string; method: string; params: unknown };
 
 /** Where an app of this computer comes from. */
+/** The result of updating one start menu app; `error` is "updated
+ * elsewhere" or "cancelled" for those cases. */
+export type UpdateResult = { desktop_id: string; ok: boolean; error: string | null };
+
+/** Progress of `localAppsUpdate`: stage "dnf", "flatpak", "done" or "failed". */
+export type LocalUpdateProgress = { desktop_id: string; stage: "dnf" | "flatpak" | "done" | "failed" };
+
+/** How an app is uninstalled: `packages` is everything dnf would remove;
+ * `blocked` says why tuxhub refuses. */
+export type RemovePreview = {
+  method: "flatpak" | "dnf" | "steam" | "heroic" | "lutris" | "appimage" | "tool" | "none";
+  packages: string[];
+  blocked: string | null;
+  needs_admin: boolean;
+};
+
 export type LocalSource =
   /** `origin`: the remote of the installation tuxhub uses; null when flatpak did not name one. */
   | { kind: "flatpak"; flatpak_id: string; installations: ("user" | "system")[]; origin: string | null }
   | { kind: "rpm"; package: string }
   | { kind: "deb"; package: string }
   | { kind: "appimage"; path: string }
-  | { kind: "unknown"; program: string };
+  | { kind: "unknown"; program: string }
+  | { kind: "game"; store: "steam" | "heroic" | "lutris"; game: string };
 
 /** An app of the start menu, with its source. */
 export type LocalApp = {
@@ -241,8 +264,24 @@ export const api = {
   forget: (id: string) => invoke<void>("tool_forget", { id }),
   /** All apps of the start menu, system apps marked (`app.system`). */
   localAppsList: () => invoke<LocalAppView[]>("local_apps_list"),
-  /** Adds an app of the start menu to the sidebar and returns its tool id. */
-  localAppAdd: (desktopId: string) => invoke<string>("local_app_add", { desktopId }),
+  /** Pins tools (by id) or start menu apps (`desktop:<desktop id>`) to the
+   * sidebar at `at` (the end without); returns the new order. */
+  sidebarPin: (ids: string[], at: number | null = null) => invoke<string[]>("sidebar_pin", { ids, at }),
+  /** Takes a tool out of the sidebar; returns the new order. */
+  sidebarUnpin: (id: string) => invoke<string[]>("sidebar_unpin", { id }),
+  /** Checks every package and Flatpak of the start menu: desktop id -> new version. */
+  localUpdatesCheck: () => invoke<Record<string, string>>("local_updates_check"),
+  /** Updates these start menu apps: packages with one password prompt.
+   * Progress comes as the event `local-update-progress`. */
+  localAppsUpdate: (desktopIds: string[]) => invoke<UpdateResult[]>("local_apps_update", { desktopIds }),
+  /** Starts a start menu app, also one that is not in the sidebar. */
+  localAppLaunch: (desktopId: string) => invoke<void>("local_app_launch", { desktopId }),
+  /** How a start menu app would be uninstalled, and whether tuxhub refuses. */
+  localAppRemovePreview: (desktopId: string) => invoke<RemovePreview>("local_app_remove_preview", { desktopId }),
+  /** Uninstalls a start menu app; the backend checks the preview again. */
+  localAppRemove: (desktopId: string, keepData: boolean) => invoke<void>("local_app_remove", { desktopId, keepData }),
+  /** Saves a new order of the pinned tools (each of them once). */
+  sidebarSetOrder: (order: string[]) => invoke<void>("sidebar_set_order", { order }),
   tools: () => invoke<Tool[]>("tool_list"),
   /** Starts the app in its own window; `false` when it already runs and
    * nothing was started. */
@@ -264,6 +303,10 @@ export const api = {
   configureShortcuts: () => invoke<void>("shortcuts_configure"),
   hubSettings: () => invoke<HubSettings>("hub_settings_get"),
   setHubSettings: (settings: HubSettings) => invoke<void>("hub_settings_set", { settings }),
+  /** The workshop area of an app; null goes back to the automatic one. */
+  appAreaSet: (desktopId: string, area: string | null) => invoke<void>("app_area_set", { desktopId, area }),
+  workshopPrefsSet: (view: "grid" | "list", collapsed: string[]) =>
+    invoke<void>("workshop_prefs_set", { view, collapsed }),
   updates: () => invoke<Updates>("updates_list"),
   checkUpdates: () => invoke<Updates>("updates_check"),
   updatedFrom: () => invoke<string | null>("self_updated_from"),

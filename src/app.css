@@ -15,6 +15,28 @@ body {
   overflow: hidden;
 }
 
+/* tuxhub is an app, not a web page: its labels, cards and lists cannot be
+   selected, so Ctrl+A or a stray press-and-move never marks the whole
+   window. Text meant to be copied stays selectable. Native drag and drop is
+   switched off in +page.svelte; tuxhub's own uses pointer events. */
+body {
+  -webkit-user-select: none;
+  user-select: none;
+}
+input,
+textarea,
+[contenteditable="true"],
+code,
+pre,
+.readme {
+  -webkit-user-select: text;
+  user-select: text;
+}
+img,
+a {
+  -webkit-user-drag: none;
+}
+
 /* Native button without styles, for navigation items and tiles. A tile also
    has the class "card", which is defined below and restores the surface. */
 .bare {

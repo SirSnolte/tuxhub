@@ -138,7 +138,7 @@ fn valid_command(command: &[String]) -> bool {
 }
 
 /// Whether a package name can be passed to a package manager as an argument.
-fn valid_package_name(package: &str) -> bool {
+pub(crate) fn valid_package_name(package: &str) -> bool {
     !package.is_empty()
         && !package.starts_with('-')
         && package
@@ -325,6 +325,14 @@ pub struct Installed {
     /// Where an app in the hub runs when it is started (embedded apps only).
     #[serde(default)]
     pub window: WindowMode,
+    /// Shown in the sidebar. A tool tuxhub installed can leave the sidebar
+    /// and stay installed; records from before this field are pinned.
+    #[serde(default = "pinned_by_default")]
+    pub pinned: bool,
+}
+
+fn pinned_by_default() -> bool {
+    true
 }
 
 /// Where an embedded app runs: inside tuxhub (xpra) or in its own window.
@@ -372,6 +380,7 @@ impl Installed {
             installation: Installation::User,
             duplicate_dismissed: false,
             window: WindowMode::Hub,
+            pinned: true,
         }
     }
 
@@ -606,6 +615,8 @@ pub struct Programs {
     pub apt_get: PathBuf,
     /// Runs a program as root; it asks for the password.
     pub pkexec: PathBuf,
+    /// Opens a link with the app that handles it (a store client).
+    pub xdg_open: PathBuf,
     /// Longest time a query may take before it counts as "not installed".
     pub timeout: Duration,
     /// Longest time a query of a remote may take.
@@ -623,6 +634,7 @@ impl Default for Programs {
             apt: "apt".into(),
             apt_get: "apt-get".into(),
             pkexec: "pkexec".into(),
+            xdg_open: "xdg-open".into(),
             timeout: Duration::from_secs(5),
             network_timeout: Duration::from_secs(60),
         }
@@ -1916,7 +1928,7 @@ pub async fn check_update(inst: &Installed, programs: &Programs) -> Result<Optio
 
 /// Version of a pending package update. Anything that is not a plain version
 /// (spaces, control characters, an absurd length) is rejected.
-fn clean_version(raw: &str) -> Result<String, String> {
+pub(crate) fn clean_version(raw: &str) -> Result<String, String> {
     // Epoch ("2:") and release or revision ("-1.fc44") are not part of it;
     // the upstream version may hold `-` itself ("2.3-rc1-1").
     let v = raw.split_once(':').map_or(raw, |(_, v)| v);
@@ -1999,7 +2011,7 @@ pub async fn distro_update(
     }
 }
 
-fn failure_text(out: &std::process::Output) -> String {
+pub(crate) fn failure_text(out: &std::process::Output) -> String {
     let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if err.is_empty() {
         format!("the package manager failed ({})", out.status)
@@ -2199,6 +2211,7 @@ impl Fakes {
             apt: dir.join("apt"),
             apt_get: dir.join("apt-get"),
             pkexec: dir.join("pkexec"),
+            xdg_open: dir.join("xdg-open"),
             timeout: Duration::from_secs(5),
             network_timeout: Duration::from_secs(5),
         };

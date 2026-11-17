@@ -15,11 +15,13 @@ export type Progress = {
 };
 
 export const hub = $state({
-  toasts: [] as { id: number; text: string; kind: "error" | "info" }[],
+  toasts: [] as { id: number; text: string; kind: "error" | "info"; undo?: () => void }[],
   /** Last `status` notification per tool. */
   status: {} as Record<string, Record<string, unknown>>,
   /** Installations in progress. */
   progress: {} as Record<string, Progress>,
+  /** The last change read out by screen readers (`aria-live`). */
+  announcement: "",
 });
 
 export function progressText(p: Progress): string {
@@ -37,10 +39,17 @@ export function progressText(p: Progress): string {
 }
 
 let toastId = 0;
-export function toast(text: string, kind: "error" | "info" = "error") {
+/** Shows a message; with `undo` it offers "Undo" for five seconds. */
+export function toast(text: string, kind: "error" | "info" = "error", undo?: () => void) {
   const id = ++toastId;
-  hub.toasts.push({ id, text, kind });
-  setTimeout(() => dismissToast(id), kind === "error" ? 7000 : 3500);
+  hub.toasts.push({ id, text, kind, undo });
+  setTimeout(() => dismissToast(id), undo ? 5000 : kind === "error" ? 7000 : 3500);
+}
+
+/** Announces a change to screen readers without showing a toast. */
+export function announce(text: string) {
+  hub.announcement = "";
+  queueMicrotask(() => (hub.announcement = text));
 }
 
 export function dismissToast(id: number) {

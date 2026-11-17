@@ -4,6 +4,69 @@ All notable changes to tuxhub are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.12.0] - 2026-11-18
+
+### Changed
+
+- The workshop is one page for every app instead of two tabs. The curated
+  tuxhub tools stand on top as cards; every other app of the start menu
+  follows as a compact tile, grouped by area: gaming tools and launchers,
+  games, internet and communication, music/video/streaming, office,
+  graphics, tools, development, and system (folded at first). Start menu
+  entries of one program (LibreOffice, Kontact, KDE Connect, Wine, VMware,
+  Qt 6, several entries of one Flatpak, local starters of one folder) are
+  one family with all members in its details.
+- The page has no title; one sticky toolbar holds the search, a filter
+  button (in the sidebar, running, updates, the three integration levels,
+  each with its count), tiles or a list, and sorting by area, name,
+  integration or source. The view and folded areas are remembered.
+- Details open in a drawer next to the page: open, update, sidebar, family
+  members, the integration level as three fields, where the app runs, its
+  area (changeable, remembered per app), source and ID, and uninstall.
+- The integration level shows as one to three bars: own window, inside
+  tuxhub, tuxhub menu. "Standalone" is now called "Own window".
+- The tuxhub logo is the home button and shows the number of updates.
+- Game shortcuts of Steam, Heroic and Lutris have a source of their own and
+  their own area "Games"; they are never treated as the package of their
+  store client.
+
+### Added
+
+- Drag and drop: apps are dragged from the workshop into the sidebar (also
+  several selected at once) and reordered there. The other rows glide aside
+  to open the place, and the app settles into it; an app that is in the
+  sidebar already opens no place: its row lights up, and on the drop the
+  preview vanishes in a small puff while the row hops once; Escape cancels; each
+  change can be undone for five seconds. An app leaves the sidebar through
+  the menu of the open app ("Remove from sidebar"). Without a mouse: the pin
+  button, `P` on a tile and `Alt`+arrow keys. In a window narrower than
+  860 px the sidebar shows icons only.
+- A drag always ends: a release outside the window, switching to another
+  window or a lost release finishes or cancels it, so nothing stays stuck to
+  the pointer. The interface itself cannot be selected (`Ctrl`+`A` marks
+  nothing) or carried along like a web page; search fields, code and README
+  text stay selectable.
+- The order of the sidebar is kept in `sidebar.json`. A tool tuxhub
+  installed can leave the sidebar and stay installed; an app added from the
+  start menu is forgotten and stays on the computer.
+- Updates for every app: one `dnf check-update` and one `flatpak remote-ls`
+  per installation find them; "Update all" updates every package with one
+  `pkexec dnf upgrade` (one password) and the Flatpaks per installation. The
+  tray counts tool and app updates, each once.
+- Uninstall for every app, with a preview: Flatpaks (keeping their data if
+  wanted), packages after a `dnf remove` preview of everything that would go
+  with them, Steam games through Steam, AppImages inside the home folder.
+  Packages of the system or the desktop (also those in
+  `/etc/dnf/protected.d`) and removals of more than 25 packages are refused,
+  and the preview is checked again right before anything is removed.
+- Apps that are not in the sidebar can be opened from the workshop.
+- `Ctrl`+click selects several apps to pin, update or uninstall together.
+
+### Removed
+
+- The "Installed" tab and its sidebar switch; the workshop page and the
+  sidebar replace them.
+
 ## [0.11.0] - 2026-11-17
 
 ### Added
@@ -303,6 +366,7 @@ First public release.
 - System tray, autostart and single-instance behavior.
 - English and German user interface.
 
+[0.12.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.12.0
 [0.11.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.11.0
 [0.10.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.10.0
 [0.9.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.9.0

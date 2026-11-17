@@ -294,9 +294,27 @@ const GAME_SHORTCUT_URLS: [&str; 4] = [
 /// Lutris) made: it starts the game through the client, so it is a game, not
 /// an app tuxhub could show or update.
 fn is_game_shortcut(exec: &[String]) -> bool {
-    exec.iter()
-        .skip(1)
-        .any(|a| GAME_SHORTCUT_URLS.iter().any(|u| a.starts_with(u)))
+    game_shortcut(exec).is_some()
+}
+
+/// The store and game a game shortcut starts, as [`LocalSource::Game`]: the
+/// part of its link after the store's prefix (a Steam app id, Heroic's
+/// `runner/app`, Lutris' id). Only arguments count, never the program.
+pub fn game_shortcut(exec: &[String]) -> Option<LocalSource> {
+    exec.iter().skip(1).find_map(|a| {
+        GAME_SHORTCUT_URLS.iter().find_map(|u| {
+            let game = a.strip_prefix(u)?;
+            let game = game
+                .strip_prefix("id/")
+                .or_else(|| game.strip_prefix('/'))
+                .unwrap_or(game);
+            let store = u.split(':').next().unwrap_or_default();
+            Some(LocalSource::Game {
+                store: store.to_string(),
+                game: game.to_string(),
+            })
+        })
+    })
 }
 
 /// Main categories of the Desktop Menu spec an app is filed under, without
@@ -557,6 +575,12 @@ pub enum LocalSource {
     Unknown {
         program: String,
     },
+    /// A shortcut a store client made for one of its games: started, updated
+    /// and removed only through the store (`steam`, `heroic`, `lutris`).
+    Game {
+        store: String,
+        game: String,
+    },
 }
 
 /// An app of the start menu, with its source resolved.
@@ -573,9 +597,12 @@ pub struct LocalApp {
     pub source: LocalSource,
     pub command: Vec<String>,
     pub autostart: bool,
-    /// A settings module, system or console tool, Wine tool, help screen or
-    /// game shortcut: shown with "Show more" and found by the search.
+    /// A settings module, system or console tool, Wine tool or help
+    /// screen: shown with "Show more" and found by the search.
     pub system: bool,
+    /// The desktop file the entry was read from.
+    #[serde(skip)]
+    pub desktop_file: PathBuf,
 }
 
 /// Cached list: newest application folder time, apps.
@@ -586,6 +613,10 @@ pub type Cache = Option<(SystemTime, Vec<LocalApp>)>;
 pub async fn resolve_source(app: &DesktopApp, programs: &Programs) -> LocalSource {
     // A browser's web app is not the browser: neither its package nor its
     // Flatpak (updating or quitting it would hit the whole browser).
+    // A game shortcut starts the store client, but it is not the client.
+    if let Some(game) = game_shortcut(&app.exec) {
+        return game;
+    }
     if is_web_app(&app.exec) {
         return LocalSource::Unknown {
             program: app.exec.first().cloned().unwrap_or_default(),
@@ -934,7 +965,8 @@ pub fn local_entry(app: &LocalApp) -> Entry {
         },
         LocalSource::Flatpak { origin: None, .. }
         | LocalSource::Appimage { .. }
-        | LocalSource::Unknown { .. } => Source::Launcher {
+        | LocalSource::Unknown { .. }
+        | LocalSource::Game { .. } => Source::Launcher {
             desktop_id: app.desktop_id.clone(),
             command,
         },
@@ -1034,6 +1066,7 @@ async fn build_app(
         .or_else(|| index.get(id.strip_suffix(".desktop").unwrap_or(id)));
     let autostart = autostart_matches(&app, autostart_dir);
     LocalApp {
+        desktop_file: app.path.clone(),
         desktop_id: app.desktop_id,
         name: app.name,
         summary: app.comment.or_else(|| info.and_then(|i| i.summary.clone())),
@@ -1079,7 +1112,8 @@ async fn scan_apps(
         .into_iter()
         .filter(|a| is_visible(a, desktop, true))
         .map(|a| {
-            let system = !is_visible(&a, desktop, false);
+            // Games have an area of their own in the workshop.
+            let system = !is_visible(&a, desktop, false) && !is_game_shortcut(&a.exec);
             (a, system)
         })
         .collect();
@@ -1476,6 +1510,84 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
             "KDE",
             false
         ));
+    }
+
+    #[test]
+    fn game_shortcuts_name_their_store_and_game() {
+        let exec = |e: &[&str]| e.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let game = |store: &str, game: &str| {
+            Some(LocalSource::Game {
+                store: store.into(),
+                game: game.into(),
+            })
+        };
+        assert_eq!(
+            game_shortcut(&exec(&["steam", "steam://rungameid/620"])),
+            game("steam", "620")
+        );
+        assert_eq!(
+            game_shortcut(&exec(&["xdg-open", "steam://run/990080"])),
+            game("steam", "990080")
+        );
+        assert_eq!(
+            game_shortcut(&exec(&["xdg-open", "heroic://launch/legendary/Fortnite"])),
+            game("heroic", "legendary/Fortnite")
+        );
+        assert_eq!(
+            game_shortcut(&exec(&["lutris", "lutris:rungameid/12"])),
+            game("lutris", "12")
+        );
+        assert_eq!(game_shortcut(&exec(&["steam", "%U"])), None);
+        assert_eq!(game_shortcut(&exec(&["steam://rungameid/1"])), None);
+    }
+
+    /// A Steam game is a game of its own, never the `steam` package: an
+    /// update or uninstall of it would otherwise hit Steam itself.
+    #[tokio::test]
+    async fn steam_games_are_games_not_the_steam_package() {
+        let f = Fakes::new("local-games");
+        let dir = f.dir.join("apps");
+        std::fs::create_dir_all(&dir).unwrap();
+        let steam = f.dir.join("steam");
+        std::fs::write(&steam, b"\x7fELF").unwrap();
+        // Even when a package owns the client, the game is not that package.
+        f.set("rpm", "echo steam");
+        desktop_file(
+            &dir,
+            "game.desktop",
+            "Portal 2",
+            &format!("{} steam://rungameid/620", steam.display()),
+        );
+        desktop_file(
+            &dir,
+            "client.desktop",
+            "Steam",
+            &steam.display().to_string(),
+        );
+        let (none, index) = (f.dir.join("none"), HashMap::new());
+        let apps = list_in(&[dir], "KDE", &none, &index, &f.programs, &[]).await;
+        let game = apps
+            .iter()
+            .find(|a| a.desktop_id == "game.desktop")
+            .unwrap();
+        assert_eq!(
+            game.source,
+            LocalSource::Game {
+                store: "steam".into(),
+                game: "620".into()
+            }
+        );
+        assert!(!game.system);
+        // The client itself stays what it was: a launcher, not a game.
+        let client = apps
+            .iter()
+            .find(|a| a.desktop_id == "client.desktop")
+            .unwrap();
+        assert!(matches!(client.source, LocalSource::Unknown { .. }));
+        assert_eq!(
+            serde_json::to_value(&game.source).unwrap(),
+            serde_json::json!({"kind": "game", "store": "steam", "game": "620"})
+        );
     }
 
     #[test]
@@ -1994,6 +2106,7 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
             command: command.iter().map(|s| s.to_string()).collect(),
             autostart: false,
             system: false,
+            desktop_file: PathBuf::new(),
         }
     }
 

@@ -1,6 +1,6 @@
 // Apps of this computer in tuxhub, without Svelte. Tested in
 // tests/installed-apps.test.mjs.
-import type { LocalAppView, LocalSource, Tool } from "./api";
+import type { Tool } from "./api";
 
 /** Error of `embed_start` when the app already runs outside tuxhub; it
  * would start a second time inside it. */
@@ -29,37 +29,6 @@ export function launchedKey<K extends string>(started: boolean, key: K): K | "to
   return started ? key : "tool.alreadyRunning";
 }
 
-/** The installed apps whose name, summary, desktop file id, Flatpak ID or
- * package contains `query`, ignoring case; all of them for an empty query. */
-export function filterApps(apps: LocalAppView[], query: string): LocalAppView[] {
-  const q = query.trim().toLowerCase();
-  if (!q) return apps;
-  return apps.filter(({ app }) => {
-    const { source } = app;
-    const id = source.kind === "flatpak" ? source.flatpak_id : source.kind === "rpm" || source.kind === "deb" ? source.package : "";
-    return [app.name, app.summary ?? "", app.desktop_id, id].some((text) => text.toLowerCase().includes(q));
-  });
-}
-
-/** The apps the tab shows: with a search, every app it finds; otherwise
- * every app with `showAll`, or the apps that are no system apps and the ones
- * in the sidebar (so they can be taken out again). */
-export function listedApps(apps: LocalAppView[], query: string, showAll: boolean): LocalAppView[] {
-  if (query.trim()) return filterApps(apps, query);
-  return showAll ? apps : apps.filter((view) => !view.app.system || view.in_sidebar);
-}
-
-/** The i18n key that names where an installed app comes from. */
-export function sourceLabelKey(source: LocalSource): `installed.source.${LocalSource["kind"]}` {
-  return `installed.source.${source.kind}`;
-}
-
-/** Only Flatpaks and distribution packages are updated, through their own
- * source; AppImages and other programs update themselves. */
-export function canUpdate(view: Pick<LocalAppView, "app" | "update">): boolean {
-  return ["flatpak", "rpm", "deb"].includes(view.app.source.kind) && view.update !== null;
-}
-
 /** An update that changes the system: the package and the program that
  * installs it as root. */
 export type SystemUpdate = { package: string; manager: "dnf" | "apt-get" | "flatpak" };
@@ -72,21 +41,6 @@ export function systemUpdateOf(tool: Pick<Tool, "entry" | "installation">): Syst
   if (s.type === "distro-package") return { package: s.package, manager: s.manager === "rpm" ? "dnf" : "apt-get" };
   if (s.type === "flatpak" && tool.installation === "system") return { package: s.flatpak_id, manager: "flatpak" };
   return null;
-}
-
-/** Like `systemUpdateOf`, from what the installed apps list knows. A Flatpak
- * in both installations counts as system-wide, as tuxhub uses that one. */
-export function localSystemUpdateOf(source: LocalSource): SystemUpdate | null {
-  switch (source.kind) {
-    case "rpm":
-      return { package: source.package, manager: "dnf" };
-    case "deb":
-      return { package: source.package, manager: "apt-get" };
-    case "flatpak":
-      return source.installations.includes("system") ? { package: source.flatpak_id, manager: "flatpak" } : null;
-    default:
-      return null;
-  }
 }
 
 /** Runs `update` for a system-wide update only after `confirm` says yes;

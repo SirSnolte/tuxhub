@@ -2,15 +2,15 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { fly } from "svelte/transition";
-  import { ArrowUp, CircleAlert, CircleCheck, Settings, X } from "@lucide/svelte";
-  import { api, errText, type RunState, type ShortcutStatus, type Tool, type Updates } from "$lib/api";
-  import { mayQuit, updateNeedsConfirm } from "$lib/apps/integration";
-  import { systemUpdateOf } from "$lib/installed-apps";
-  import { installAndRestart, runStateOf } from "$lib/update";
+  import { ArrowUp, CircleAlert, CircleCheck, PinOff, Settings, X } from "@lucide/svelte";
+  import { api, errText, type ShortcutStatus, type Tool, type Updates } from "$lib/api";
   import { dismissToast, hub, startListening, toast } from "$lib/state.svelte";
   import { t } from "$lib/i18n.svelte";
+  import { allEntries, apps, loadApps, watchApps } from "$lib/apps.svelte";
+  import { connectSidebar, move, pin, sidebar, unpin } from "$lib/sidebar.svelte";
+  import { clickSuppressed, drag, echo, pressed, registerSidebar } from "$lib/drag.svelte";
   import ToolPage from "$lib/ToolPage.svelte";
-  import ToolMenu from "$lib/ToolMenu.svelte";
+  import ToolMenu, { type MenuItem } from "$lib/ToolMenu.svelte";
   import ToolIcon from "$lib/ToolIcon.svelte";
   import Workshop from "$lib/Workshop.svelte";
   import HubSettings from "$lib/HubSettings.svelte";
@@ -22,16 +22,27 @@
   let shortcuts = $state<ShortcutStatus | null>(null);
   let view = $state<View>({ kind: "workshop" });
   let updates = $state<Updates>({});
-  let updatingAll = $state(false);
-  const updateCount = $derived(Object.keys(updates).length);
 
   const currentId = $derived(view.kind === "tool" ? view.id : null);
   const current = $derived(tools.find((tool) => tool.entry.id === currentId));
   let page = $state<ToolPage>();
+  let nav = $state<HTMLElement>();
+  let pinList = $state<HTMLElement>();
+
+  /** The tools in the sidebar's order, which changes at once on a drop. */
+  const pinned = $derived(
+    sidebar.order.map((id) => tools.find((tool) => tool.entry.id === id)).filter((tool): tool is Tool => !!tool),
+  );
+  /** Updates of every app, once loaded; until then the tools' ones. */
+  const updateCount = $derived(
+    apps.local ? allEntries().filter((e) => e.installed && e.update).length : Object.keys(updates).length,
+  );
 
   async function refresh() {
     try {
       tools = await api.tools();
+      apps.tools = tools;
+      sidebar.order = tools.map((tool) => tool.entry.id);
       if (currentId && !tools.some((tool) => tool.entry.id === currentId)) {
         view = { kind: "workshop" };
       }
@@ -40,72 +51,85 @@
     }
   }
 
-  /** Names of running apps and of system-wide updates the user is asked
-   * about before "Update all". */
-  let runningAsk = $state<{
-    names: string;
-    system: string;
-    password: boolean;
-    answer: (yes: boolean) => void;
-  } | null>(null);
-
-  function answerRunning(yes: boolean) {
-    runningAsk?.answer(yes);
-    runningAsk = null;
+  /** How to pin a tool back after unpinning it: an app added from the start
+   * menu by its desktop file, as its record is removed. */
+  function pinBackId(tool: Tool): string {
+    const s = tool.entry.source;
+    if (tool.adopted && s.type === "launcher") return `desktop:${s.desktop_id}`;
+    const local = apps.local?.find((v) => v.tool_id === tool.entry.id);
+    return tool.adopted && local ? `desktop:${local.app.desktop_id}` : tool.entry.id;
   }
 
-  async function updateAll() {
-    updatingAll = true;
-    const ids = Object.keys(updates);
-    const nameOf = (id: string) => tools.find((tool) => tool.entry.id === id)?.entry.name ?? id;
-    const states: Record<string, RunState | null> = {};
-    for (const id of ids) states[id] = await runStateOf(id);
-    const running = ids.filter((id) => states[id] && updateNeedsConfirm(states[id]!));
-    // Packages of the distribution and system Flatpaks change the system.
-    const systemUpdates = ids.flatMap((id) => {
-      const tool = tools.find((x) => x.entry.id === id);
-      const update = tool ? systemUpdateOf(tool) : null;
-      return update ? [{ id, update }] : [];
-    });
-    const system = systemUpdates.map((s) => s.id);
-    // pkexec asks for the password for packages of the distribution.
-    const password = systemUpdates.some((s) => s.update.manager !== "flatpak");
-    if (running.length > 0 || system.length > 0) {
-      const names = running.map(nameOf).join(", ");
-      const systemNames = system.map(nameOf).join(", ");
-      // No progress while the question is open.
-      updatingAll = false;
-      const yes = await new Promise<boolean>(
-        (answer) => (runningAsk = { names, system: systemNames, password, answer }),
-      );
-      if (!yes) return;
-      updatingAll = true;
+  function unpinTool(tool: Tool) {
+    unpin(tool.entry.id, tool.entry.name, pinBackId(tool));
+  }
+
+  function pinKey(e: KeyboardEvent, tool: Tool, index: number) {
+    if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      e.preventDefault();
+      const to = index + (e.key === "ArrowUp" ? -1 : 1);
+      if (to < 0 || to >= pinned.length) return;
+      move(tool.entry.id, to, tool.entry.name, false).then(() => {
+        pinList?.querySelector<HTMLElement>(`[data-pin="${CSS.escape(tool.entry.id)}"] .nav`)?.focus();
+      });
     }
-    for (const id of ids) {
-      const name = nameOf(id);
-      try {
-        const startInHub =
-          view.kind === "tool" && view.id === id && page ? () => page!.startInHub() : undefined;
-        // The question above covered every running app and system-wide update.
-        await installAndRestart(id, mayQuit(states[id], true), startInHub);
-        toast(t("tool.updatedTo", { version: updates[id] ?? "" }) + ` (${name})`, "info");
-      } catch (e) {
-        toast(`${name}: ${errText(e)}`);
-      }
+  }
+
+  function pressPin(e: PointerEvent, tool: Tool) {
+    if ((e.target as HTMLElement).closest("wa-dropdown, .tool-menu")) return;
+    const el = (e.currentTarget as HTMLElement).closest<HTMLElement>("[data-pin]");
+    if (!el) return;
+    pressed(e, { ids: [tool.entry.id], from: "pin", label: tool.entry.name, icon: tool.entry.icon ?? null, el });
+  }
+
+  function open(id: string) {
+    if (clickSuppressed()) return;
+    view = { kind: "tool", id };
+  }
+
+  /** The open tool's menu, with taking it out of the sidebar before the
+   * entries that remove or uninstall: the only way to unpin a tool here. */
+  function withUnpin(items: MenuItem[]): MenuItem[] {
+    const danger = items.findIndex((item) => item.danger);
+    const at = danger < 0 ? items.length : danger;
+    const unpinItem: MenuItem = { value: "unpin", label: t("ws.unpin"), icon: PinOff, separated: true };
+    return [...items.slice(0, at), unpinItem, ...items.slice(at).map((item, i) => (i === 0 ? { ...item, separated: true } : item))];
+  }
+
+  function selectInMenu(value: string) {
+    if (value === "unpin") {
+      if (current) unpinTool(current);
+    } else {
+      page?.select(value);
     }
-    updatingAll = false;
-    refresh();
   }
 
   onMount(() => {
+    // No native drag and drop: WebKit would carry selected text, images and
+    // links along with the pointer. Only what tuxhub drags itself moves.
+    const noNativeDrag = (e: DragEvent) => e.preventDefault();
+    document.addEventListener("dragstart", noNativeDrag);
     startListening();
+    connectSidebar(refresh);
+    if (nav && pinList) {
+      const list = pinList;
+      registerSidebar(nav, list, {
+        pin: (ids, at) => pin(ids, at, drag.label),
+        move: (id, at) => {
+          const tool = tools.find((x) => x.entry.id === id);
+          move(id, at, tool?.entry.name ?? id);
+        },
+      });
+    }
     refresh().then(() => {
       if (tools.length) view = { kind: "tool", id: tools[0].entry.id };
     });
+    loadApps();
+    const stopWatching = watchApps();
     api.shortcuts().then((s) => (shortcuts = s));
-    api.updates().then((u) => (updates = u));
+    api.updates().then((u) => (updates = apps.updates = u));
     const unlisten = [
-      listen<Updates>("updates-changed", ({ payload }) => (updates = payload)),
+      listen<Updates>("updates-changed", ({ payload }) => (updates = apps.updates = payload)),
       // Stored workshop entries were brought up to date (new texts, settings).
       listen("tools-changed", () => refresh()),
       listen<ShortcutStatus>("shortcuts-changed", ({ payload }) => (shortcuts = payload)),
@@ -115,68 +139,90 @@
         if (tool && tool.running !== (payload.method !== "exited")) refresh();
       }),
     ];
-    return () => unlisten.forEach((u) => u.then((f) => f()));
+    return () => {
+      document.removeEventListener("dragstart", noNativeDrag);
+      stopWatching();
+      unlisten.forEach((u) => u.then((f) => f()));
+    };
   });
-
-  const open = (id: string) => (view = { kind: "tool", id });
 </script>
 
 <div class="app">
-  <nav aria-label="tuxhub">
-    <!-- The logo leads to the workshop, the overview of all tools. -->
+  <nav aria-label="tuxhub" bind:this={nav}>
+    <!-- The logo is the home button: tuxhub's main page lists every app. -->
     <button
       class="bare brand"
-      title={t("nav.workshop")}
+      title={t("nav.home")}
       aria-current={view.kind === "workshop" ? "page" : undefined}
       onclick={() => (view = { kind: "workshop" })}
     >
       <img src="/logo.svg" alt="" width="28" height="28" />
-      <span>tuxhub</span>
+      <span class="wordmark">tuxhub</span>
+      {#if updateCount > 0}
+        <span class="count" title={t("nav.updates", { count: updateCount })}>
+          {updateCount}<span class="wa-visually-hidden"> {t("nav.updates", { count: updateCount })}</span>
+        </span>
+      {/if}
     </button>
 
-    <div class="section">{t("nav.myTools")}</div>
-    {#if updateCount > 0}
-      <wa-button class="update-all" size="s" variant="brand" appearance="filled" loading={updatingAll} onclick={updateAll}>
-        <span slot="start"><ArrowUp size={15} aria-hidden="true" /></span>
-        {updatingAll
-          ? t("nav.updating")
-          : updateCount === 1
-            ? t("nav.updateOne")
-            : t("nav.updateMany", { count: updateCount })}
-      </wa-button>
-    {/if}
-    {#each tools as tool (tool.entry.id)}
-      <!-- The menu sits next to the entry rather than inside it: a button
-           inside a button is invalid and cannot be reached by keyboard. -->
-      <div class="row" class:current={currentId === tool.entry.id}>
-        <button
-          class="bare nav"
-          aria-current={currentId === tool.entry.id ? "page" : undefined}
-          onclick={() => open(tool.entry.id)}
+    <ol class="pins" bind:this={pinList} aria-label={t("nav.pins")} class:dragging={drag.active} class:settling={drag.settling}>
+      {#each pinned as tool, index (tool.entry.id)}
+        <li
+          class="row"
+          class:current={currentId === tool.entry.id}
+          class:fresh={sidebar.fresh.includes(tool.entry.id)}
+          class:here={drag.over && drag.present.includes(tool.entry.id)}
+          class:echo={echo.ids.includes(tool.entry.id)}
+          class:lifted={drag.active && drag.from === "pin" && drag.ids[0] === tool.entry.id}
+          style:transform={drag.active && drag.from === "pin" && drag.ids[0] === tool.entry.id
+            ? `translateY(${drag.lift}px)`
+            : drag.shift[tool.entry.id]
+              ? `translateY(${drag.shift[tool.entry.id]}px)`
+              : undefined}
+          data-pin={tool.entry.id}
+          onpointerdown={(e) => pressPin(e, tool)}
         >
-          <ToolIcon icon={tool.entry.icon} category={tool.entry.category} toolId={tool.entry.id} size={24} />
-          <span class="label">{tool.entry.name}</span>
-          {#if updates[tool.entry.id]}
-            <span class="upd" title={t("nav.updateTo", { version: updates[tool.entry.id] })}>
-              <ArrowUp size={14} aria-label={t("nav.updateTo", { version: updates[tool.entry.id] })} />
+          <!-- The menu sits next to the entry rather than inside it: a button
+               inside a button is invalid and cannot be reached by keyboard. -->
+          <button
+            class="bare nav"
+            title={tool.entry.name}
+            aria-current={currentId === tool.entry.id ? "page" : undefined}
+            onclick={() => open(tool.entry.id)}
+            onkeydown={(e) => pinKey(e, tool, index)}
+          >
+            <span class="pin-icon">
+              <ToolIcon icon={tool.entry.icon} category={tool.entry.category} toolId={tool.entry.id} size={24} />
+              {#if hub.status[tool.entry.id]?.running || tool.running || tool.app_running}
+                <span class="dot" title={t("nav.active")}><span class="wa-visually-hidden">{t("nav.active")}</span></span>
+              {/if}
             </span>
+            <span class="label">{tool.entry.name}</span>
+            {#if updates[tool.entry.id]}
+              <span class="upd" title={t("nav.updateTo", { version: updates[tool.entry.id] })}>
+                <ArrowUp size={14} aria-label={t("nav.updateTo", { version: updates[tool.entry.id] })} />
+              </span>
+            {/if}
+          </button>
+          {#if currentId === tool.entry.id && page}
+            {@const toolMenu = page.menu()}
+            <span class="tool-menu"><ToolMenu title={toolMenu.title} items={withUnpin(toolMenu.items)} onselect={selectInMenu} /></span>
           {/if}
-          {#if hub.status[tool.entry.id]?.running}
-            <span class="dot" title={t("nav.active")}><span class="wa-visually-hidden">{t("nav.active")}</span></span>
-          {/if}
-        </button>
-        {#if currentId === tool.entry.id && page}
-          {@const toolMenu = page.menu()}
-          <ToolMenu title={toolMenu.title} items={toolMenu.items} onselect={page.select} />
-        {/if}
-      </div>
-    {:else}
-      <p class="empty">{t("nav.empty")}</p>
-    {/each}
+        </li>
+      {/each}
+    </ol>
+    {#if drag.slot}
+      <!-- The place the dragged row or app lands in. -->
+      <div class="slot" style:top="{drag.slot.top}px" style:height="{drag.slot.height}px" aria-hidden="true"></div>
+    {/if}
+    {#if pinned.length === 0 && !drag.slot}
+      <p class="drop-hint">{t("nav.empty")}</p>
+    {/if}
 
     <div class="spacer"></div>
     <button
-      class="bare nav"
+      class="bare nav settings"
+      title={t("nav.settings")}
       aria-current={view.kind === "settings" ? "page" : undefined}
       onclick={() => (view = { kind: "settings" })}
     >
@@ -185,10 +231,10 @@
     </button>
   </nav>
 
-  <main class:tool={view.kind === "tool"}>
+  <main class:tool={view.kind === "tool"} class:home={view.kind === "workshop"}>
     <SelfUpdate />
     {#if view.kind === "workshop"}
-      <Workshop {tools} onopen={open} onchanged={refresh} />
+      <Workshop onopen={open} onchanged={refresh} />
     {:else if view.kind === "settings"}
       <HubSettings {shortcuts} onopen={open} onchanged={refresh} />
     {:else if current}
@@ -213,6 +259,12 @@
           <CircleCheck size={18} aria-hidden="true" />
         {/if}
         <span class="toast-text">{toastItem.text}</span>
+        {#if toastItem.undo}
+          {@const undo = toastItem.undo}
+          <wa-button appearance="plain" variant="brand" size="s" onclick={() => { dismissToast(toastItem.id); undo(); }}>
+            {t("common.undo")}
+          </wa-button>
+        {/if}
         <wa-button appearance="plain" size="s" onclick={() => dismissToast(toastItem.id)}>
           <X size={16} aria-hidden="true" />
           <span class="wa-visually-hidden">{t("common.dismiss")}</span>
@@ -220,45 +272,44 @@
       </div>
     {/each}
   </div>
+  <div class="wa-visually-hidden" aria-live="polite">{hub.announcement}</div>
 </div>
 
-<wa-dialog
-  label={t("update.confirmManyTitle")}
-  open={runningAsk !== null}
-  onwa-after-hide={(e: Event) => {
-    if (e.target === e.currentTarget && runningAsk) answerRunning(false);
-  }}
->
-  {#if runningAsk?.names}
-    <p>{t("update.runningMany", { names: runningAsk.names })}</p>
-  {/if}
-  {#if runningAsk?.system}
-    <p>{t("update.systemMany", { names: runningAsk.system })}</p>
-    {#if runningAsk.password}
-      <p class="small muted">{t("tool.passwordHint")}</p>
-    {/if}
-  {/if}
-  <div slot="footer" class="dialog-buttons">
-    <wa-button appearance="outlined" onclick={() => answerRunning(false)}>{t("common.cancel")}</wa-button>
-    <wa-button variant="brand" onclick={() => answerRunning(true)}>
-      {runningAsk?.names ? t("update.quitAndUpdate") : t("update.systemConfirm")}
-    </wa-button>
+{#if drag.active && drag.from === "workshop"}
+  <!-- The app being dragged, shaped like the sidebar row it becomes. -->
+  <div
+    class="ghost"
+    class:settling={drag.settling}
+    class:back={drag.settling && !drag.over}
+    class:poof={drag.poof}
+    style:left="{drag.x}px"
+    style:top="{drag.y}px"
+    aria-hidden="true"
+  >
+    <ToolIcon icon={drag.icon ?? undefined} size={24} />
+    <span class="label">{drag.label}</span>
+    {#if drag.count > 1}<span class="more">{drag.count}</span>{/if}
   </div>
-</wa-dialog>
+  {#if drag.poof}
+    <!-- Already in the sidebar: the preview goes up in a small puff. -->
+    <div class="puff" style:left="{drag.x + 24}px" style:top="{drag.y + 19}px" aria-hidden="true">
+      {#each [0, 1, 2, 3, 4, 5, 6, 7] as i (i)}
+        <span style:--a="{i * 45 + 20}deg" style:--d="{i % 2 ? 18 : 26}px"></span>
+      {/each}
+    </div>
+  {/if}
+{/if}
+
 
 <style>
-  .dialog-buttons {
-    display: flex;
-    justify-content: flex-end;
-    flex-wrap: wrap;
-    gap: var(--wa-space-xs);
-  }
   .app {
+    --side-w: 252px;
     display: grid;
-    grid-template-columns: 252px minmax(0, 1fr);
+    grid-template-columns: var(--side-w) minmax(0, 1fr);
     height: 100vh;
   }
   nav {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: var(--wa-space-3xs);
@@ -266,8 +317,10 @@
     background: var(--wa-color-surface-default);
     border-right: var(--wa-border-width-s) solid var(--wa-color-surface-border);
     overflow-y: auto;
+    overflow-x: hidden;
   }
   .brand {
+    position: relative;
     display: flex;
     align-items: center;
     gap: var(--wa-space-s);
@@ -287,13 +340,30 @@
     background: var(--wa-color-brand-fill-quiet);
     color: var(--wa-color-brand-on-quiet);
   }
-  .section {
-    margin: var(--wa-space-l) var(--wa-space-s) var(--wa-space-xs);
+  .brand:focus-visible,
+  .nav:focus-visible {
+    outline: 2px solid var(--wa-color-focus);
+    outline-offset: 1px;
+  }
+  .count {
+    margin-left: auto;
+    min-width: 20px;
+    padding: 1px 7px;
+    border-radius: 99px;
     font-size: var(--wa-font-size-2xs);
     font-weight: var(--wa-font-weight-bold);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--wa-color-text-quiet);
+    text-align: center;
+    letter-spacing: 0;
+    background: var(--wa-color-brand-fill-loud);
+    color: var(--wa-color-brand-on-loud);
+  }
+  .pins {
+    list-style: none;
+    margin: 0;
+    padding: var(--wa-space-3xs) 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-3xs);
   }
   .nav {
     display: flex;
@@ -315,14 +385,18 @@
     color: var(--wa-color-brand-on-quiet);
     font-weight: var(--wa-font-weight-semibold);
   }
-  /* A tool entry with its menu: the row carries the highlight, so the menu
-     button sits on it, centred on the same line as the name. */
+  /* A tool entry with the open tool's menu: the row carries the highlight,
+     the buttons sit on it. A press and move lifts it to reorder. */
   .row {
+    position: relative;
     display: flex;
     align-items: center;
     padding-inline-end: var(--wa-space-3xs);
     border-radius: var(--wa-border-radius-m);
     color: var(--wa-color-text-normal);
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
     transition:
       background-color var(--wa-transition-fast),
       color var(--wa-transition-fast);
@@ -334,16 +408,84 @@
     background: var(--wa-color-brand-fill-quiet);
     color: var(--wa-color-brand-on-quiet);
   }
+  /* While dragging, the other rows glide aside; the hover look rests. */
+  .pins.dragging .row {
+    transition:
+      transform 180ms cubic-bezier(0.2, 0, 0, 1),
+      background-color var(--wa-transition-fast);
+  }
+  .pins.dragging .row:not(.current, .lifted):hover {
+    background: none;
+  }
+  /* The moved row rides on top, a little raised. It follows the pointer
+     without delay and glides only into its final place. */
+  .pins.dragging .row.lifted {
+    z-index: 1;
+    background: var(--wa-color-surface-raised);
+    box-shadow: var(--wa-shadow-m);
+    transition: box-shadow 180ms;
+  }
+  .pins.dragging .row.lifted.current {
+    background:
+      linear-gradient(var(--wa-color-brand-fill-quiet), var(--wa-color-brand-fill-quiet)),
+      var(--wa-color-surface-raised);
+  }
+  .pins.settling .row.lifted {
+    box-shadow: none;
+    transition:
+      transform 180ms cubic-bezier(0.2, 0, 0, 1),
+      box-shadow 180ms;
+  }
+  /* An app dragged in that is here already: its row lights up softly, and
+     after the drop it hops once instead of being added again. */
+  .row.here {
+    box-shadow: inset 0 0 0 1px var(--wa-color-brand-border-normal);
+  }
+  .row.echo:not(.current) {
+    animation: echo 600ms ease-out;
+  }
+  .row.echo .pin-icon {
+    animation: hop 420ms cubic-bezier(0.3, 1.6, 0.5, 1);
+  }
+  @keyframes echo {
+    0% {
+      background: var(--wa-color-brand-fill-quiet);
+    }
+    100% {
+      background: transparent;
+    }
+  }
+  @keyframes hop {
+    40% {
+      transform: translateY(-3px) scale(1.12);
+    }
+  }
+  .row.fresh {
+    animation: pinpop 0.6s ease-out;
+  }
+  @keyframes pinpop {
+    0% {
+      background: var(--wa-color-neutral-fill-quiet);
+    }
+    100% {
+      background: transparent;
+    }
+  }
   .row .nav {
     flex: 1;
     min-width: 0;
-    /* The menu button brings its own padding. */
     padding-inline-end: var(--wa-space-3xs);
     color: inherit;
+    cursor: inherit;
   }
   .row .nav:hover,
   .row .nav[aria-current="page"] {
     background: none;
+  }
+  .pin-icon {
+    position: relative;
+    display: grid;
+    flex: none;
   }
   .nav .label {
     flex: 1;
@@ -355,20 +497,42 @@
     display: inline-flex;
     color: var(--wa-color-brand-on-quiet);
   }
-  .update-all {
-    margin: 0 var(--wa-space-2xs) var(--wa-space-xs);
-  }
   .dot {
-    width: 8px;
-    height: 8px;
-    flex: none;
+    position: absolute;
+    right: -3px;
+    bottom: -3px;
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
     background: var(--wa-color-success-fill-loud);
+    border: 2px solid var(--wa-color-surface-default);
   }
-  .empty {
-    padding: 0 var(--wa-space-s);
-    font-size: var(--wa-font-size-s);
+  /* The opened place: a quiet hollow the row settles into. */
+  .slot {
+    position: absolute;
+    left: var(--wa-space-s);
+    right: var(--wa-space-s);
+    border-radius: var(--wa-border-radius-m);
+    background: var(--wa-color-neutral-fill-quiet);
+    pointer-events: none;
+    animation: slotin 120ms ease-out;
+    transition:
+      top 180ms cubic-bezier(0.2, 0, 0, 1),
+      height 180ms cubic-bezier(0.2, 0, 0, 1);
+  }
+  @keyframes slotin {
+    from {
+      opacity: 0;
+    }
+  }
+  .drop-hint {
+    margin: var(--wa-space-2xs) var(--wa-space-3xs);
+    padding: var(--wa-space-m) var(--wa-space-s);
+    border: 2px dashed var(--wa-color-surface-border);
+    border-radius: var(--wa-border-radius-l);
+    text-align: center;
     color: var(--wa-color-text-quiet);
+    font-size: var(--wa-font-size-s);
   }
   .spacer {
     flex: 1;
@@ -378,19 +542,11 @@
     flex-direction: column;
     padding: var(--tuxhub-page-margin);
     overflow-y: auto;
+    background: var(--wa-color-surface-lowered);
   }
-  /* Tool pages leave as much room as possible to the tool's own interface. */
-  main.tool {
-    padding: var(--tuxhub-page-margin);
-  }
-  @media (max-width: 900px) {
-    .app {
-      grid-template-columns: 220px minmax(0, 1fr);
-    }
-    main,
-    main.tool {
-      padding: var(--wa-space-m);
-    }
+  /* The main page's toolbar sticks to the top edge. */
+  main.home {
+    padding-top: 0;
   }
   .toasts {
     position: fixed;
@@ -399,7 +555,7 @@
     display: grid;
     gap: var(--wa-space-xs);
     width: min(420px, calc(100vw - 2 * var(--wa-space-l)));
-    z-index: 10;
+    z-index: 30;
   }
   .toast {
     display: flex;
@@ -422,5 +578,164 @@
     flex: 1;
     min-width: 0;
     overflow-wrap: anywhere;
+  }
+  /* An app dragged from the workshop looks like the sidebar row it
+     becomes, and lands exactly where that row appears. */
+  .ghost {
+    position: fixed;
+    z-index: 1000;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-s);
+    min-height: 38px;
+    max-width: calc(var(--side-w) - 2 * var(--wa-space-s));
+    padding: var(--wa-space-2xs) var(--wa-space-m) var(--wa-space-2xs) var(--wa-space-s);
+    border-radius: var(--wa-border-radius-m);
+    background: var(--wa-color-surface-raised);
+    color: var(--wa-color-text-normal);
+    box-shadow: var(--wa-shadow-m);
+    white-space: nowrap;
+  }
+  .ghost .label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ghost.settling {
+    box-shadow: none;
+    transition:
+      left 180ms cubic-bezier(0.2, 0, 0, 1),
+      top 180ms cubic-bezier(0.2, 0, 0, 1),
+      box-shadow 180ms,
+      opacity 180ms;
+  }
+  .ghost.back {
+    opacity: 0;
+  }
+  .ghost.poof {
+    animation: poof 360ms cubic-bezier(0.2, 0, 0, 1) forwards;
+  }
+  @keyframes poof {
+    30% {
+      opacity: 1;
+      transform: scale(1.05);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(1.2);
+      filter: blur(6px);
+    }
+  }
+  .puff {
+    position: fixed;
+    z-index: 1001;
+    pointer-events: none;
+  }
+  .puff span {
+    position: absolute;
+    left: -2px;
+    top: -2px;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--wa-color-brand-fill-loud);
+    opacity: 0;
+    animation: spark 420ms cubic-bezier(0.2, 0.6, 0.3, 1) forwards;
+  }
+  .puff span:nth-child(even) {
+    background: var(--wa-color-neutral-fill-loud);
+    animation-delay: 30ms;
+  }
+  @keyframes spark {
+    0% {
+      opacity: 0.9;
+      transform: rotate(var(--a)) translateX(6px) scale(1);
+    }
+    100% {
+      opacity: 0;
+      transform: rotate(var(--a)) translateX(var(--d)) scale(0.4);
+    }
+  }
+  .ghost .more {
+    min-width: 20px;
+    margin-left: auto;
+    padding: 1px 7px;
+    border-radius: 99px;
+    font-size: var(--wa-font-size-2xs);
+    font-weight: var(--wa-font-weight-bold);
+    text-align: center;
+    background: var(--wa-color-neutral-fill-normal);
+    color: var(--wa-color-neutral-on-normal);
+  }
+  /* Narrow window: the sidebar shows only icons, names as tooltips. */
+  @media (max-width: 860px) {
+    .app {
+      --side-w: 64px;
+    }
+    nav {
+      padding: var(--wa-space-s) var(--wa-space-2xs);
+    }
+    .brand {
+      justify-content: center;
+      padding: var(--wa-space-2xs);
+    }
+    .wordmark,
+    .nav .label,
+    .ghost .label,
+    .upd,
+    .drop-hint {
+      display: none;
+    }
+    /* The open tool's menu moves below its icon. */
+    .row.current {
+      flex-direction: column;
+      padding-bottom: var(--wa-space-3xs);
+    }
+    .count {
+      position: absolute;
+      top: 0;
+      right: 0;
+      margin: 0;
+      min-width: 18px;
+      padding: 0 5px;
+    }
+    .nav {
+      justify-content: center;
+      padding: var(--wa-space-2xs);
+    }
+    .slot {
+      left: var(--wa-space-2xs);
+      right: var(--wa-space-2xs);
+    }
+    .row {
+      padding-inline-end: 0;
+    }
+    .row .nav {
+      padding-inline-end: var(--wa-space-2xs);
+    }
+    main,
+    main.tool {
+      padding: var(--wa-space-m);
+    }
+    main.home {
+      padding-top: 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .row,
+    .pins.dragging .row,
+    .pins.settling .row.lifted,
+    .ghost.settling,
+    .ghost.poof,
+    .puff span,
+    .row.echo,
+    .row.echo .pin-icon,
+    .slot {
+      transition: none;
+      animation: none;
+    }
+    .puff {
+      display: none;
+    }
   }
 </style>
