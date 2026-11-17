@@ -1895,14 +1895,15 @@ pub async fn check_update(inst: &Installed, programs: &Programs) -> Result<Optio
 /// Version of a pending package update. Anything that is not a plain version
 /// (spaces, control characters, an absurd length) is rejected.
 fn clean_version(raw: &str) -> Result<String, String> {
-    // Epoch ("2:") and release or revision ("-1.fc44") are not part of it.
+    // Epoch ("2:") and release or revision ("-1.fc44") are not part of it;
+    // the upstream version may hold `-` itself ("2.3-rc1-1").
     let v = raw.split_once(':').map_or(raw, |(_, v)| v);
     let v = v.rsplit_once('-').map_or(v, |(v, _)| v);
     let sane = !v.is_empty()
         && v.len() <= 64
         && v.starts_with(|c: char| c.is_ascii_alphanumeric())
         && v.chars()
-            .all(|c| c.is_ascii_alphanumeric() || "._+~^".contains(c));
+            .all(|c| c.is_ascii_alphanumeric() || "._+~^-".contains(c));
     if sane {
         Ok(v.to_string())
     } else {
@@ -2973,6 +2974,20 @@ mod tests {
         let inst = Installed::new(launcher_entry(&[own.to_str().unwrap()]));
         assert_eq!(app_program(&tools, &inst), Some(own));
         assert!(!shared_launcher(&inst));
+    }
+
+    /// The upstream version may hold `-` itself (Debian's `2.3-rc1-1`); only
+    /// the last part is the release.
+    #[test]
+    fn package_versions_keep_hyphens_of_the_upstream_version() {
+        let ok = |raw: &str| clean_version(raw).unwrap();
+        assert_eq!(ok("2.3-rc1-1"), "2.3-rc1");
+        assert_eq!(ok("1:2.0-beta-2.fc44"), "2.0-beta");
+        assert_eq!(ok("26.08.2-1.fc44"), "26.08.2");
+        assert_eq!(ok("1.2"), "1.2");
+        for bad in ["", "-1", "1:-x-1", "a b-1", "1.0\n-1", &"9".repeat(65)] {
+            assert!(clean_version(bad).is_err(), "{bad:?}");
+        }
     }
 
     /// A program that is a `#!` script (like `/usr/bin/libreoffice`) runs as
