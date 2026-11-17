@@ -627,7 +627,12 @@ async fn adopt_entry(hub: &Hub, entries: Vec<Entry>, id: &str) -> Result<Install
         .into_iter()
         .find(|e| e.id == id)
         .ok_or_else(|| format!("{id} is not in the workshop"))?;
-    if tools::load(&hub.tools_dir, id).is_ok() {
+    // Also when it was added from the start menu under its own id.
+    let records = tools::load_all(&hub.tools_dir);
+    if records
+        .iter()
+        .any(|r| r.entry.id == id || local_apps::same_source(&r.entry.source, &entry.source))
+    {
         return Err(format!("{} is already in tuxhub", entry.name));
     }
     tools::adopt(&hub.tools_dir, &hub.programs, &entry).await
@@ -665,8 +670,13 @@ fn local_catalog() -> Vec<Entry> {
     parse_workshop(WORKSHOP_BUNDLED).unwrap_or_default()
 }
 
-/// The id an app of this computer has in tuxhub.
-fn local_tool_id(app: &local_apps::LocalApp, catalog: &[Entry]) -> String {
+/// The id an app of this computer has in tuxhub: the id of its record when
+/// it already is in the sidebar (also through another start menu entry or
+/// the catalog), otherwise the catalog's or its own.
+fn local_tool_id(app: &local_apps::LocalApp, catalog: &[Entry], records: &[Installed]) -> String {
+    if let Some(r) = records.iter().find(|r| local_apps::same_app(&r.entry, app)) {
+        return r.entry.id.clone();
+    }
     match local_apps::catalog_entry(catalog, &app.source) {
         Some(i) => catalog[i].id.clone(),
         None => local_apps::local_id(&app.desktop_id),
@@ -698,7 +708,7 @@ async fn local_app_views(
     let updates = hub.updates.lock().unwrap().clone();
     let apps = apps.into_iter().filter(|a| !is_own_tool(hub, a));
     let views = apps.map(|app| {
-        let tool_id = local_tool_id(&app, catalog);
+        let tool_id = local_tool_id(&app, catalog, &records);
         let record = records.iter().find(|r| r.entry.id == tool_id);
         let update = updates.get(&tool_id).cloned();
         let integration = match catalog.iter().find(|e| e.id == tool_id) {
@@ -758,6 +768,12 @@ async fn add_local_app(
         .flatten()
         .filter(|a| !is_own_tool(hub, a))
         .ok_or("this is not an app on this computer")?;
+    if let Some(r) = tools::load_all(&hub.tools_dir)
+        .iter()
+        .find(|r| local_apps::same_app(&r.entry, app))
+    {
+        return Err(format!("{} is already in tuxhub", r.entry.name));
+    }
     let mut inst = match local_apps::catalog_entry(&catalog, &app.source) {
         Some(i) => {
             let id = catalog[i].id.clone();
@@ -2739,6 +2755,64 @@ while True:
         assert!(err.contains("not started and stopped by tuxhub"), "{err}");
         // `quit_app` is not called here: a regression would end the user's shells.
         assert!(tools::app_program(&hub.tools_dir, &inst).is_none());
+    }
+
+    /// An app lands in the sidebar once: a second start menu entry of the
+    /// same Flatpak, or its catalog entry, finds the record already there.
+    #[tokio::test]
+    async fn an_app_lands_in_the_sidebar_once() {
+        let (hub, f) = hub_with_fakes("local-once");
+        f.flatpak_with(&[tools::Installation::User]);
+        let apps = vec![
+            installed_flatpak("x.desktop", "net.example.demo"),
+            installed_flatpak("y.desktop", "net.example.demo"),
+        ];
+        add_local_app(&hub, &apps, vec![], "x.desktop")
+            .await
+            .unwrap();
+        let catalog = vec![flatpak_app("demo")];
+        for catalog in [vec![], catalog.clone()] {
+            let views = local_app_views(&hub, apps.clone(), &catalog, &Default::default()).await;
+            let state: Vec<_> = views
+                .iter()
+                .map(|v| (v.tool_id.as_str(), v.in_sidebar))
+                .collect();
+            assert_eq!(state, [("local.x", true), ("local.x", true)]);
+            let err = add_local_app(&hub, &apps, catalog.clone(), "y.desktop")
+                .await
+                .unwrap_err();
+            assert!(err.contains("already in tuxhub"), "{err}");
+        }
+        let err = adopt_entry(&hub, catalog, "demo").await.unwrap_err();
+        assert!(err.contains("already in tuxhub"), "{err}");
+        assert_eq!(tools::load_all(&hub.tools_dir).len(), 1);
+
+        // Two apps of one package with their own programs are two apps; the
+        // same program again is not.
+        let (one, two) = (f.dir.join("one"), f.dir.join("two"));
+        let rpm = |desktop_id: &str, program: &Path| {
+            installed_app(
+                desktop_id,
+                local_apps::LocalSource::Rpm {
+                    package: "suite".into(),
+                },
+                &[program.to_str().unwrap()],
+            )
+        };
+        let apps = vec![
+            rpm("one.desktop", &one),
+            rpm("two.desktop", &two),
+            rpm("one-again.desktop", &one),
+        ];
+        f.set("rpm", "echo suite");
+        for (desktop_id, ok) in [
+            ("one.desktop", true),
+            ("two.desktop", true),
+            ("one-again.desktop", false),
+        ] {
+            let out = add_local_app(&hub, &apps, vec![], desktop_id).await;
+            assert_eq!(out.is_ok(), ok, "{desktop_id}: {:?}", out.err());
+        }
     }
 
     /// "Own window" of an app added from this computer starts it even when

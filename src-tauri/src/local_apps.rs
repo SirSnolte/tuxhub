@@ -775,6 +775,49 @@ pub fn catalog_entry(catalog: &[Entry], source: &LocalSource) -> Option<usize> {
     })
 }
 
+/// Whether two sources install the same app: the same Flatpak, or the same
+/// package of one format. A catalog entry and a record are compared so.
+pub fn same_source(a: &Source, b: &Source) -> bool {
+    let package = |s: &Source| match s {
+        Source::SystemPackage { package, .. } => Some((package.clone(), None)),
+        Source::DistroPackage {
+            package, manager, ..
+        } => Some((package.clone(), Some(*manager))),
+        _ => None,
+    };
+    match (a, b) {
+        (Source::Flatpak { flatpak_id: x, .. }, Source::Flatpak { flatpak_id: y, .. }) => x == y,
+        _ => match (package(a), package(b)) {
+            // A catalog package names no format: it matches either.
+            (Some((x, fx)), Some((y, fy))) => x == y && (fx.is_none() || fy.is_none() || fx == fy),
+            _ => false,
+        },
+    }
+}
+
+/// Whether `record`, an app in the sidebar, is the start menu entry `app`:
+/// added from it, the same Flatpak, or the same package. Apps added from this
+/// computer that one package holds (an office suite) are told apart by their
+/// command.
+pub fn same_app(record: &Entry, app: &LocalApp) -> bool {
+    if record.id == local_id(&app.desktop_id) {
+        return true;
+    }
+    match &record.source {
+        Source::Launcher { desktop_id, .. } => *desktop_id == app.desktop_id,
+        Source::DistroPackage {
+            package,
+            manager,
+            command,
+        } if is_local_id(&record.id) => matches!(
+            local_entry(app).source,
+            Source::DistroPackage { package: ref p, manager: m, command: ref c }
+                if p == package && m == *manager && c == command
+        ),
+        _ => catalog_entry(std::slice::from_ref(record), &app.source).is_some(),
+    }
+}
+
 const LOCAL_PREFIX: &str = "local.";
 
 /// Whether a tool id belongs to an app added from this computer.
