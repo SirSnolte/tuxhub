@@ -4,6 +4,41 @@ All notable changes to tuxhub are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.11.0] - 2026-11-17
+
+### Added
+
+- The workshop has a second tab, "Installed (n)", next to the catalog. It
+  lists the apps of the start menu with their icon, source (Flatpak, RPM,
+  Debian package, AppImage or program) and integration level, read offline
+  from the desktop entries and the local AppStream data. Settings modules,
+  system and console tools, Wine's built-in tools, help screens and game
+  shortcuts of Steam, Heroic and Lutris stay hidden until "Show more (system
+  apps)"; the search always looks through all apps. Catalog apps that are
+  already on the computer appear once, with the catalog's texts.
+- The switch "Sidebar" on each card adds any installed app to the sidebar
+  without installing it a second time, and removes it again; the app always
+  stays on the computer. The detail dialog shows the description, the README
+  when the app links a GitHub repository, and the window choice.
+- Apps that start at login in the background get "Own window" by default
+  when they are added. tuxhub never changes their autostart.
+- Installed apps are updated only through their source: `flatpak update` for
+  Flatpaks, the package manager (dnf, zypper or apt, through pkexec) for
+  distribution packages. They are never updated from GitHub. AppImages and
+  other programs can be started but not updated by tuxhub. Updates show on
+  the card and in the sidebar.
+
+### Fixed
+
+- tuxhub never starts a second instance of an app inside tuxhub. When the
+  app already runs outside, for example as a background service, a dialog
+  asks first; on confirmation tuxhub quits it, gives it time to end and
+  starts it in the hub. Flatpaks are recognised with `flatpak ps`.
+- Shared launchers (shells, interpreters, `flatpak`, `snap`, Wine, Steam
+  and similar) are never treated as an app's own program, so tuxhub never
+  quits or watches them.
+- AppStream descriptions keep text blocks that have no translation.
+
 ## [0.10.0] - 2026-11-16
 
 ### Added
@@ -240,6 +275,7 @@ First public release.
 - System tray, autostart and single-instance behavior.
 - English and German user interface.
 
+[0.11.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.11.0
 [0.10.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.10.0
 [0.9.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.9.0
 [0.8.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.8.0
