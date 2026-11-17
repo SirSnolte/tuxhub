@@ -106,6 +106,8 @@ export type Integration = "socket" | "embedded" | "standalone";
 export type WorkshopItem = {
   entry: Entry;
   installed: boolean;
+  /** Installed and shown in the sidebar. */
+  pinned: boolean;
   present: boolean;
   integration?: Integration | null;
 };
@@ -242,8 +244,13 @@ export const api = {
   forget: (id: string) => invoke<void>("tool_forget", { id }),
   /** All apps of the start menu, system apps marked (`app.system`). */
   localAppsList: () => invoke<LocalAppView[]>("local_apps_list"),
-  /** Adds an app of the start menu to the sidebar and returns its tool id. */
-  localAppAdd: (desktopId: string) => invoke<string>("local_app_add", { desktopId }),
+  /** Pins tools (by id) or start menu apps (`desktop:<desktop id>`) to the
+   * sidebar at `at` (the end without); returns the new order. */
+  sidebarPin: (ids: string[], at: number | null = null) => invoke<string[]>("sidebar_pin", { ids, at }),
+  /** Takes a tool out of the sidebar; returns the new order. */
+  sidebarUnpin: (id: string) => invoke<string[]>("sidebar_unpin", { id }),
+  /** Saves a new order of the pinned tools (each of them once). */
+  sidebarSetOrder: (order: string[]) => invoke<void>("sidebar_set_order", { order }),
   tools: () => invoke<Tool[]>("tool_list"),
   /** Starts the app in its own window; `false` when it already runs and
    * nothing was started. */

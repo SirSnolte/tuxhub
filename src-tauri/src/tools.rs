@@ -325,6 +325,14 @@ pub struct Installed {
     /// Where an app in the hub runs when it is started (embedded apps only).
     #[serde(default)]
     pub window: WindowMode,
+    /// Shown in the sidebar. A tool tuxhub installed can leave the sidebar
+    /// and stay installed; records from before this field are pinned.
+    #[serde(default = "pinned_by_default")]
+    pub pinned: bool,
+}
+
+fn pinned_by_default() -> bool {
+    true
 }
 
 /// Where an embedded app runs: inside tuxhub (xpra) or in its own window.
@@ -372,6 +380,7 @@ impl Installed {
             installation: Installation::User,
             duplicate_dismissed: false,
             window: WindowMode::Hub,
+            pinned: true,
         }
     }
 

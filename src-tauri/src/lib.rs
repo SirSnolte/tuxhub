@@ -6,6 +6,7 @@ mod local_apps;
 mod manifest;
 mod native;
 mod shortcuts;
+mod sidebar;
 mod system;
 mod tools;
 mod updates;
@@ -377,6 +378,8 @@ struct WorkshopView {
 struct WorkshopItem {
     entry: Entry,
     installed: bool,
+    /// Installed and shown in the sidebar.
+    pinned: bool,
     /// On this computer, but not in tuxhub: it can be added to the sidebar.
     present: bool,
     /// How deeply tuxhub integrates the app; none when the workshop does
@@ -388,6 +391,7 @@ struct WorkshopItem {
 /// by side, so a hanging query delays the list by the timeout at most.
 async fn workshop_items(hub: &Hub, entries: Vec<Entry>) -> Vec<WorkshopItem> {
     let records = tools::load_all(&hub.tools_dir);
+    let pinned = sidebar_state(hub, &records).1;
     let installed: Vec<String> = records.iter().map(|t| t.entry.id.clone()).collect();
     let present = futures_util::future::join_all(entries.iter().map(|e| async {
         !installed.contains(&e.id) && tools::detect(e, &hub.programs).await.any()
@@ -400,6 +404,7 @@ async fn workshop_items(hub: &Hub, entries: Vec<Entry>) -> Vec<WorkshopItem> {
             let record = records.iter().find(|t| t.entry.id == entry.id);
             WorkshopItem {
                 installed: record.is_some(),
+                pinned: pinned.contains(&entry.id),
                 integration: workshop_integration(&hub.tools_dir, &entry, record),
                 present,
                 entry,
@@ -628,6 +633,7 @@ fn carry_over(previous: Option<&Installed>, present: bool, mut new: Installed) -
     }
     if let Some(p) = previous {
         new.window = p.window;
+        new.pinned = p.pinned;
     }
     new
 }
@@ -716,6 +722,8 @@ async fn local_app_views(
     in_hub: &std::collections::HashSet<String>,
 ) -> Vec<LocalAppView> {
     let records = tools::load_all(&hub.tools_dir);
+    let pinned = sidebar_state(hub, &records).1;
+    let pinned = &pinned;
     let updates = hub.updates.lock().unwrap().clone();
     let apps = apps.into_iter().filter(|a| !is_own_tool(hub, a));
     let views = apps.map(|app| {
@@ -736,7 +744,7 @@ async fn local_app_views(
             };
             LocalAppView {
                 app,
-                in_sidebar: record.is_some(),
+                in_sidebar: record.is_some_and(|r| pinned.contains(&r.entry.id)),
                 tool_id,
                 update,
                 run_state,
@@ -838,16 +846,198 @@ async fn with_origin(
     Ok(app)
 }
 
+// ----------------------------------------------------------------- Sidebar
+
+/// Prefix of a sidebar id that names a start menu entry, not a tool.
+const DESKTOP_PREFIX: &str = "desktop:";
+
+fn sidebar_file(hub: &Hub) -> PathBuf {
+    sidebar::path(hub.hub_settings_path.parent().unwrap_or(Path::new(".")))
+}
+
+/// Whether a record has a `tool.json` of tuxhub; announced tools have none.
+fn has_record(hub: &Hub, id: &str) -> bool {
+    hub.tools_dir.join(id).join("tool.json").is_file()
+}
+
+/// The saved sidebar and the ids of the pinned tools in their order.
+fn sidebar_state(hub: &Hub, records: &[Installed]) -> (sidebar::Sidebar, Vec<String>) {
+    let saved = sidebar::load(&sidebar_file(hub));
+    let base = saved.clone().unwrap_or_default();
+    let pinned: Vec<(String, String)> = records
+        .iter()
+        .filter(|r| r.pinned && !base.hidden.contains(&r.entry.id))
+        .map(|r| (r.entry.id.clone(), r.entry.name.clone()))
+        .collect();
+    let order = sidebar::arrange(saved.as_ref().map(|s| s.order.as_slice()), &pinned);
+    (base, order)
+}
+
+/// The pinned tools, top first.
+#[cfg(test)]
+fn current_order(hub: &Hub) -> Vec<String> {
+    sidebar_state(hub, &tools::load_all(&hub.tools_dir)).1
+}
+
+/// What a sidebar id from the user interface stands for, checked against the
+/// current records and apps before anything changes.
+enum PinTarget<'a> {
+    Tool(String),
+    App(&'a local_apps::LocalApp),
+}
+
+fn pin_target<'a>(
+    hub: &Hub,
+    apps: &'a [local_apps::LocalApp],
+    records: &[Installed],
+    id: &str,
+) -> Result<PinTarget<'a>, String> {
+    if let Some(desktop_id) = id.strip_prefix(DESKTOP_PREFIX) {
+        let app = (desktop_id.len() <= MAX_DESKTOP_ID)
+            .then(|| apps.iter().find(|a| a.desktop_id == desktop_id))
+            .flatten()
+            .filter(|a| !is_own_tool(hub, a))
+            .ok_or("this is not an app on this computer")?;
+        // Already in tuxhub, also through another start menu entry.
+        return Ok(
+            match records.iter().find(|r| local_apps::same_app(&r.entry, app)) {
+                Some(r) => PinTarget::Tool(r.entry.id.clone()),
+                None => PinTarget::App(app),
+            },
+        );
+    }
+    records
+        .iter()
+        .find(|r| r.entry.id == id)
+        .map(|r| PinTarget::Tool(r.entry.id.clone()))
+        .ok_or_else(|| "unknown tool".to_string())
+}
+
+/// Pins tools (by id) and apps of this computer (`desktop:<desktop id>`, a
+/// record is made the way the installed apps add one) at `at`, in the given
+/// order. Pinned ones stay where they are. All ids are checked first: one
+/// that is not known changes nothing. Returns the new order.
+async fn pin_tools(
+    hub: &Hub,
+    apps: &[local_apps::LocalApp],
+    catalog: Vec<Entry>,
+    ids: &[String],
+    at: Option<usize>,
+) -> Result<Vec<String>, String> {
+    let records = tools::load_all(&hub.tools_dir);
+    let targets = ids
+        .iter()
+        .map(|id| pin_target(hub, apps, &records, id))
+        .collect::<Result<Vec<_>, _>>()?;
+    let (mut saved, mut order) = sidebar_state(hub, &records);
+    let mut pinned = Vec::new();
+    for target in targets {
+        let id = match target {
+            PinTarget::Tool(id) => id,
+            PinTarget::App(app) => {
+                // Two entries of one app in one call: the first made the record.
+                let now = tools::load_all(&hub.tools_dir);
+                match now.iter().find(|r| local_apps::same_app(&r.entry, app)) {
+                    Some(r) => r.entry.id.clone(),
+                    None => add_local_app(hub, apps, catalog.clone(), &app.desktop_id)
+                        .await?
+                        .entry
+                        .id,
+                }
+            }
+        };
+        if has_record(hub, &id) {
+            let mut inst = tools::load(&hub.tools_dir, &id)?;
+            if !inst.pinned {
+                inst.pinned = true;
+                tools::save(&hub.tools_dir, &inst)?;
+            }
+        }
+        saved.hidden.retain(|h| *h != id);
+        if !pinned.contains(&id) {
+            pinned.push(id);
+        }
+    }
+    sidebar::insert(&mut order, &pinned, at);
+    saved.order = order.clone();
+    sidebar::save(&sidebar_file(hub), &saved)?;
+    Ok(order)
+}
+
+/// Takes a tool out of the sidebar: an adopted app is forgotten (it stays on
+/// the computer), a tool tuxhub installed stays installed with its settings.
+async fn unpin(app: &AppHandle, hub: &Hub, id: &str) -> Result<Vec<String>, String> {
+    let records = tools::load_all(&hub.tools_dir);
+    let inst = records
+        .iter()
+        .find(|r| r.entry.id == id)
+        .ok_or("unknown tool")?;
+    // It leaves the hub's view; a background service keeps running.
+    embed::stop(app, id).await;
+    if inst.adopted {
+        hub.runtime.stop(id).await;
+        updates::forget(app, id);
+    }
+    unpin_tool(hub, id)
+}
+
+fn unpin_tool(hub: &Hub, id: &str) -> Result<Vec<String>, String> {
+    let records = tools::load_all(&hub.tools_dir);
+    let inst = records
+        .iter()
+        .find(|r| r.entry.id == id)
+        .ok_or("unknown tool")?;
+    let (mut saved, mut order) = sidebar_state(hub, &records);
+    if inst.adopted {
+        forget(hub, id)?;
+    } else if has_record(hub, id) {
+        let mut inst = inst.clone();
+        inst.pinned = false;
+        tools::save(&hub.tools_dir, &inst)?;
+    } else if !saved.hidden.iter().any(|h| h == id) {
+        saved.hidden.push(id.to_string());
+    }
+    order.retain(|o| o != id);
+    saved.order = order.clone();
+    sidebar::save(&sidebar_file(hub), &saved)?;
+    Ok(order)
+}
+
+/// Saves a new order of the pinned tools; it must name each of them once.
+fn set_sidebar_order(hub: &Hub, order: &[String]) -> Result<(), String> {
+    let (mut saved, current) = sidebar_state(hub, &tools::load_all(&hub.tools_dir));
+    sidebar::check_order(&current, order)?;
+    saved.order = order.to_vec();
+    sidebar::save(&sidebar_file(hub), &saved)
+}
+
 #[tauri::command]
-async fn local_app_add(app: AppHandle, desktop_id: String) -> Result<String, String> {
+async fn sidebar_pin(
+    app: AppHandle,
+    ids: Vec<String>,
+    at: Option<usize>,
+) -> Result<Vec<String>, String> {
     let hub = app.state::<Hub>();
     let catalog = local_catalog();
     // The list the user chose from; usually cached, so nothing is scanned.
     let apps = local_apps::list_cached(&hub.local_apps, &hub.programs, &catalog).await;
-    let inst = add_local_app(&hub, &apps, catalog, &desktop_id).await?;
+    let order = pin_tools(&hub, &apps, catalog, &ids, at).await?;
     shortcuts::rebind(app.clone());
     start_background_tools(app).await;
-    Ok(inst.entry.id)
+    Ok(order)
+}
+
+#[tauri::command]
+async fn sidebar_unpin(app: AppHandle, id: String) -> Result<Vec<String>, String> {
+    let hub = app.state::<Hub>();
+    let order = unpin(&app, &hub, &id).await?;
+    shortcuts::rebind(app.clone());
+    Ok(order)
+}
+
+#[tauri::command]
+fn sidebar_set_order(app: AppHandle, order: Vec<String>) -> Result<(), String> {
+    set_sidebar_order(&app.state::<Hub>(), &order)
 }
 
 // ------------------------------------------------------------------- Tools
@@ -887,8 +1077,14 @@ async fn tool_list(app: AppHandle) -> Vec<ToolView> {
     tool_views(&app.state::<Hub>()).await
 }
 
+/// The tools of the sidebar, in its order.
 async fn tool_views(hub: &Hub) -> Vec<ToolView> {
-    let mut installed = tools::load_all(&hub.tools_dir);
+    let all = tools::load_all(&hub.tools_dir);
+    let order = sidebar_state(hub, &all).1;
+    let mut installed: Vec<Installed> = order
+        .iter()
+        .filter_map(|id| all.iter().find(|r| r.entry.id == *id).cloned())
+        .collect();
     let states = futures_util::future::join_all(
         installed
             .iter_mut()
@@ -1737,7 +1933,9 @@ pub fn run() {
             tool_install,
             tool_adopt,
             local_apps_list,
-            local_app_add,
+            sidebar_pin,
+            sidebar_unpin,
+            sidebar_set_order,
             tool_remove_copy,
             tool_dismiss_duplicate,
             tool_forget,
@@ -3817,5 +4015,188 @@ while True:
         let saved = recorded(&hub, "demo").unwrap();
         assert_eq!(saved.window, tools::WindowMode::Own);
         assert_eq!(saved.version.as_deref(), Some("v2"));
+    }
+
+    // ------------------------------------------------------------ Sidebar
+
+    fn ids(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn sidebar_saved(hub: &Hub) -> Option<sidebar::Sidebar> {
+        sidebar::load(&sidebar_file(hub))
+    }
+
+    /// Tools in tuxhub, installed by it (not adopted).
+    fn own_tools(hub: &Hub, list: &[&str]) {
+        for id in list {
+            record(hub, &Installed::new(flatpak_app(id)));
+        }
+    }
+
+    #[tokio::test]
+    async fn sidebar_without_file_is_sorted_by_name() {
+        let (hub, _f) = hub_with_fakes("sidebar-default");
+        own_tools(&hub, &["zeta", "alpha", "mid"]);
+        assert_eq!(current_order(&hub), ids(&["alpha", "mid", "zeta"]));
+    }
+
+    #[tokio::test]
+    async fn pin_of_a_missing_app_changes_nothing() {
+        let (hub, f) = hub_with_fakes("sidebar-pin-missing");
+        own_tools(&hub, &["alpha"]);
+        let apps = [installed_program("a.desktop", "/bin/sh")];
+        for bad in ["desktop:b.desktop", "desktop:", "nope", "../x"] {
+            let err = pin_tools(&hub, &apps, vec![], &ids(&[bad]), None)
+                .await
+                .unwrap_err();
+            assert!(
+                err.contains("not an app on this computer") || err.contains("unknown tool"),
+                "{bad}: {err}"
+            );
+        }
+        let long = format!("desktop:{}", "x".repeat(256));
+        let err = pin_tools(&hub, &apps, vec![], &[long], None)
+            .await
+            .unwrap_err();
+        assert!(err.contains("not an app on this computer"), "{err}");
+        // A bad id among good ones stops all of them.
+        let err = pin_tools(
+            &hub,
+            &apps,
+            vec![],
+            &ids(&["desktop:a.desktop", "desktop:b.desktop"]),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("not an app on this computer"), "{err}");
+        assert_eq!(tools::load_all(&hub.tools_dir).len(), 1);
+        assert_eq!(sidebar_saved(&hub), None);
+        assert!(f.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pinning_an_app_twice_keeps_one_record_and_its_place() {
+        let (hub, _f) = hub_with_fakes("sidebar-pin-twice");
+        own_tools(&hub, &["alpha", "beta"]);
+        // Two start menu entries of one program.
+        let mut a = installed_program("office-writer.desktop", "/bin/sh");
+        a.name = "Writer".into();
+        let apps = [a.clone(), installed_program("office-calc.desktop", "/bin/sh")];
+        let order = pin_tools(&hub, &apps, vec![], &ids(&["desktop:office-writer.desktop"]), Some(1))
+            .await
+            .unwrap();
+        let writer = local_apps::local_id("office-writer.desktop");
+        assert_eq!(order, vec!["alpha".to_string(), writer.clone(), "beta".into()]);
+        // Pinned already: stays where it is.
+        let again = pin_tools(&hub, &apps, vec![], &ids(&["desktop:office-writer.desktop"]), Some(0))
+            .await
+            .unwrap();
+        assert_eq!(again, order);
+        assert_eq!(tools::load_all(&hub.tools_dir).len(), 3);
+        assert_eq!(sidebar_saved(&hub).unwrap().order, order);
+        // Several at once land in the given order at `at`; `at` past the end
+        // means the end.
+        let order = pin_tools(&hub, &apps, vec![], &ids(&["desktop:office-calc.desktop"]), Some(99))
+            .await
+            .unwrap();
+        assert_eq!(order.last().unwrap(), &local_apps::local_id("office-calc.desktop"));
+    }
+
+    #[tokio::test]
+    async fn pinning_another_entry_of_a_recorded_app_reuses_its_record() {
+        let (hub, f) = hub_with_fakes("sidebar-pin-same-app");
+        f.flatpak_with(&[tools::Installation::User]);
+        let apps = [
+            installed_flatpak("x.desktop", "net.example.demo"),
+            installed_flatpak("x-second.desktop", "net.example.demo"),
+        ];
+        pin_tools(&hub, &apps, vec![], &ids(&["desktop:x.desktop"]), None)
+            .await
+            .unwrap();
+        let order = pin_tools(&hub, &apps, vec![], &ids(&["desktop:x-second.desktop"]), None)
+            .await
+            .unwrap();
+        assert_eq!(order.len(), 1);
+        assert_eq!(tools::load_all(&hub.tools_dir).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn unpinning_an_own_tool_keeps_it_installed() {
+        let (hub, f) = hub_with_fakes("sidebar-unpin-own");
+        f.flatpak_with(&[tools::Installation::User]);
+        own_tools(&hub, &["alpha", "beta"]);
+        std::fs::create_dir_all(&hub.settings_dir).unwrap();
+        std::fs::write(hub.settings_path("alpha"), "{}").unwrap();
+        let order = unpin_tool(&hub, "alpha").unwrap();
+        assert_eq!(order, ids(&["beta"]));
+        let saved = recorded(&hub, "alpha").unwrap();
+        assert!(!saved.pinned);
+        assert!(hub.settings_path("alpha").is_file());
+        // Not in the sidebar, but still installed for the workshop.
+        let listed: Vec<_> = tool_views(&hub).await.into_iter().map(|t| t.entry.id).collect();
+        assert_eq!(listed, ids(&["beta"]));
+        // Pinned again: back without a new record.
+        let order = pin_tools(&hub, &[], vec![], &ids(&["alpha"]), Some(0))
+            .await
+            .unwrap();
+        assert_eq!(order, ids(&["alpha", "beta"]));
+        assert!(recorded(&hub, "alpha").unwrap().pinned);
+    }
+
+    #[tokio::test]
+    async fn unpinning_an_adopted_app_forgets_it_and_leaves_the_app() {
+        let (hub, _f) = hub_with_fakes("sidebar-unpin-adopted");
+        let apps = [installed_program("a.desktop", "/bin/sh")];
+        let order = pin_tools(&hub, &apps, vec![], &ids(&["desktop:a.desktop"]), None)
+            .await
+            .unwrap();
+        let id = order[0].clone();
+        assert_eq!(unpin_tool(&hub, &id).unwrap(), Vec::<String>::new());
+        assert!(recorded(&hub, &id).is_none());
+        assert!(Path::new("/bin/sh").is_file());
+        assert_eq!(unpin_tool(&hub, &id).unwrap_err(), "unknown tool");
+        assert_eq!(unpin_tool(&hub, "../etc").unwrap_err(), "unknown tool");
+    }
+
+    #[tokio::test]
+    async fn set_order_accepts_only_a_permutation() {
+        let (hub, _f) = hub_with_fakes("sidebar-order");
+        own_tools(&hub, &["a", "b", "c"]);
+        set_sidebar_order(&hub, &ids(&["c", "a", "b"])).unwrap();
+        let before = std::fs::read_to_string(sidebar_file(&hub)).unwrap();
+        for bad in [ids(&["c", "a"]), ids(&["c", "a", "b", "d"]), ids(&["c", "a", "a", "b"])] {
+            assert_eq!(
+                set_sidebar_order(&hub, &bad).unwrap_err(),
+                "order does not match the sidebar"
+            );
+        }
+        assert_eq!(std::fs::read_to_string(sidebar_file(&hub)).unwrap(), before);
+        assert_eq!(current_order(&hub), ids(&["c", "a", "b"]));
+    }
+
+    #[tokio::test]
+    async fn old_records_without_pinned_are_pinned() {
+        let (hub, _f) = hub_with_fakes("sidebar-old-record");
+        let inst = Installed::new(flatpak_app("old"));
+        let mut value = serde_json::to_value(&inst).unwrap();
+        value.as_object_mut().unwrap().remove("pinned");
+        let dir = hub.tools_dir.join("old");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("tool.json"), value.to_string()).unwrap();
+        assert!(tools::load(&hub.tools_dir, "old").unwrap().pinned);
+        assert_eq!(current_order(&hub), ids(&["old"]));
+    }
+
+    #[tokio::test]
+    async fn tool_list_has_only_pinned_tools_in_their_order() {
+        let (hub, f) = hub_with_fakes("sidebar-tool-list");
+        f.flatpak_with(&[tools::Installation::User]);
+        own_tools(&hub, &["a", "b", "c", "d"]);
+        unpin_tool(&hub, "b").unwrap();
+        set_sidebar_order(&hub, &ids(&["d", "a", "c"])).unwrap();
+        let listed: Vec<_> = tool_views(&hub).await.into_iter().map(|t| t.entry.id).collect();
+        assert_eq!(listed, ids(&["d", "a", "c"]));
     }
 }

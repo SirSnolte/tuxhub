@@ -84,10 +84,11 @@
     busy = view.app.desktop_id;
     try {
       if (on) {
-        onsidebar(await api.localAppAdd(view.app.desktop_id), true);
+        await api.sidebarPin([`desktop:${view.app.desktop_id}`]);
+        onsidebar(view.tool_id, true);
         toast(t("workshop.adoptedToast", { name: view.app.name }), "info");
       } else {
-        await api.forget(view.tool_id);
+        await api.sidebarUnpin(view.tool_id);
         onsidebar(view.tool_id, false);
         toast(t("tool.forgotten", { name: view.app.name }), "info");
       }
