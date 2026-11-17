@@ -652,16 +652,25 @@ async fn flatpak_source(id: &str, path: &Path, programs: &Programs) -> LocalSour
     }
 }
 
-/// The file a program name stands for: a path as it is, a name looked up in `PATH`.
+/// The file a program name stands for: an absolute path as it is, a name
+/// looked up in `PATH`.
 fn find_program(program: &str) -> Option<PathBuf> {
+    find_in(program, &std::env::var_os("PATH")?)
+}
+
+/// [`find_program`] with `path` for `PATH`. Only absolute paths count: a
+/// relative one (`./app`, or a relative `PATH` entry) would depend on
+/// tuxhub's working folder.
+fn find_in(program: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
     if program.contains('/') {
         let p = PathBuf::from(program);
-        return p.is_file().then_some(p);
+        return (p.is_absolute() && p.is_file()).then_some(p);
     }
     if program.is_empty() {
         return None;
     }
-    std::env::split_paths(&std::env::var_os("PATH")?)
+    std::env::split_paths(path)
+        .filter(|d| d.is_absolute())
         .map(|d| d.join(program))
         .find(|p| p.is_file())
 }
@@ -2067,6 +2076,20 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
             assert_eq!(desktop_id, "a.desktop");
             assert_eq!(command, &["/opt/a/run", "-v"]);
         }
+    }
+
+    /// A program is only ever an absolute path: never one relative to
+    /// tuxhub's working folder, also not through a relative `PATH` entry.
+    #[test]
+    fn finds_programs_only_by_absolute_path() {
+        let path = std::ffi::OsString::from("bin:.::/usr/bin");
+        assert_eq!(find_in("/bin/sh", &path), Some(PathBuf::from("/bin/sh")));
+        assert_eq!(find_in("sh", &path), Some(PathBuf::from("/usr/bin/sh")));
+        for relative in ["./sh", "bin/sh", "../bin/sh"] {
+            assert_eq!(find_in(relative, &path), None, "{relative}");
+        }
+        assert_eq!(find_in("sh", std::ffi::OsStr::new("bin:.:")), None);
+        assert_eq!(find_in("", &path), None);
     }
 
     /// The stored command names its program by absolute path, so the start
