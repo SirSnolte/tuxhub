@@ -629,7 +629,8 @@ pub async fn resolve_source(app: &DesktopApp, programs: &Programs) -> LocalSourc
 }
 
 async fn flatpak_source(id: &str, path: &Path, programs: &Programs) -> LocalSource {
-    // The folder the file was found in tells one installation; ask for the other.
+    // The folder the file was found in tells one installation, also when
+    // flatpak does not answer in time.
     let known = if path.starts_with("/var/lib/flatpak/exports") {
         Some(Installation::System)
     } else if path.to_string_lossy().contains("/flatpak/exports/") {
@@ -638,27 +639,27 @@ async fn flatpak_source(id: &str, path: &Path, programs: &Programs) -> LocalSour
         None
     };
     let (system, user) = futures_util::future::join(
-        async {
-            known == Some(Installation::System)
-                || programs.flatpak_installed(id, Installation::System).await
-        },
-        async {
-            known == Some(Installation::User)
-                || programs.flatpak_installed(id, Installation::User).await
-        },
+        programs.flatpak_origin(id, Installation::System),
+        programs.flatpak_origin(id, Installation::User),
     )
     .await;
+    let installed = |answer: &Option<(bool, Option<String>)>, inst| {
+        known == Some(inst) || answer.as_ref().is_some_and(|(yes, _)| *yes)
+    };
     let mut installations = Vec::new();
-    if system {
-        installations.push(Installation::System);
-    }
-    if user {
-        installations.push(Installation::User);
+    let mut origin = None;
+    for (answer, inst) in [(system, Installation::System), (user, Installation::User)] {
+        if installed(&answer, inst) {
+            // The remote of the installation tuxhub uses: the first one.
+            if installations.is_empty() {
+                origin = answer.and_then(|(_, o)| o);
+            }
+            installations.push(inst);
+        }
     }
     if installations.is_empty() {
         installations.push(Installation::User);
     }
-    let origin = programs.flatpak_origin(id, installations[0]).await;
     LocalSource::Flatpak {
         flatpak_id: id.to_string(),
         installations,
@@ -1590,6 +1591,35 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
             };
             assert_eq!(origin, None, "{bad:?}");
         }
+    }
+
+    /// One `flatpak info --show-origin` per installation tells both whether
+    /// the app is there and where it came from: no third process.
+    #[tokio::test]
+    async fn asks_flatpak_once_per_installation() {
+        let f = Fakes::new("local-flatpak-calls");
+        f.flatpak_from(&[Installation::User], "flathub");
+        let mut a = app(&[]);
+        a.flatpak_id = Some("org.x.App".into());
+        a.path = PathBuf::from("/home/u/.local/share/flatpak/exports/share/applications/x.desktop");
+        let source = resolve_source(&a, &f.programs).await;
+        assert_eq!(
+            source,
+            LocalSource::Flatpak {
+                flatpak_id: "org.x.App".into(),
+                installations: vec![Installation::User],
+                origin: Some("flathub".into()),
+            }
+        );
+        let mut calls = f.calls();
+        calls.sort();
+        assert_eq!(
+            calls,
+            [
+                "flatpak info --system --show-origin org.x.App",
+                "flatpak info --user --show-origin org.x.App",
+            ]
+        );
     }
 
     #[tokio::test]

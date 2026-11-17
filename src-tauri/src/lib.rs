@@ -780,7 +780,7 @@ async fn add_local_app(
             adopt_entry(hub, catalog, &id).await?
         }
         None => {
-            let entry = local_apps::local_entry(app);
+            let entry = local_apps::local_entry(&with_origin(hub, app).await?);
             if tools::load(&hub.tools_dir, &entry.id).is_ok() {
                 return Err(format!("{} is already in tuxhub", entry.name));
             }
@@ -792,6 +792,37 @@ async fn add_local_app(
         tools::save(&hub.tools_dir, &inst)?;
     }
     Ok(inst)
+}
+
+/// `app` with the remote of its Flatpak, asked again when flatpak did not
+/// name it when the list was read. A Flatpak that is installed but whose
+/// remote flatpak still does not name is refused: added as a program tuxhub
+/// only starts, it would never be updated.
+async fn with_origin(
+    hub: &Hub,
+    app: &local_apps::LocalApp,
+) -> Result<local_apps::LocalApp, String> {
+    let mut app = app.clone();
+    if let local_apps::LocalSource::Flatpak {
+        flatpak_id,
+        installations,
+        origin: origin @ None,
+    } = &mut app.source
+        && let Some(&installation) = installations.first()
+    {
+        match hub.programs.flatpak_origin(flatpak_id, installation).await {
+            Some((true, Some(remote))) => *origin = Some(remote),
+            Some((true, None)) => {
+                return Err(format!(
+                    "flatpak did not tell where {} was installed from; try again",
+                    app.name
+                ));
+            }
+            // Not there or no answer: it is only started, as before.
+            _ => {}
+        }
+    }
+    Ok(app)
 }
 
 #[tauri::command]
@@ -2606,6 +2637,33 @@ while True:
             .await
             .unwrap_err();
         assert!(err.contains("already in tuxhub"), "{err}");
+    }
+
+    /// A Flatpak whose remote flatpak did not name when the list was read is
+    /// asked again; one that is there but names no remote is not added for
+    /// good as a program tuxhub only starts: the user can try again.
+    #[tokio::test]
+    async fn a_flatpak_without_remote_is_not_added_as_a_launcher() {
+        let (hub, f) = hub_with_fakes("local-no-origin");
+        let mut app = installed_flatpak("x.desktop", "net.example.demo");
+        if let local_apps::LocalSource::Flatpak { origin, .. } = &mut app.source {
+            *origin = None;
+        }
+        let apps = [app];
+        f.flatpak_from(&[tools::Installation::User], "");
+        let err = add_local_app(&hub, &apps, vec![], "x.desktop")
+            .await
+            .unwrap_err();
+        assert!(err.contains("try again"), "{err}");
+        assert!(tools::load_all(&hub.tools_dir).is_empty());
+
+        f.flatpak_from(&[tools::Installation::User], "flathub");
+        let inst = add_local_app(&hub, &apps, vec![], "x.desktop")
+            .await
+            .unwrap();
+        assert!(
+            matches!(&inst.entry.source, Source::Flatpak { remote, .. } if remote == "flathub")
+        );
     }
 
     /// An app that starts at login already runs: it opens in its own window.

@@ -653,13 +653,15 @@ impl Programs {
             .map(|o| o.status.success())
     }
 
-    /// The remote the app in the installation came from, when flatpak names
-    /// a valid one in time.
+    /// Whether the installation has the app and the remote it came from,
+    /// with one `flatpak info --show-origin` (it fails exactly when the app
+    /// is not installed). `None` when flatpak did not answer in time; the
+    /// remote is `None` when flatpak names no valid one.
     pub(crate) async fn flatpak_origin(
         &self,
         flatpak_id: &str,
         installation: Installation,
-    ) -> Option<String> {
+    ) -> Option<(bool, Option<String>)> {
         let out = self
             .query(
                 &self.flatpak,
@@ -667,7 +669,11 @@ impl Programs {
             )
             .await?;
         let origin = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        (out.status.success() && valid_flatpak_name(&origin)).then_some(origin)
+        let installed = out.status.success();
+        Some((
+            installed,
+            (installed && valid_flatpak_name(&origin)).then_some(origin),
+        ))
     }
 
     /// The version of the app in the installation, when flatpak tells it.
