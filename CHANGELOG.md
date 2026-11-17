@@ -13,11 +13,11 @@ All notable changes to tuxhub are documented in this file. The format follows
   Debian package, AppImage or program) and integration level, read offline
   from the desktop entries and the local AppStream data. Settings modules,
   system and console tools, Wine's built-in tools, help screens, game
-  shortcuts of Steam, Heroic and Lutris and web apps of browsers stay hidden until "Show more (system
-  apps)"; the search always looks through all apps, and apps in the sidebar
-  always stay in the list. Apps that need a terminal are not listed. Catalog
-  apps that are already on the computer appear once, with the catalog's
-  texts.
+  shortcuts of Steam, Heroic and Lutris and web apps of browsers stay hidden
+  until "Show more (system apps)"; the search always looks through all
+  apps, and apps in the sidebar always stay in the list. Apps that need a
+  terminal are not listed. Catalog apps that are already on the computer
+  appear once, with the catalog's texts.
 - The switch "Sidebar" on each card adds any installed app to the sidebar
   without installing it a second time, and removes it again; the app always
   stays on the computer. The detail dialog shows the description, the README
@@ -26,11 +26,14 @@ All notable changes to tuxhub are documented in this file. The format follows
   when they are added. tuxhub never changes their autostart.
 - Installed apps are updated only through their source: `flatpak update` for
   Flatpaks, the package manager (dnf or apt-get, through pkexec) for
-  distribution packages. They are never updated from GitHub. AppImages and
-  other programs can be started but not updated by tuxhub. Updates show on
-  the card, in a row of their own below the switch, and in the sidebar. A
-  Flatpak keeps the remote it was installed from; a new build of the
-  installed version is offered with its commit, e.g. "43.beta (a1b2c3d4e5f6)".
+  distribution packages. Apps added from the start menu are never updated
+  from GitHub; an app the catalog knows is added through its catalog entry
+  and keeps the catalog's way of updating. AppImages and other programs can
+  be started but not updated by tuxhub. Updates show on the card, in a row
+  of their own below the switch, and in the sidebar. A Flatpak keeps the
+  remote it was installed from; a new build of the installed version is
+  offered with its commit, e.g. "43.beta (a1b2c3d4e5f6)". A Flatpak whose
+  remote flatpak cannot name is not added; tuxhub asks to try again.
 - An update that changes the system asks first: a distribution package, or
   a Flatpak of the system installation, names the package and the program,
   e.g. "Update kcalc system-wide with dnf? Other packages may be updated
@@ -55,6 +58,12 @@ All notable changes to tuxhub are documented in this file. The format follows
 ### Fixed
 
 - AppStream descriptions keep text blocks that have no translation.
+- Large Flathub collections (up to 256 MB) are read, a broken entry no
+  longer drops the AppStream data of all apps, and a collection shared by
+  the system and the user installation is read once. The data of other
+  architectures than x86_64 is found too.
+- Package versions with a hyphen in the upstream version (Debian's
+  `2.3-rc1-1`) are accepted.
 
 ## [0.10.0] - 2026-11-16
 

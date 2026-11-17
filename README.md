@@ -28,7 +28,8 @@ use it either in its own window or directly inside tuxhub.
   the computer, from the start menu, and adds any of them to the sidebar with
   one switch. tuxhub never installs them again, never starts a second
   instance and updates them only through their own source (Flatpak or the
-  package manager).
+  package manager); apps the catalog knows keep the catalog's way of
+  updating.
 - **Updates:** tuxhub checks installed tools, Flatpaks and itself for new
   releases.
   Updates of tuxhub are cryptographically signed and verified before they are
@@ -113,9 +114,8 @@ reads the desktop entries and the local AppStream data and needs no network.
 Settings modules, system and console tools, Wine's built-in tools, help
 screens, game shortcuts of Steam, Heroic and Lutris and web apps of browsers
 are hidden until you choose "Show more (system apps)"; the search always
-looks through all apps,
-and apps in the sidebar always stay in the list. Apps that need a terminal
-are not listed.
+looks through all apps, and apps in the sidebar always stay in the list.
+Apps that need a terminal are not listed.
 
 - **Sidebar:** the switch adds the app to the sidebar or removes it. The app
   stays on the computer either way.
@@ -132,7 +132,9 @@ are not listed.
   they came from, distribution packages with dnf or apt-get (through pkexec).
   Before an update changes the system (a distribution package or a Flatpak
   of the system installation), tuxhub names the package and the program and
-  asks first. Installed apps are never updated from GitHub. AppImages and
+  asks first. Apps added from the start menu are never updated from GitHub.
+  An app the catalog knows is added through its catalog entry and keeps the
+  catalog's way of updating, which can be a GitHub release. AppImages and
   other programs can be started, but tuxhub does not update them.
 
 ## For app developers
