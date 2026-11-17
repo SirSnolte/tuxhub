@@ -274,6 +274,8 @@ export const api = {
   /** Updates these start menu apps: packages with one password prompt.
    * Progress comes as the event `local-update-progress`. */
   localAppsUpdate: (desktopIds: string[]) => invoke<UpdateResult[]>("local_apps_update", { desktopIds }),
+  /** Starts a start menu app, also one that is not in the sidebar. */
+  localAppLaunch: (desktopId: string) => invoke<void>("local_app_launch", { desktopId }),
   /** How a start menu app would be uninstalled, and whether tuxhub refuses. */
   localAppRemovePreview: (desktopId: string) => invoke<RemovePreview>("local_app_remove_preview", { desktopId }),
   /** Uninstalls a start menu app; the backend checks the preview again. */

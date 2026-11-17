@@ -1785,6 +1785,26 @@ fn forget_removed(hub: &Hub, app: &local_apps::LocalApp) {
     *hub.local_apps.lock().unwrap() = None;
 }
 
+/// Starts an app of the start menu: through its record when it has one,
+/// otherwise with the command of its entry (never through a shell).
+async fn launch_local(hub: &Hub, local: &local_apps::LocalApp) -> Result<(), String> {
+    if let Some(r) = record_of(hub, local) {
+        return launch_tool(hub, &r).await.map(|_| ());
+    }
+    let inst = Installed {
+        adopted: true,
+        ..Installed::new(local_apps::local_entry(local))
+    };
+    tools::launch(&hub.tools_dir, &inst)
+}
+
+#[tauri::command]
+async fn local_app_launch(app: AppHandle, desktop_id: String) -> Result<(), String> {
+    let hub = app.state::<Hub>();
+    let local = listed_app(&hub, &desktop_id).await?;
+    launch_local(&hub, &local).await
+}
+
 #[tauri::command]
 async fn local_app_remove_preview(
     app: AppHandle,
@@ -2134,6 +2154,7 @@ pub fn run() {
             local_apps_update,
             local_app_remove_preview,
             local_app_remove,
+            local_app_launch,
             app_area_set,
             workshop_prefs_set,
             tool_remove_copy,
@@ -4433,5 +4454,25 @@ while True:
         record(&hub, &adopted);
         assert_eq!(is_tuxhub_tool(&hub, &app), None);
         assert_eq!(remove_preview(&hub, &app).await.method, "flatpak");
+    }
+
+    #[tokio::test]
+    async fn an_app_outside_the_sidebar_starts_with_its_command() {
+        let (hub, f) = hub_with_fakes("launch-local");
+        let marker = f.dir.join("started");
+        let script = f.dir.join("app.sh");
+        std::fs::write(&script, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let app = installed_program("a.desktop", script.to_str().unwrap());
+        launch_local(&hub, &app).await.unwrap();
+        for _ in 0..100 {
+            if marker.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(marker.exists());
+        // Nothing is recorded.
+        assert!(tools::load_all(&hub.tools_dir).is_empty());
     }
 }
