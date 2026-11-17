@@ -19,7 +19,7 @@
   import SettingsForm from "./SettingsForm.svelte";
   import WebPanel from "./WebPanel.svelte";
   import EmbedPanel from "./EmbedPanel.svelte";
-  import { needsRestartDialog, systemUpdateOf, updateWithConsent, type SystemUpdate } from "./installed-apps";
+  import { needsRestartDialog, runningUnknown, systemUpdateOf, updateWithConsent, type SystemUpdate } from "./installed-apps";
   import SystemUpdateDialog from "./SystemUpdateDialog.svelte";
   import LaunchPanel from "./LaunchPanel.svelte";
   import LivePanel from "./LivePanel.svelte";
@@ -142,7 +142,8 @@
     if (embedPanel) await embedPanel.startInHub();
     else
       await api.embedStart(id, false).catch((e) => {
-        throw needsRestartDialog(e) ? t("embed.runningOutside.title", { name: tool.entry.name }) : e;
+        if (needsRestartDialog(e)) throw t("embed.runningOutside.title", { name: tool.entry.name });
+        throw runningUnknown(e) ? t("embed.runningUnknown", { name: tool.entry.name }) : e;
       });
   }
 

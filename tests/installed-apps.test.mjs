@@ -5,12 +5,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   RUNNING_OUTSIDE,
+  RUNNING_UNKNOWN,
   canUpdate,
   localSystemUpdateOf,
   systemUpdateOf,
   updateWithConsent,
   filterApps,
   needsRestartDialog,
+  runningUnknown,
   sourceLabelKey,
 } from "../src/lib/installed-apps.ts";
 
@@ -33,6 +35,21 @@ test("only the running-outside error asks to restart the app inside tuxhub", () 
   ]) {
     assert.equal(needsRestartDialog(err), false, String(err));
   }
+});
+
+test("an app tuxhub cannot tell is running is explained, not restarted", () => {
+  assert.equal(RUNNING_UNKNOWN, "running-unknown");
+  assert.equal(runningUnknown("running-unknown"), true);
+  assert.equal(needsRestartDialog("running-unknown"), false);
+  for (const err of ["running-outside", "Running-Unknown", "", null, undefined, 42]) {
+    assert.equal(runningUnknown(err), false, String(err));
+  }
+  assert.ok(
+    en.includes(
+      `"embed.runningUnknown": "tuxhub can't tell whether {name} is already running. Use “Own window” for this app.",`,
+    ),
+  );
+  assert.ok(de.includes(`"embed.runningUnknown":`));
 });
 
 test("every text of the running-outside dialog exists in English and German", () => {

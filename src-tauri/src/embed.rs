@@ -25,6 +25,10 @@ const PORTALS_CONF: &str = "[preferred]\ndefault=gtk\n";
 /// Error of [`start`] when the app already runs outside tuxhub. The app's
 /// own D-Bus in the session hides that instance, so it would start twice.
 pub const RUNNING_OUTSIDE: &str = "running-outside";
+
+/// Error of [`start`] when tuxhub cannot tell whether an app added from this
+/// computer already runs: it would maybe start a second time inside tuxhub.
+pub const RUNNING_UNKNOWN: &str = "running-unknown";
 /// How long a restart waits for the app to quit, quitting included.
 pub const STOP_WAIT: Duration = Duration::from_secs(10);
 /// How often a restart asks whether the app has quit.
@@ -182,11 +186,14 @@ fn url(port: u16) -> String {
 /// that already runs outside tuxhub (`probe` says [`RunState::Own`]) is not
 /// started a second time: without `restart` this fails with
 /// [`RUNNING_OUTSIDE`]; with it, the app is quit first (`quit`) and started
-/// once it has stopped.
+/// once it has stopped. An app added from this computer (`adopted`) whose
+/// state cannot be found out fails with [`RUNNING_UNKNOWN`].
+#[allow(clippy::too_many_arguments)]
 pub async fn start<R, P, PF, Q, QF>(
     app: &AppHandle<R>,
     id: &str,
     name: &str,
+    adopted: bool,
     restart: bool,
     probe: P,
     quit: Q,
@@ -204,6 +211,7 @@ where
     let _turn = app.state::<Hub>().embeds.start_turn(id).await;
     guarded(
         name,
+        adopted,
         restart,
         || status(app, id),
         probe,
@@ -221,9 +229,13 @@ where
 /// outside tuxhub: then it fails with [`RUNNING_OUTSIDE`], or with `restart`
 /// quits the app and waits until `probe` says it has stopped, at most
 /// `wait.timeout` from the start of quitting. A state that cannot be found
-/// out (a shared launcher) starts as before.
+/// out fails with [`RUNNING_UNKNOWN`] for an app added from this computer
+/// (`adopted`: maybe started by the user, in the background); other apps
+/// start as before.
+#[allow(clippy::too_many_arguments)]
 async fn guarded<E, EF, P, PF, Q, QF, L, LF, T>(
     name: &str,
+    adopted: bool,
     restart: bool,
     existing: E,
     mut probe: P,
@@ -244,7 +256,11 @@ where
     if let Some(running) = existing().await {
         return Ok(running);
     }
-    if probe().await == RunState::Own {
+    let state = probe().await;
+    if adopted && state == RunState::Unknown {
+        return Err(RUNNING_UNKNOWN.into());
+    }
+    if state == RunState::Own {
         if !restart {
             return Err(RUNNING_OUTSIDE.into());
         }
@@ -537,6 +553,7 @@ mod tests {
             "gif-color-changer",
             "GIF Color Changer",
             false,
+            false,
             || async { RunState::Stopped },
             || async { Ok(()) },
         )
@@ -592,10 +609,23 @@ mod tests {
         calls: &Calls,
         wait: Wait,
     ) -> Result<u16, String> {
+        guarded_for(false, restart, states, quit, calls, wait).await
+    }
+
+    /// Like [`guarded_with`]; `adopted`: an app added from this computer.
+    async fn guarded_for(
+        adopted: bool,
+        restart: bool,
+        states: &[RunState],
+        quit: Result<(), String>,
+        calls: &Calls,
+        wait: Wait,
+    ) -> Result<u16, String> {
         let next = std::sync::Mutex::new(0usize);
         let next = &next;
         guarded(
             "Demo",
+            adopted,
             restart,
             || async { None },
             move || async move {
@@ -660,6 +690,21 @@ mod tests {
         }
     }
 
+    /// An app added from this computer whose state is unknown (a script or
+    /// shared launcher) may already run: it is not started a second time.
+    #[tokio::test]
+    async fn embed_refuses_an_adopted_app_in_an_unknown_state() {
+        for restart in [false, true] {
+            let calls = Calls::default();
+            let out = guarded_for(true, restart, &[RunState::Unknown], Ok(()), &calls, SHORT).await;
+            assert_eq!(out, Err(RUNNING_UNKNOWN.to_string()));
+            assert!(calls.lock().unwrap().is_empty(), "no session, nothing quit");
+        }
+        let calls = Calls::default();
+        let out = guarded_for(true, false, &[RunState::Stopped], Ok(()), &calls, SHORT).await;
+        assert_eq!(out, Ok(4000));
+    }
+
     #[tokio::test]
     async fn embed_starts_nothing_when_quitting_fails() {
         let calls = Calls::default();
@@ -692,6 +737,7 @@ mod tests {
             let _turn = sessions.start_turn("demo").await;
             guarded(
                 "Demo",
+                false,
                 true,
                 move || async move { *session.lock().unwrap() },
                 move || async move {

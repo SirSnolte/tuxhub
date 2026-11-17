@@ -121,7 +121,10 @@ choose "Show more (system apps)"; the search always looks through all apps.
   never changes their autostart.
 - **Running instances:** if the app already runs outside tuxhub, starting it
   inside tuxhub asks first, then quits the running instance and starts it in
-  the hub. tuxhub never starts a second instance.
+  the hub. When tuxhub cannot tell whether the app runs (it starts through a
+  script or a shared launcher such as a shell), it does not start it inside
+  tuxhub and suggests its own window instead. tuxhub never starts a second
+  instance.
 - **Updates:** Flatpaks are updated with `flatpak update` from the remote
   they came from, distribution packages with dnf or apt-get (through pkexec).
   Before an update changes the system (a distribution package or a Flatpak

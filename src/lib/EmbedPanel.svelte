@@ -7,7 +7,7 @@
   import { api, describe, errText, type Tool, type WindowMode } from "./api";
   import { toast } from "./state.svelte";
   import { canToggleWindow } from "./apps/integration";
-  import { needsRestartDialog } from "./installed-apps";
+  import { needsRestartDialog, runningUnknown } from "./installed-apps";
   import { valueOf } from "./wa";
 
   let {
@@ -271,7 +271,7 @@
         outside = true;
         return;
       }
-      throw e;
+      throw runningUnknown(e) ? t("embed.runningUnknown", { name: tool.entry.name }) : e;
     } finally {
       starting = false;
     }

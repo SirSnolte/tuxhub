@@ -36,7 +36,10 @@ All notable changes to tuxhub are documented in this file. The format follows
 - tuxhub never starts a second instance of an app inside tuxhub. When the
   app already runs outside, for example as a background service, a dialog
   asks first; on confirmation tuxhub quits it, gives it time to end and
-  starts it in the hub. Flatpaks are recognised with `flatpak ps`.
+  starts it in the hub. Flatpaks are recognised with `flatpak ps`. When
+  tuxhub cannot tell whether an installed app runs (it starts through a
+  script such as `/usr/bin/libreoffice` or a shared launcher), it does not
+  start it inside tuxhub and suggests "Own window" instead.
 - Shared launchers (shells, interpreters, `flatpak`, `snap`, Wine, Steam
   and similar) are never treated as an app's own program, so tuxhub never
   quits or watches them.

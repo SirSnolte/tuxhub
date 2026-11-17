@@ -938,8 +938,9 @@ async fn run_state(hub: &Hub, in_hub: bool, inst: &Installed) -> RunState {
     if in_hub {
         return RunState::Hub;
     }
-    // Its processes cannot be told from others that run the same launcher.
-    if tools::shared_launcher(inst) {
+    // Its processes cannot be told from others that run the same launcher,
+    // and a script runs as its interpreter, not as its own program.
+    if tools::shared_launcher(inst) || tools::script_program(inst) {
         return RunState::Unknown;
     }
     if let Source::Flatpak { flatpak_id, .. } = &inst.entry.source
@@ -1407,6 +1408,7 @@ async fn embed_start(
         &app,
         &id,
         &inst.entry.name,
+        inst.adopted,
         restart,
         || run_state(&hub, false, &inst),
         // An app like a daemon may need longer than `QUIT_WAIT` to quit.
@@ -2620,10 +2622,12 @@ while True:
             "flatpak",
             "[ \"$1\" = ps ] && echo net.example.demo\nexit 0",
         );
-        // Programs of their own: a shared one like /bin/sh always runs somewhere.
-        f.set("run-a", "exit 0");
-        f.set("run-b", "exit 0");
+        // Programs of their own: a shared one like /bin/sh always runs
+        // somewhere, and the run state of a script is unknown.
         let (run_a, run_b) = (f.dir.join("run-a"), f.dir.join("run-b"));
+        for program in [&run_a, &run_b] {
+            std::fs::copy("/usr/bin/true", program).unwrap();
+        }
         let apps = vec![
             installed_flatpak("x.desktop", "net.example.demo"),
             installed_program("a.desktop", run_a.to_str().unwrap()),
@@ -2727,6 +2731,21 @@ while True:
         assert!(err.contains("not started and stopped by tuxhub"), "{err}");
         // `quit_app` is not called here: a regression would end the user's shells.
         assert!(tools::app_program(&hub.tools_dir, &inst).is_none());
+    }
+
+    /// An app whose program is a `#!` script runs as its interpreter: tuxhub
+    /// cannot tell whether it runs, rather than calling it stopped.
+    #[tokio::test]
+    async fn script_programs_have_an_unknown_run_state() {
+        let (hub, f) = hub_with_fakes("local-script-state");
+        f.set("script-app", "exit 0");
+        let script = f.dir.join("script-app");
+        let app = installed_program("s.desktop", script.to_str().unwrap());
+        let inst = add_local_app(&hub, &[app], vec![], "s.desktop")
+            .await
+            .unwrap();
+        assert_eq!(run_state(&hub, false, &inst).await, RunState::Unknown);
+        assert_eq!(run_state(&hub, true, &inst).await, RunState::Hub);
     }
 
     /// tuxhub never removes an app it only added from this computer.

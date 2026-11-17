@@ -1715,6 +1715,29 @@ pub fn shared_launcher(inst: &Installed) -> bool {
     }
 }
 
+/// Whether the app was added from this computer and its program is a `#!`
+/// script (like `/usr/bin/libreoffice`). The script runs as its interpreter,
+/// so [`processes`] never finds the app by its program.
+pub fn script_program(inst: &Installed) -> bool {
+    use std::io::Read;
+    let (Source::DistroPackage { command, .. } | Source::Launcher { command, .. }) =
+        &inst.entry.source
+    else {
+        return false;
+    };
+    let Some(program) = command.first() else {
+        return false;
+    };
+    // Opening a FIFO or device would block or read from it.
+    if !std::fs::metadata(program).is_ok_and(|m| m.is_file()) {
+        return false;
+    }
+    let mut head = [0u8; 2];
+    std::fs::File::open(program)
+        .and_then(|f| f.take(2).read_exact(&mut head))
+        .is_ok_and(|()| &head == b"#!")
+}
+
 /// Whether the app of [`app_program`] is running, also when it was started
 /// outside tuxhub (or inside tuxhub's xpra session).
 pub fn app_running(tools_dir: &Path, inst: &Installed) -> bool {
@@ -2950,6 +2973,35 @@ mod tests {
         let inst = Installed::new(launcher_entry(&[own.to_str().unwrap()]));
         assert_eq!(app_program(&tools, &inst), Some(own));
         assert!(!shared_launcher(&inst));
+    }
+
+    /// A program that is a `#!` script (like `/usr/bin/libreoffice`) runs as
+    /// its interpreter: its processes are never found by the program.
+    #[test]
+    fn knows_script_programs() {
+        let f = Fakes::new("script-program");
+        f.set("script-app", "exit 0");
+        let script = f.dir.join("script-app");
+        assert!(script_program(&Installed::new(launcher_entry(&[script
+            .to_str()
+            .unwrap()]))));
+        let mut e = distro_entry("rpm");
+        if let Source::DistroPackage { command, .. } = &mut e.source {
+            *command = vec![script.to_str().unwrap().into()];
+        }
+        assert!(script_program(&Installed::new(e)));
+        // A binary, a missing file and a short file are not scripts.
+        for program in ["/usr/bin/true", "/nonexistent/tuxhub-test/app"] {
+            assert!(
+                !script_program(&Installed::new(launcher_entry(&[program]))),
+                "{program}"
+            );
+        }
+        let short = f.dir.join("short");
+        std::fs::write(&short, "#").unwrap();
+        assert!(!script_program(&Installed::new(launcher_entry(&[short
+            .to_str()
+            .unwrap()]))));
     }
 
     #[tokio::test]

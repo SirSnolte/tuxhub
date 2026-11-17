@@ -12,6 +12,17 @@ export function needsRestartDialog(err: unknown): boolean {
   return err === RUNNING_OUTSIDE;
 }
 
+/** Error of `embed_start` when tuxhub cannot tell whether an app added
+ * from this computer already runs (a script or shared launcher); starting
+ * it inside tuxhub could run it twice. */
+export const RUNNING_UNKNOWN = "running-unknown";
+
+/** Whether starting inside tuxhub failed because tuxhub cannot tell whether
+ * the app already runs; the user is told to use its own window. */
+export function runningUnknown(err: unknown): boolean {
+  return err === RUNNING_UNKNOWN;
+}
+
 /** The installed apps whose name, summary, desktop file id, Flatpak ID or
  * package contains `query`, ignoring case; all of them for an empty query. */
 export function filterApps(apps: LocalAppView[], query: string): LocalAppView[] {
