@@ -394,6 +394,7 @@ mod tests {
             command: vec![],
             autostart: false,
             system: false,
+            desktop_file: PathBuf::new(),
         }
     }
 

@@ -597,9 +597,12 @@ pub struct LocalApp {
     pub source: LocalSource,
     pub command: Vec<String>,
     pub autostart: bool,
-    /// A settings module, system or console tool, Wine tool, help screen or
-    /// game shortcut: shown with "Show more" and found by the search.
+    /// A settings module, system or console tool, Wine tool or help
+    /// screen: shown with "Show more" and found by the search.
     pub system: bool,
+    /// The desktop file the entry was read from.
+    #[serde(skip)]
+    pub desktop_file: PathBuf,
 }
 
 /// Cached list: newest application folder time, apps.
@@ -1063,6 +1066,7 @@ async fn build_app(
         .or_else(|| index.get(id.strip_suffix(".desktop").unwrap_or(id)));
     let autostart = autostart_matches(&app, autostart_dir);
     LocalApp {
+        desktop_file: app.path.clone(),
         desktop_id: app.desktop_id,
         name: app.name,
         summary: app.comment.or_else(|| info.and_then(|i| i.summary.clone())),
@@ -2102,6 +2106,7 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
             command: command.iter().map(|s| s.to_string()).collect(),
             autostart: false,
             system: false,
+            desktop_file: PathBuf::new(),
         }
     }
 

@@ -195,6 +195,15 @@ export type UpdateResult = { desktop_id: string; ok: boolean; error: string | nu
 /** Progress of `localAppsUpdate`: stage "dnf", "flatpak", "done" or "failed". */
 export type LocalUpdateProgress = { desktop_id: string; stage: "dnf" | "flatpak" | "done" | "failed" };
 
+/** How an app is uninstalled: `packages` is everything dnf would remove;
+ * `blocked` says why tuxhub refuses. */
+export type RemovePreview = {
+  method: "flatpak" | "dnf" | "steam" | "heroic" | "lutris" | "appimage" | "tool" | "none";
+  packages: string[];
+  blocked: string | null;
+  needs_admin: boolean;
+};
+
 export type LocalSource =
   /** `origin`: the remote of the installation tuxhub uses; null when flatpak did not name one. */
   | { kind: "flatpak"; flatpak_id: string; installations: ("user" | "system")[]; origin: string | null }
@@ -261,6 +270,10 @@ export const api = {
   /** Updates these start menu apps: packages with one password prompt.
    * Progress comes as the event `local-update-progress`. */
   localAppsUpdate: (desktopIds: string[]) => invoke<UpdateResult[]>("local_apps_update", { desktopIds }),
+  /** How a start menu app would be uninstalled, and whether tuxhub refuses. */
+  localAppRemovePreview: (desktopId: string) => invoke<RemovePreview>("local_app_remove_preview", { desktopId }),
+  /** Uninstalls a start menu app; the backend checks the preview again. */
+  localAppRemove: (desktopId: string, keepData: boolean) => invoke<void>("local_app_remove", { desktopId, keepData }),
   /** Saves a new order of the pinned tools (each of them once). */
   sidebarSetOrder: (order: string[]) => invoke<void>("sidebar_set_order", { order }),
   tools: () => invoke<Tool[]>("tool_list"),

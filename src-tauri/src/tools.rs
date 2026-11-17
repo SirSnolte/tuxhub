@@ -615,6 +615,8 @@ pub struct Programs {
     pub apt_get: PathBuf,
     /// Runs a program as root; it asks for the password.
     pub pkexec: PathBuf,
+    /// Opens a link with the app that handles it (a store client).
+    pub xdg_open: PathBuf,
     /// Longest time a query may take before it counts as "not installed".
     pub timeout: Duration,
     /// Longest time a query of a remote may take.
@@ -632,6 +634,7 @@ impl Default for Programs {
             apt: "apt".into(),
             apt_get: "apt-get".into(),
             pkexec: "pkexec".into(),
+            xdg_open: "xdg-open".into(),
             timeout: Duration::from_secs(5),
             network_timeout: Duration::from_secs(60),
         }
@@ -2208,6 +2211,7 @@ impl Fakes {
             apt: dir.join("apt"),
             apt_get: dir.join("apt-get"),
             pkexec: dir.join("pkexec"),
+            xdg_open: dir.join("xdg-open"),
             timeout: Duration::from_secs(5),
             network_timeout: Duration::from_secs(5),
         };

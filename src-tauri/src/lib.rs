@@ -3,6 +3,7 @@ mod embed;
 mod github;
 mod live;
 mod local_apps;
+mod local_remove;
 mod local_updates;
 mod manifest;
 mod native;
@@ -1696,6 +1697,112 @@ async fn local_apps_update(
     results
 }
 
+// --------------------------------------------------------------- Uninstall
+
+/// The record of `app` in tuxhub, if it has one.
+fn record_of(hub: &Hub, app: &local_apps::LocalApp) -> Option<Installed> {
+    tools::load_all(&hub.tools_dir)
+        .into_iter()
+        .find(|r| local_apps::same_app(&r.entry, app))
+}
+
+/// Whether `app` is a tool tuxhub installed: it is uninstalled like one.
+fn is_tuxhub_tool(hub: &Hub, app: &local_apps::LocalApp) -> Option<String> {
+    record_of(hub, app)
+        .filter(|r| !r.adopted && has_record(hub, r.id()))
+        .map(|r| r.entry.id)
+}
+
+/// The app of the current list with this desktop id.
+async fn listed_app(hub: &Hub, desktop_id: &str) -> Result<local_apps::LocalApp, String> {
+    let catalog = local_catalog();
+    let apps = local_apps::list_cached(&hub.local_apps, &hub.programs, &catalog).await;
+    (desktop_id.len() <= MAX_DESKTOP_ID)
+        .then(|| apps.into_iter().find(|a| a.desktop_id == desktop_id))
+        .flatten()
+        .filter(|a| !is_own_tool(hub, a))
+        .ok_or_else(|| "this is not an app on this computer".to_string())
+}
+
+async fn remove_preview(hub: &Hub, app: &local_apps::LocalApp) -> local_remove::RemovePreview {
+    let home = local_remove::home();
+    let env = local_remove::Env {
+        programs: &hub.programs,
+        home: &home,
+        protected_dir: Path::new(local_remove::PROTECTED_DIR),
+        tool: is_tuxhub_tool(hub, app).is_some(),
+    };
+    local_remove::preview(&env, app).await
+}
+
+/// After an app was removed: its record and sidebar place go, its pending
+/// updates are forgotten and the app list is read again.
+fn forget_removed(hub: &Hub, app: &local_apps::LocalApp) {
+    if let Some(r) = record_of(hub, app) {
+        let id = r.entry.id.clone();
+        if has_record(hub, &id) {
+            let _ = std::fs::remove_dir_all(hub.tools_dir.join(&id));
+            remove_tool_data(hub, &id);
+        }
+        hub.updates.lock().unwrap().remove(&id);
+        let records = tools::load_all(&hub.tools_dir);
+        let (mut saved, order) = sidebar_state(hub, &records);
+        saved.order = order;
+        let _ = sidebar::save(&sidebar_file(hub), &saved);
+    }
+    {
+        let mut pending = hub.local_updates.lock().unwrap();
+        pending.versions.remove(&app.desktop_id);
+        pending.what.remove(&app.desktop_id);
+    }
+    *hub.local_apps.lock().unwrap() = None;
+}
+
+#[tauri::command]
+async fn local_app_remove_preview(
+    app: AppHandle,
+    desktop_id: String,
+) -> Result<local_remove::RemovePreview, String> {
+    let hub = app.state::<Hub>();
+    let local = listed_app(&hub, &desktop_id).await?;
+    Ok(remove_preview(&hub, &local).await)
+}
+
+/// Uninstalls an app of the start menu after checking the preview again.
+/// The user interface quits a running app first.
+#[tauri::command]
+async fn local_app_remove(app: AppHandle, desktop_id: String, keep_data: bool) -> Result<(), String> {
+    let hub = app.state::<Hub>();
+    let local = listed_app(&hub, &desktop_id).await?;
+    if let Some(id) = is_tuxhub_tool(&hub, &local) {
+        tool_uninstall(app.clone(), id).await?;
+    } else {
+        let home = local_remove::home();
+        let env = local_remove::Env {
+            programs: &hub.programs,
+            home: &home,
+            protected_dir: Path::new(local_remove::PROTECTED_DIR),
+            tool: false,
+        };
+        local_remove::remove(&env, &local, keep_data).await?;
+        // A game is removed by its store later; it stays listed until then.
+        if matches!(local.source, local_apps::LocalSource::Game { .. }) {
+            return Ok(());
+        }
+        if let Some(r) = record_of(&hub, &local) {
+            hub.runtime.stop(r.id()).await;
+            embed::stop(&app, r.id()).await;
+        }
+        forget_removed(&hub, &local);
+    }
+    let tools_updates = hub.updates.lock().unwrap().clone();
+    updates::set(&app, tools_updates);
+    updates::forget_local(&app, std::slice::from_ref(&desktop_id));
+    shortcuts::rebind(app.clone());
+    let _ = app.emit("tools-changed", ());
+    Ok(())
+}
+
 #[tauri::command]
 async fn tool_web_status(app: AppHandle, id: String) -> Result<bool, String> {
     let url = webui::web_url(&app, &id)?;
@@ -1998,6 +2105,8 @@ pub fn run() {
             sidebar_set_order,
             local_updates_check,
             local_apps_update,
+            local_app_remove_preview,
+            local_app_remove,
             tool_remove_copy,
             tool_dismiss_duplicate,
             tool_forget,
@@ -2838,6 +2947,7 @@ while True:
             command: command.iter().map(|s| s.to_string()).collect(),
             autostart: false,
             system: false,
+            desktop_file: PathBuf::new(),
         }
     }
 
@@ -4260,5 +4370,39 @@ while True:
         set_sidebar_order(&hub, &ids(&["d", "a", "c"])).unwrap();
         let listed: Vec<_> = tool_views(&hub).await.into_iter().map(|t| t.entry.id).collect();
         assert_eq!(listed, ids(&["d", "a", "c"]));
+    }
+
+    #[tokio::test]
+    async fn a_removed_app_leaves_the_sidebar_and_its_updates() {
+        let (hub, _f) = hub_with_fakes("remove-forget");
+        own_tools(&hub, &["alpha"]);
+        let apps = [installed_program("a.desktop", "/bin/sh")];
+        let order = pin_tools(&hub, &apps, vec![], &ids(&["desktop:a.desktop"]), None)
+            .await
+            .unwrap();
+        let id = local_apps::local_id("a.desktop");
+        assert!(order.contains(&id));
+        hub.updates.lock().unwrap().insert(id.clone(), "2".into());
+        hub.local_updates.lock().unwrap().versions.insert("a.desktop".into(), "2".into());
+        forget_removed(&hub, &apps[0]);
+        assert_eq!(current_order(&hub), ids(&["alpha"]));
+        assert_eq!(sidebar_saved(&hub).unwrap().order, ids(&["alpha"]));
+        assert!(recorded(&hub, &id).is_none());
+        assert!(hub.updates.lock().unwrap().is_empty());
+        assert!(hub.local_updates.lock().unwrap().versions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn only_tools_tuxhub_installed_are_removed_as_tools() {
+        let (hub, _f) = hub_with_fakes("remove-tool");
+        record(&hub, &Installed::new(flatpak_app("demo")));
+        let app = installed_flatpak("x.desktop", "net.example.demo");
+        assert_eq!(is_tuxhub_tool(&hub, &app).as_deref(), Some("demo"));
+        assert_eq!(remove_preview(&hub, &app).await.method, "tool");
+        let mut adopted = Installed::new(flatpak_app("demo"));
+        adopted.adopted = true;
+        record(&hub, &adopted);
+        assert_eq!(is_tuxhub_tool(&hub, &app), None);
+        assert_eq!(remove_preview(&hub, &app).await.method, "flatpak");
     }
 }
