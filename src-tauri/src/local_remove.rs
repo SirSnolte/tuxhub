@@ -60,7 +60,10 @@ pub struct RemovePreview {
     pub method: String,
     /// What is removed: the Flatpak id, or every package dnf would remove.
     pub packages: Vec<String>,
-    /// Why tuxhub does not remove it.
+    /// Why tuxhub does not remove it, as a code the interface words:
+    /// `protected:<package>`, `too-many:<count>`, `dnf-refuses:<dnf's line>`,
+    /// `dnf-silent`, `package-manager`, `outside-home`, `not-a-package`,
+    /// `invalid`.
     pub blocked: Option<String>,
     /// The removal asks for the password.
     pub needs_admin: bool,
@@ -165,7 +168,7 @@ pub fn parse_remove(out: &str) -> Vec<String> {
 
 async fn dnf_preview(programs: &Programs, package: &str, protected_dir: &Path) -> RemovePreview {
     if !tools::valid_package_name(package) {
-        return RemovePreview::blocked("dnf", "invalid package name");
+        return RemovePreview::blocked("dnf", "invalid");
     }
     // Only resolves, without root and without the network.
     let out = Command::new(&programs.dnf)
@@ -176,7 +179,7 @@ async fn dnf_preview(programs: &Programs, package: &str, protected_dir: &Path) -
         .output();
     let out = match tokio::time::timeout(programs.network_timeout, out).await {
         Ok(Ok(out)) => out,
-        _ => return RemovePreview::blocked("dnf", "dnf did not answer"),
+        _ => return RemovePreview::blocked("dnf", "dnf-silent"),
     };
     let text = format!(
         "{}\n{}",
@@ -191,16 +194,13 @@ async fn dnf_preview(programs: &Programs, package: &str, protected_dir: &Path) -
             .map(str::trim)
             .find(|l| !l.is_empty())
             .unwrap_or("dnf would remove nothing");
-        return RemovePreview::blocked("dnf", &format!("dnf refuses: {why}"));
+        return RemovePreview::blocked("dnf", &format!("dnf-refuses:{why}"));
     }
     let mut preview = RemovePreview::new("dnf", packages, true);
     if let Some(p) = blocking(&preview.packages, protected_dir) {
-        preview.blocked = Some(format!("{p} is part of the system or desktop"));
+        preview.blocked = Some(format!("protected:{p}"));
     } else if preview.packages.len() > MAX_PACKAGES {
-        preview.blocked = Some(format!(
-            "{} packages would be removed",
-            preview.packages.len()
-        ));
+        preview.blocked = Some(format!("too-many:{}", preview.packages.len()));
     }
     preview
 }
@@ -228,25 +228,25 @@ pub async fn preview(env: &Env<'_>, app: &LocalApp) -> RemovePreview {
             ..
         } => {
             if !tools::valid_flatpak_name(flatpak_id) {
-                return RemovePreview::blocked("flatpak", "invalid Flatpak id");
+                return RemovePreview::blocked("flatpak", "invalid");
             }
             let system = installations.first() == Some(&Installation::System);
             RemovePreview::new("flatpak", vec![flatpak_id.clone()], system)
         }
         LocalSource::Rpm { package } => dnf_preview(env.programs, package, env.protected_dir).await,
         LocalSource::Deb { .. } => {
-            RemovePreview::blocked("none", "removed with the package manager")
+            RemovePreview::blocked("none", "package-manager")
         }
         LocalSource::Game { store, game } => match store.as_str() {
             "steam" if steam_app_id(game).is_some() => RemovePreview::new("steam", vec![], false),
             "heroic" | "lutris" => RemovePreview::new(store, vec![], false),
-            _ => RemovePreview::blocked("none", "unknown game"),
+            _ => RemovePreview::blocked("none", "invalid"),
         },
         LocalSource::Appimage { path } => match appimage_files(app, path, env.home) {
             Some(_) => RemovePreview::new("appimage", vec![], false),
-            None => RemovePreview::blocked("none", "not in your home folder"),
+            None => RemovePreview::blocked("none", "outside-home"),
         },
-        LocalSource::Unknown { .. } => RemovePreview::blocked("none", "not installed by a package"),
+        LocalSource::Unknown { .. } => RemovePreview::blocked("none", "not-a-package"),
     }
 }
 
@@ -430,7 +430,7 @@ Transaction Summary:
         let p = preview(&s.env(), &rpm("kdeconnect")).await;
         assert_eq!(p.method, "dnf");
         assert!(p.needs_admin);
-        assert!(p.blocked.unwrap().contains("plasma-workspace"));
+        assert_eq!(p.blocked.as_deref(), Some("protected:plasma-workspace"));
         // The desktop's file manager itself.
         s.dnf_removes(&["dolphin", "dolphin-libs"]);
         assert!(preview(&s.env(), &rpm("dolphin")).await.blocked.is_some());
@@ -452,7 +452,7 @@ Transaction Summary:
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
         s.dnf_removes(&refs);
         let p = preview(&s.env(), &rpm("lib0")).await;
-        assert_eq!(p.blocked.as_deref(), Some("26 packages would be removed"));
+        assert_eq!(p.blocked.as_deref(), Some("too-many:26"));
         s.dnf_removes(&refs[..25]);
         assert_eq!(preview(&s.env(), &rpm("lib0")).await.blocked, None);
     }
@@ -463,12 +463,9 @@ Transaction Summary:
         std::fs::write(s.protected.join("mine.conf"), "# comment\nmy-core\n").unwrap();
         std::fs::write(s.protected.join("other.txt"), "gimp\n").unwrap();
         s.dnf_removes(&["tool", "my-core"]);
-        assert!(
-            preview(&s.env(), &rpm("tool"))
-                .await
-                .blocked
-                .unwrap()
-                .contains("my-core")
+        assert_eq!(
+            preview(&s.env(), &rpm("tool")).await.blocked.as_deref(),
+            Some("protected:my-core")
         );
         // Only `*.conf` files count.
         s.dnf_removes(&["gimp"]);
@@ -486,7 +483,7 @@ Transaction Summary:
         assert!(
             p.blocked
                 .unwrap()
-                .starts_with("dnf refuses: Failed to resolve")
+                .starts_with("dnf-refuses:Failed to resolve")
         );
     }
 
@@ -622,7 +619,7 @@ Transaction Summary:
         let p = preview(&s.env(), &a).await;
         assert_eq!(
             p,
-            RemovePreview::blocked("none", "not installed by a package")
+            RemovePreview::blocked("none", "not-a-package")
         );
         assert!(remove(&s.env(), &a, true).await.is_err());
         assert!(s.f.calls().is_empty());

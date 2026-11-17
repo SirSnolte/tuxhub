@@ -6,7 +6,7 @@
   import { t } from "./i18n.svelte";
   import { toast } from "./state.svelte";
   import { checkedOf } from "./wa";
-  import type { Member, WEntry } from "./workshop-model";
+  import { blockedReason, type Member, type WEntry } from "./workshop-model";
 
   let { entry, onclose }: { entry: WEntry | null; onclose: (removed: boolean) => void } = $props();
 
@@ -110,7 +110,8 @@
       <p class="checking"><wa-spinner></wa-spinner> {t("rm.checking")}</p>
     {:else if blocked.length}
       {#each blocked as s (s.member.key)}
-        <wa-callout variant="warning">{t("rm.blocked", { name: s.member.name, reason: s.preview.blocked ?? "" })}</wa-callout>
+        {@const why = blockedReason(s.preview.blocked ?? "")}
+        <wa-callout variant="warning">{t("rm.blocked", { name: s.member.name, reason: t(why.key, why.vars) })}</wa-callout>
       {/each}
     {:else}
       {#each steps as s (s.member.key)}

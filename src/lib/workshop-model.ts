@@ -424,3 +424,41 @@ export function insertAt(order: string[], ids: string[], at: number | null): str
   }
   return out;
 }
+
+export type ReasonKey =
+  | "rm.why.protected"
+  | "rm.why.tooMany"
+  | "rm.why.dnfRefuses"
+  | "rm.why.dnfSilent"
+  | "rm.why.packageManager"
+  | "rm.why.outsideHome"
+  | "rm.why.notAPackage"
+  | "rm.why.invalid"
+  | "rm.why.other";
+
+/** The text for a reason the backend gives for refusing an uninstall
+ * (`RemovePreview.blocked`): its i18n key and the values it names. */
+export function blockedReason(code: string): { key: ReasonKey; vars: Record<string, string> } {
+  const [kind, ...rest] = code.split(":");
+  const detail = rest.join(":");
+  switch (kind) {
+    case "protected":
+      return { key: "rm.why.protected", vars: { package: detail } };
+    case "too-many":
+      return { key: "rm.why.tooMany", vars: { count: detail } };
+    case "dnf-refuses":
+      return { key: "rm.why.dnfRefuses", vars: { detail } };
+    case "dnf-silent":
+      return { key: "rm.why.dnfSilent", vars: {} };
+    case "package-manager":
+      return { key: "rm.why.packageManager", vars: {} };
+    case "outside-home":
+      return { key: "rm.why.outsideHome", vars: {} };
+    case "not-a-package":
+      return { key: "rm.why.notAPackage", vars: {} };
+    case "invalid":
+      return { key: "rm.why.invalid", vars: {} };
+    default:
+      return { key: "rm.why.other", vars: { detail: code } };
+  }
+}

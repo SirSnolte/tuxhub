@@ -2,10 +2,12 @@
 // and sorting (src/lib/workshop-model.ts). Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   AREAS,
   CHIPS,
   areaOf,
+  blockedReason,
   chipCounts,
   chipFilter,
   entries,
@@ -288,4 +290,24 @@ test("groups follow the sort: areas in their order, A-Z, by integration, by sour
   assert.deepEqual(az[0].entries.map((e) => e.name), ["alpha", "Game", "Settings", "Zed"]);
   assert.deepEqual(sortGroups(list, "level").map((g) => g.key), ["l2", "l1"]);
   assert.deepEqual(sortGroups(list, "source").map((g) => g.key), ["s:rpm", "s:game"]);
+});
+
+test("each reason the backend gives for refusing an uninstall has a text", () => {
+  assert.deepEqual(blockedReason("protected:dolphin"), { key: "rm.why.protected", vars: { package: "dolphin" } });
+  assert.deepEqual(blockedReason("too-many:26"), { key: "rm.why.tooMany", vars: { count: "26" } });
+  assert.deepEqual(blockedReason("dnf-refuses:Problem 1: x"), { key: "rm.why.dnfRefuses", vars: { detail: "Problem 1: x" } });
+  for (const [code, key] of [
+    ["dnf-silent", "rm.why.dnfSilent"],
+    ["package-manager", "rm.why.packageManager"],
+    ["outside-home", "rm.why.outsideHome"],
+    ["not-a-package", "rm.why.notAPackage"],
+    ["invalid", "rm.why.invalid"],
+    ["something new", "rm.why.other"],
+  ]) {
+    assert.equal(blockedReason(code).key, key, code);
+  }
+  const i18n = readFileSync(new URL("../src/lib/i18n.svelte.ts", import.meta.url), "utf8");
+  for (const key of ["protected", "tooMany", "dnfRefuses", "dnfSilent", "packageManager", "outsideHome", "notAPackage", "invalid", "other"]) {
+    assert.equal(i18n.match(new RegExp(`"rm\\.why\\.${key}":`, "g"))?.length, 2, key);
+  }
 });

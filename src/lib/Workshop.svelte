@@ -555,7 +555,8 @@
   .workshop {
     display: flex;
     flex-direction: column;
-    min-height: 100%;
+    /* Never shrunk to the window: the sticky toolbar needs the full height. */
+    flex: 1 0 auto;
     padding-bottom: var(--wa-space-4xl);
   }
   .sentinel {
