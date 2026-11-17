@@ -281,3 +281,12 @@ test("the question before a system-wide update exists in English and German", ()
   }
   assert.ok(en.includes(`"update.systemBody": "Update {package} system-wide with {manager}? Other packages may be updated too.",`));
 });
+
+test("a store game is never updated as a package and has its own label", () => {
+  const source = { kind: "game", store: "steam", game: "620" };
+  assert.equal(canUpdate({ app: { source }, update: "2" }), false);
+  assert.equal(localSystemUpdateOf(source), null);
+  assert.equal(sourceLabelKey(source), "installed.source.game");
+  const i18n = readFileSync(new URL("../src/lib/i18n.svelte.ts", import.meta.url), "utf8");
+  assert.equal(i18n.match(/"installed\.source\.game":/g)?.length, 2);
+});

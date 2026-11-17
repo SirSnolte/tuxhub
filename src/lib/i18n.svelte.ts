@@ -199,6 +199,7 @@ const en = {
   "installed.source.deb": "DEB",
   "installed.source.appimage": "AppImage",
   "installed.source.unknown": "Program",
+  "installed.source.game": "Game",
 
   "progress.resolving": "Looking up the latest release…",
   "progress.downloading": "Downloading {file} ({mb} MB)",
@@ -576,6 +577,7 @@ const de: Record<Key, string> = {
   "installed.source.deb": "DEB",
   "installed.source.appimage": "AppImage",
   "installed.source.unknown": "Programm",
+  "installed.source.game": "Spiel",
 
   "progress.resolving": "Neuestes Release wird gesucht…",
   "progress.downloading": "{file} wird geladen ({mb} MB)",

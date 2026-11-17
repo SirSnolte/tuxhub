@@ -188,6 +188,8 @@
         return [[t("installed.file"), s.path]];
       case "unknown":
         return [[t("installed.program"), s.program]];
+      case "game":
+        return [[t("installed.source"), s.store]];
     }
   }
 </script>

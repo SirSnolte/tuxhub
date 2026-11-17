@@ -192,7 +192,8 @@ export type LocalSource =
   | { kind: "rpm"; package: string }
   | { kind: "deb"; package: string }
   | { kind: "appimage"; path: string }
-  | { kind: "unknown"; program: string };
+  | { kind: "unknown"; program: string }
+  | { kind: "game"; store: "steam" | "heroic" | "lutris"; game: string };
 
 /** An app of the start menu, with its source. */
 export type LocalApp = {
