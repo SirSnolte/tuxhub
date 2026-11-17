@@ -32,16 +32,3 @@ export function tuxhubInstalls(tool: { entry: Pick<Tool["entry"], "source"> }): 
   const { type } = tool.entry.source;
   return type !== "distro-package" && type !== "launcher";
 }
-
-/** The catalog after an app was added to or removed from the sidebar in the
- * installed tab: removed, it stays on the computer. Saves loading the
- * catalog, which may ask the network, again. */
-export function markInSidebar<T extends Pick<WorkshopItem, "entry" | "installed" | "present">>(
-  items: T[],
-  toolId: string,
-  inSidebar: boolean,
-): T[] {
-  return items.map((item) =>
-    item.entry.id === toolId ? { ...item, installed: inSidebar, present: item.present || !inSidebar } : item,
-  );
-}

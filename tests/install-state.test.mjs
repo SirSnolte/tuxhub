@@ -5,7 +5,6 @@ import assert from "node:assert/strict";
 import {
   asksHowToRemove,
   installHint,
-  markInSidebar,
   needsPassword,
   tuxhubInstalls,
   workshopAction,
@@ -50,20 +49,4 @@ test("tuxhub neither installs nor uninstalls distribution packages and found app
   for (const [source, expected] of sources) {
     assert.equal(tuxhubInstalls({ entry: { source } }), expected, source.type);
   }
-});
-
-test("the catalog follows a switch in the installed tab without loading again", () => {
-  const item = (id, installed, present) => ({ entry: { id, name: id }, installed, present });
-  const items = [item("demo", false, true), item("other", false, false)];
-  const added = markInSidebar(items, "demo", true);
-  assert.deepEqual(added.map((i) => [i.entry.id, i.installed, i.present]), [
-    ["demo", true, true],
-    ["other", false, false],
-  ]);
-  assert.equal(items[0].installed, false, "the old list is left alone");
-  // Removed from the sidebar, the app is still on the computer.
-  const removed = markInSidebar([item("demo", true, false)], "demo", false);
-  assert.deepEqual(removed.map((i) => [i.installed, i.present]), [[false, true]]);
-  // An app the catalog does not know changes nothing.
-  assert.deepEqual(markInSidebar(items, "local.x", true), items);
 });

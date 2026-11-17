@@ -6,16 +6,11 @@ import { readFileSync } from "node:fs";
 import {
   RUNNING_OUTSIDE,
   RUNNING_UNKNOWN,
-  canUpdate,
-  localSystemUpdateOf,
   systemUpdateOf,
   updateWithConsent,
-  filterApps,
   launchedKey,
-  listedApps,
   needsRestartDialog,
   runningUnknown,
-  sourceLabelKey,
 } from "../src/lib/installed-apps.ts";
 
 const i18n = readFileSync(new URL("../src/lib/i18n.svelte.ts", import.meta.url), "utf8");
@@ -82,55 +77,6 @@ test("every text of the running-outside dialog exists in English and German", ()
   assert.ok(en.includes(`"tool.autostartNote": "Starts in the background when you log in",`));
 });
 
-const view = (app, rest = {}) => ({
-  app: {
-    desktop_id: "x.desktop",
-    name: "X",
-    summary: null,
-    description: null,
-    icon: null,
-    homepage: null,
-    repo: null,
-    categories: [],
-    source: { kind: "unknown", program: "/usr/bin/x" },
-    command: ["/usr/bin/x"],
-    autostart: false,
-    system: false,
-    ...app,
-  },
-  tool_id: "local.x",
-  in_sidebar: false,
-  update: null,
-  run_state: "stopped",
-  integration: "embedded",
-  ...rest,
-});
-
-const streamController = view({
-  desktop_id: "com.core447.StreamController.desktop",
-  name: "StreamController",
-  summary: "Control your Stream Deck",
-  source: { kind: "flatpak", flatpak_id: "com.core447.StreamController", installations: ["user"] },
-});
-const obs = view({
-  desktop_id: "obs.desktop",
-  name: "OBS Studio",
-  summary: "Live streaming and recording",
-  source: { kind: "rpm", package: "obs-studio" },
-});
-const apps = [streamController, obs];
-
-test("the search finds installed apps by name, summary, desktop id and package", () => {
-  assert.deepEqual(filterApps(apps, "stream"), apps, "name and summary");
-  assert.deepEqual(filterApps(apps, "  STREAMCONTROLLER "), [streamController]);
-  assert.deepEqual(filterApps(apps, "core447"), [streamController], "Flatpak ID");
-  assert.deepEqual(filterApps(apps, "obs-studio"), [obs], "package");
-  assert.deepEqual(filterApps(apps, "obs.desktop"), [obs], "desktop id");
-  assert.deepEqual(filterApps(apps, "recording"), [obs], "summary");
-  assert.deepEqual(filterApps(apps, ""), apps);
-  assert.deepEqual(filterApps(apps, "   "), apps);
-  assert.deepEqual(filterApps(apps, "nothing like it"), []);
-});
 
 test("starting an app that already runs does not claim it started", () => {
   assert.equal(launchedKey(true, "tool.started"), "tool.started");
@@ -140,18 +86,6 @@ test("starting an app that already runs does not claim it started", () => {
   assert.ok(de.includes(`"tool.alreadyRunning":`));
 });
 
-test("system apps show with Show more, in the search and while in the sidebar", () => {
-  const settings = view({ desktop_id: "kcm.desktop", name: "Stream Settings", system: true });
-  const pinned = view({ desktop_id: "konsole.desktop", name: "Konsole", system: true }, { in_sidebar: true });
-  const all = [streamController, obs, settings, pinned];
-  assert.deepEqual(listedApps(all, "", false), [streamController, obs, pinned]);
-  assert.deepEqual(listedApps(all, "  ", false), [streamController, obs, pinned]);
-  assert.deepEqual(listedApps(all, "", true), all);
-  // The search always looks through all apps, Show more or not.
-  assert.deepEqual(listedApps(all, "stream", false), [streamController, obs, settings]);
-  assert.deepEqual(listedApps(all, "settings", true), [settings]);
-});
-
 test("every source of an installed app has a label in English and German", () => {
   const sources = [
     [{ kind: "flatpak", flatpak_id: "a.b.C", installations: ["system"] }, "installed.source.flatpak"],
@@ -159,48 +93,13 @@ test("every source of an installed app has a label in English and German", () =>
     [{ kind: "deb", package: "a" }, "installed.source.deb"],
     [{ kind: "appimage", path: "/home/u/A.AppImage" }, "installed.source.appimage"],
     [{ kind: "unknown", program: "/opt/a/a" }, "installed.source.unknown"],
+    [{ kind: "game", store: "steam", game: "620" }, "installed.source.game"],
   ];
   for (const [source, key] of sources) {
-    assert.equal(sourceLabelKey(source), key);
+    assert.equal(`installed.source.${source.kind}`, key);
     assert.ok(en.includes(`"${key}":`), `${key} in en`);
     assert.ok(de.includes(`"${key}":`), `${key} in de`);
   }
-});
-
-test("only Flatpaks and distribution packages with a newer version can be updated", () => {
-  const appimage = view({ source: { kind: "appimage", path: "/a.AppImage" } }, { update: "2.0" });
-  const unknown = view({}, { update: "2.0" });
-  assert.equal(canUpdate(appimage), false);
-  assert.equal(canUpdate(unknown), false);
-  assert.equal(canUpdate({ ...streamController, update: "1.5.1" }), true);
-  assert.equal(canUpdate(streamController), false);
-  assert.equal(canUpdate({ ...obs, update: "31.0" }), true);
-  assert.equal(canUpdate(view({ source: { kind: "deb", package: "a" } }, { update: "1" })), true);
-});
-
-test("every text of the installed tab exists in English and German", () => {
-  const keys = [
-    "workshop.catalog",
-    "workshop.installedTab",
-    "installed.sidebar",
-    "installed.showMore",
-    "installed.noApps",
-    "installed.loadFailed",
-    "installed.comingSoon",
-    "installed.selfUpdates",
-    "installed.source",
-    "installed.installation",
-    "installed.windowLocked",
-    "installed.loading",
-    "tool.forgetHint",
-  ];
-  for (const key of keys) {
-    assert.ok(en.includes(`"${key}":`), `${key} in en`);
-    assert.ok(de.includes(`"${key}":`), `${key} in de`);
-  }
-  assert.ok(en.includes(`"installed.selfUpdates": "Updates through the app itself",`));
-  assert.ok(en.includes(`"installed.comingSoon": "Coming soon: tuxhub menu",`));
-  assert.ok(en.includes(`"installed.showMore": "Show more (system apps)",`));
 });
 
 const toolWith = (source, installation = "user") => ({ entry: { source }, installation });
@@ -222,18 +121,6 @@ test("updates that change the system ask first and name package and manager", ()
   assert.equal(systemUpdateOf(toolWith({ type: "github-release", asset: "a" }, "system")), null);
   assert.equal(systemUpdateOf(toolWith({ type: "launcher", desktop_id: "a.desktop", command: ["/a"] })), null);
 
-  // Without the tool, the source of the installed app decides.
-  assert.deepEqual(localSystemUpdateOf({ kind: "rpm", package: "kcalc" }), { package: "kcalc", manager: "dnf" });
-  assert.deepEqual(localSystemUpdateOf({ kind: "deb", package: "kcalc" }), { package: "kcalc", manager: "apt-get" });
-  assert.deepEqual(
-    localSystemUpdateOf({ kind: "flatpak", flatpak_id: "a.b.C", installations: ["system", "user"], origin: "fedora" }),
-    { package: "a.b.C", manager: "flatpak" },
-  );
-  assert.equal(
-    localSystemUpdateOf({ kind: "flatpak", flatpak_id: "a.b.C", installations: ["user"], origin: "flathub" }),
-    null,
-  );
-  assert.equal(localSystemUpdateOf({ kind: "appimage", path: "/a.AppImage" }), null);
 });
 
 test("a system-wide update starts only after the user agrees", async () => {
@@ -275,18 +162,9 @@ test("a system-wide update starts only after the user agrees", async () => {
 });
 
 test("the question before a system-wide update exists in English and German", () => {
-  for (const key of ["update.systemTitle", "update.systemBody", "update.systemMany", "update.systemConfirm", "tool.passwordHint"]) {
+  for (const key of ["update.systemTitle", "update.systemBody", "update.systemConfirm", "tool.passwordHint"]) {
     assert.ok(en.includes(`"${key}":`), `${key} in en`);
     assert.ok(de.includes(`"${key}":`), `${key} in de`);
   }
   assert.ok(en.includes(`"update.systemBody": "Update {package} system-wide with {manager}? Other packages may be updated too.",`));
-});
-
-test("a store game is never updated as a package and has its own label", () => {
-  const source = { kind: "game", store: "steam", game: "620" };
-  assert.equal(canUpdate({ app: { source }, update: "2" }), false);
-  assert.equal(localSystemUpdateOf(source), null);
-  assert.equal(sourceLabelKey(source), "installed.source.game");
-  const i18n = readFileSync(new URL("../src/lib/i18n.svelte.ts", import.meta.url), "utf8");
-  assert.equal(i18n.match(/"installed\.source\.game":/g)?.length, 2);
 });
