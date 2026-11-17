@@ -26,7 +26,12 @@
     keep = true;
     try {
       const all: Step[] = [];
+      const seen = new Set<string>();
       for (const member of e.members) {
+        // Entries of one package or Flatpak are previewed and removed once.
+        const source = member.source === "rpm" || member.source === "flatpak" ? `${member.source}:${member.sourceId}` : member.key;
+        if (seen.has(source)) continue;
+        seen.add(source);
         const preview: RemovePreview = member.desktopId
           ? await api.localAppRemovePreview(member.desktopId)
           : { method: "tool", packages: [], blocked: null, needs_admin: false };

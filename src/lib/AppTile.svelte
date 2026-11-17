@@ -167,7 +167,8 @@
     cursor: pointer;
     user-select: none;
     -webkit-user-select: none;
-    touch-action: none;
+    /* Vertical swipes still scroll the page on a touch screen. */
+    touch-action: pan-y;
     outline: none;
     transition:
       transform 0.18s var(--tuxhub-ease, ease),

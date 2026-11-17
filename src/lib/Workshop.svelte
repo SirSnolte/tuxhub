@@ -353,14 +353,20 @@
         </wa-dropdown-item>
       {/each}
     </wa-dropdown>
-    <div class="segmented" role="group" aria-label={t("ws.view")}>
-      <button class="bare" aria-pressed={view === "grid"} title={t("ws.view.grid")} aria-label={t("ws.view.grid")} onclick={() => savePrefs("grid", [...collapsed])}>
-        <LayoutGrid size={16} aria-hidden="true" />
-      </button>
-      <button class="bare" aria-pressed={view === "list"} title={t("ws.view.list")} aria-label={t("ws.view.list")} onclick={() => savePrefs("list", [...collapsed])}>
-        <List size={16} aria-hidden="true" />
-      </button>
-    </div>
+    <wa-radio-group
+      class="view"
+      orientation="horizontal"
+      value={view}
+      aria-label={t("ws.view")}
+      onchange={(e: Event) => savePrefs(valueOf(e) as "grid" | "list", [...collapsed])}
+    >
+      <wa-radio appearance="button" value="grid" title={t("ws.view.grid")}>
+        <LayoutGrid size={16} aria-hidden="true" /><span class="wa-visually-hidden">{t("ws.view.grid")}</span>
+      </wa-radio>
+      <wa-radio appearance="button" value="list" title={t("ws.view.list")}>
+        <List size={16} aria-hidden="true" /><span class="wa-visually-hidden">{t("ws.view.list")}</span>
+      </wa-radio>
+    </wa-radio-group>
     <wa-select class="sort" value={sort} aria-label={t("ws.sort")} onchange={(e: Event) => (sort = valueOf(e) as Sort)}>
       <wa-option value="area">{t("ws.sort.area")}</wa-option>
       <wa-option value="name">{t("ws.sort.name")}</wa-option>
@@ -595,27 +601,8 @@
     font-variant-numeric: tabular-nums;
     color: var(--wa-color-text-quiet);
   }
-  .segmented {
-    display: inline-flex;
+  .view {
     flex: none;
-    border: var(--wa-border-width-s) solid var(--wa-color-surface-border);
-    border-radius: var(--wa-border-radius-m);
-    overflow: hidden;
-    height: var(--wa-form-control-height);
-  }
-  .segmented button {
-    padding: 0 var(--wa-space-s);
-    display: grid;
-    place-items: center;
-    color: var(--wa-color-text-quiet);
-  }
-  .segmented button[aria-pressed="true"] {
-    background: var(--wa-color-neutral-fill-quiet);
-    color: var(--wa-color-text-normal);
-  }
-  .segmented button:focus-visible {
-    outline: 2px solid var(--wa-color-focus);
-    outline-offset: -2px;
   }
   .sort {
     width: 170px;

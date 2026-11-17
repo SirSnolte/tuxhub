@@ -728,9 +728,13 @@
     .nav .label,
     .x,
     .upd,
-    .tool-menu,
     .drop-hint {
       display: none;
+    }
+    /* The open tool's menu moves below its icon. */
+    .row.current {
+      flex-direction: column;
+      padding-bottom: var(--wa-space-3xs);
     }
     .count {
       position: absolute;

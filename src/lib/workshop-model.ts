@@ -128,6 +128,9 @@ const FIXED_FAMILIES: { name: string; lead: string; test: (m: Member) => boolean
   },
 ];
 
+/** Desktop file names browsers give their web apps: `<browser>-<app id>-<profile>`. */
+const WEB_APP = /-(Default|Profile_\d+)$/;
+
 /** The folder of a program path, or "" for a bare name. */
 const folderOf = (program: string) => (program.includes("/") ? program.slice(0, program.lastIndexOf("/")) : "");
 
@@ -136,7 +139,9 @@ function familyKey(m: Member): string | null {
   const fixed = FIXED_FAMILIES.find((f) => f.test(m));
   if (fixed) return "fixed:" + fixed.name;
   if (m.source === "flatpak") return "flatpak:" + m.sourceId;
-  if (m.source === "unknown") {
+  // Local starters only: a browser's web apps (`brave-<id>-Default`) share a
+  // prefix and a program, but are apps of their own.
+  if (m.source === "unknown" && !WEB_APP.test(stem(m.desktopId))) {
     const s = stem(m.desktopId);
     const dash = s.indexOf("-");
     const folder = folderOf(m.sourceId);

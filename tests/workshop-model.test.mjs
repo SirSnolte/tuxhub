@@ -311,3 +311,13 @@ test("each reason the backend gives for refusing an uninstall has a text", () =>
     assert.equal(i18n.match(new RegExp(`"rm\\.why\\.${key}":`, "g"))?.length, 2, key);
   }
 });
+
+test("web apps of a browser stay apart; only local starters of one folder join", () => {
+  const list = build([
+    view("com.brave.Browser.flextop.brave-aaa-Default.desktop", unknown("/usr/bin/flatpak"), { name: "3CX (PWA)" }),
+    view("com.brave.Browser.flextop.brave-bbb-Default.desktop", unknown("/usr/bin/flatpak"), { name: "YouTube" }),
+    view("chrome-ccc-Default.desktop", unknown("/opt/google/chrome/google-chrome"), { name: "Maps" }),
+    view("chrome-ddd-Profile_1.desktop", unknown("/opt/google/chrome/google-chrome"), { name: "Mail" }),
+  ]);
+  assert.deepEqual(list.map((e) => e.members.length), [1, 1, 1, 1]);
+});

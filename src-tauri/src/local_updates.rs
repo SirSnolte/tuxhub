@@ -328,6 +328,7 @@ pub async fn update(
         }
         let mut args = vec!["update", flag, "-y", "--noninteractive"];
         let mut ids: Vec<&str> = list.iter().map(|(_, f)| f.as_str()).collect();
+        ids.sort_unstable();
         ids.dedup();
         args.extend(ids);
         let outcome = match output(programs, &programs.flatpak, &args).await {

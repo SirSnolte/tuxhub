@@ -61,6 +61,8 @@ pub struct Hub {
     local_apps: std::sync::Mutex<local_apps::Cache>,
     /// Pending updates of the start menu apps.
     local_updates: std::sync::Mutex<local_updates::Pending>,
+    /// Held while `sidebar.json` is read, changed and written.
+    sidebar_lock: std::sync::Mutex<()>,
     /// The folder of the entries the desktop starts at login.
     autostart_dir: PathBuf,
 }
@@ -84,6 +86,7 @@ impl Hub {
             programs: Default::default(),
             local_apps: Default::default(),
             local_updates: Default::default(),
+            sidebar_lock: Default::default(),
         }
     }
 
@@ -938,8 +941,9 @@ async fn pin_tools(
         .iter()
         .map(|id| pin_target(hub, apps, &records, id))
         .collect::<Result<Vec<_>, _>>()?;
-    let (mut saved, mut order) = sidebar_state(hub, &records);
+    let before = sidebar_state(hub, &records).1;
     let mut pinned = Vec::new();
+    let mut unhide = Vec::new();
     for target in targets {
         let id = match target {
             PinTarget::Tool(id) => id,
@@ -962,12 +966,20 @@ async fn pin_tools(
                 tools::save(&hub.tools_dir, &inst)?;
             }
         }
-        saved.hidden.retain(|h| *h != id);
+        unhide.push(id.clone());
         if !pinned.contains(&id) {
             pinned.push(id);
         }
     }
-    sidebar::insert(&mut order, &pinned, at);
+    // Read again under the lock: another change may have saved meanwhile.
+    let _lock = hub.sidebar_lock.lock().unwrap();
+    let records = tools::load_all(&hub.tools_dir);
+    let (mut saved, mut order) = sidebar_state(hub, &records);
+    saved.hidden.retain(|h| !unhide.contains(h));
+    // New ones go to `at`; pinned ones stay where they are.
+    let fresh: Vec<String> = pinned.into_iter().filter(|id| !before.contains(id)).collect();
+    order.retain(|o| !fresh.contains(o));
+    sidebar::insert(&mut order, &fresh, at);
     saved.order = order.clone();
     sidebar::save(&sidebar_file(hub), &saved)?;
     Ok(order)
@@ -991,6 +1003,7 @@ async fn unpin(app: &AppHandle, hub: &Hub, id: &str) -> Result<Vec<String>, Stri
 }
 
 fn unpin_tool(hub: &Hub, id: &str) -> Result<Vec<String>, String> {
+    let _lock = hub.sidebar_lock.lock().unwrap();
     let records = tools::load_all(&hub.tools_dir);
     let inst = records
         .iter()
@@ -1014,6 +1027,7 @@ fn unpin_tool(hub: &Hub, id: &str) -> Result<Vec<String>, String> {
 
 /// Saves a new order of the pinned tools; it must name each of them once.
 fn set_sidebar_order(hub: &Hub, order: &[String]) -> Result<(), String> {
+    let _lock = hub.sidebar_lock.lock().unwrap();
     let (mut saved, current) = sidebar_state(hub, &tools::load_all(&hub.tools_dir));
     sidebar::check_order(&current, order)?;
     saved.order = order.to_vec();
@@ -1772,6 +1786,7 @@ fn forget_removed(hub: &Hub, app: &local_apps::LocalApp) {
             remove_tool_data(hub, &id);
         }
         hub.updates.lock().unwrap().remove(&id);
+        let _lock = hub.sidebar_lock.lock().unwrap();
         let records = tools::load_all(&hub.tools_dir);
         let (mut saved, order) = sidebar_state(hub, &records);
         saved.order = order;
@@ -2104,6 +2119,7 @@ pub fn run() {
                 programs: Default::default(),
                 local_apps: Default::default(),
                 local_updates: Default::default(),
+                sidebar_lock: Default::default(),
                 autostart_dir: local_apps::autostart_dir(),
             });
 

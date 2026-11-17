@@ -324,6 +324,8 @@ pub async fn remove(env: &Env<'_>, app: &LocalApp, keep_data: bool) -> Result<()
         ("appimage", LocalSource::Appimage { path }) => {
             let (file, entry) =
                 appimage_files(app, path, env.home).ok_or("not in your home folder")?;
+            // A running instance is quit first, not left running a deleted file.
+            tools::quit(&file).await?;
             std::fs::remove_file(&file).map_err(|e| e.to_string())?;
             std::fs::remove_file(&entry).map_err(|e| e.to_string())
         }
@@ -606,8 +608,22 @@ Transaction Summary:
         }
         assert!(elsewhere.is_file());
         assert_eq!(preview(&s.env(), &inside).await.method, "appimage");
+        // A running instance is quit before the file goes.
+        std::fs::copy("/usr/bin/sleep", &file).unwrap();
+        let mut child = tools::spawn_copied(&file, &["30"]).await;
         remove(&s.env(), &inside, true).await.unwrap();
         assert!(!file.exists() && !entry.exists());
+        let status = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Some(st) = child.try_wait().unwrap() {
+                    return st;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the running AppImage was not quit");
+        assert!(!status.success());
     }
 
     #[tokio::test]
