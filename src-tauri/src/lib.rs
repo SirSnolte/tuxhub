@@ -648,16 +648,21 @@ fn local_tool_id(app: &local_apps::LocalApp, catalog: &[Entry]) -> String {
     }
 }
 
-/// The apps with their state in tuxhub; `in_hub`: tools shown in an xpra
-/// session.
 /// Whether the start menu entry starts a tool tuxhub installed: such tools
-/// write their own entries, but they already are tuxhub's tools.
+/// write their own entries, but they already are tuxhub's tools. A path with
+/// `.` or `..` in it never counts as inside the tools folder.
 fn is_own_tool(hub: &Hub, app: &local_apps::LocalApp) -> bool {
-    app.command
-        .first()
-        .is_some_and(|p| Path::new(p).starts_with(&hub.tools_dir))
+    use std::path::Component;
+    app.command.first().is_some_and(|p| {
+        let path = Path::new(p);
+        path.components()
+            .all(|c| matches!(c, Component::RootDir | Component::Normal(_)))
+            && path.starts_with(&hub.tools_dir)
+    })
 }
 
+/// The apps with their state in tuxhub; `in_hub`: tools shown in an xpra
+/// session.
 async fn local_app_views(
     hub: &Hub,
     apps: Vec<local_apps::LocalApp>,
@@ -1455,14 +1460,22 @@ fn serve_tool(app: &AppHandle, uri: &tauri::http::Uri) -> Response<Vec<u8>> {
 }
 
 /// Icons of installed apps (`appicon://localhost/<path>`): only PNG and SVG
-/// files inside the icon folders of the XDG data folders.
+/// files inside the icon folders of the XDG data folders (see
+/// [`local_apps::read_icon`]). They are served as inert images: no script of
+/// an SVG runs, and the type is never guessed.
 fn serve_app_icon(uri: &tauri::http::Uri) -> Response<Vec<u8>> {
+    serve_app_icon_in(uri, &local_apps::data_dirs())
+}
+
+fn serve_app_icon_in(uri: &tauri::http::Uri, dirs: &[PathBuf]) -> Response<Vec<u8>> {
     let path = PathBuf::from(percent_decode(uri.path()));
-    let body = local_apps::is_icon_file(&path, &local_apps::data_dirs())
-        .then(|| std::fs::read(&path).ok())
-        .flatten();
-    let builder = Response::builder().header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
-    match body {
+    let builder = Response::builder()
+        .header(
+            header::CONTENT_SECURITY_POLICY,
+            "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+        )
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
+    match local_apps::read_icon(&path, dirs) {
         Some(body) => builder
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, mime_for(&path))
@@ -1693,6 +1706,37 @@ mod tests {
         assert_eq!(percent_decode("a%20b.html"), "a b.html");
         assert_eq!(percent_decode("100%"), "100%");
         assert_eq!(percent_decode("%2"), "%2");
+    }
+
+    /// App icons are served as inert images: no other origin may read them,
+    /// and an SVG can run nothing.
+    #[test]
+    fn app_icons_are_served_as_inert_images() {
+        let base = std::env::temp_dir().join(format!("tuxhub-appicon-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let svg = base.join("share/icons/hicolor/scalable/apps/a.svg");
+        std::fs::create_dir_all(svg.parent().unwrap()).unwrap();
+        std::fs::write(&svg, "<svg/>").unwrap();
+        let dirs = [base.join("share")];
+        let uri = |p: &Path| local_apps::icon_url(p).parse::<tauri::http::Uri>().unwrap();
+        for (path, status) in [
+            (svg.clone(), StatusCode::OK),
+            (base.join("share/icons/missing.png"), StatusCode::NOT_FOUND),
+        ] {
+            let res = serve_app_icon_in(&uri(&path), &dirs);
+            assert_eq!(res.status(), status);
+            let h = res.headers();
+            assert!(h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
+            assert_eq!(h[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+            assert_eq!(
+                h[header::CONTENT_SECURITY_POLICY],
+                "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+            );
+        }
+        let res = serve_app_icon_in(&uri(&svg), &dirs);
+        assert_eq!(res.headers()[header::CONTENT_TYPE], "image/svg+xml");
+        assert_eq!(res.body(), b"<svg/>");
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     /// Tool processes that ignore `shutdown` and the closed standard input are
@@ -2452,13 +2496,16 @@ while True:
         f.set("run-a", "exit 0");
         let run_a = f.dir.join("run-a");
         let own = hub.tools_dir.join("autoclicker/files/tuxhub-autoclicker");
+        // Only lexically: a path that leaves the folder again is no tool's.
+        let out = hub.tools_dir.join("../elsewhere/app");
         let apps = vec![
             installed_program("a.desktop", run_a.to_str().unwrap()),
             installed_program("own.desktop", own.to_str().unwrap()),
+            installed_program("out.desktop", out.to_str().unwrap()),
         ];
         let views = local_app_views(&hub, apps.clone(), &[], &Default::default()).await;
         let ids: Vec<_> = views.iter().map(|v| v.app.desktop_id.as_str()).collect();
-        assert_eq!(ids, ["a.desktop"]);
+        assert_eq!(ids, ["a.desktop", "out.desktop"]);
         assert!(
             add_local_app(&hub, &apps, vec![], "own.desktop")
                 .await

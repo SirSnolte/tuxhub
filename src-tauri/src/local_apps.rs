@@ -227,8 +227,7 @@ fn is_env_assignment(a: &str) -> bool {
 /// Whether the start menu shows the app. `desktop` is the colon-separated
 /// `XDG_CURRENT_DESKTOP` (for example `KDE` or `ubuntu:GNOME`). Settings, system
 /// and console apps, Wine's own tools, help screens and game shortcuts of
-/// store clients are hidden unless
-/// `show_all`; `NoDisplay` apps, ones not
+/// store clients are hidden unless `show_all`; `NoDisplay` apps, ones not
 /// meant for this desktop and tuxhub itself are always hidden.
 pub fn is_visible(app: &DesktopApp, desktop: &str, show_all: bool) -> bool {
     if app.no_display || OWN_DESKTOP_IDS.contains(&app.desktop_id.as_str()) {
@@ -441,15 +440,36 @@ pub fn find_icon(icon: &str, data_dirs: &[PathBuf]) -> Option<PathBuf> {
         .find(|p| is_icon_file(p, data_dirs))
 }
 
-/// Whether `path` is a PNG or SVG file of at most `ICON_MAX_BYTES` inside the
-/// `icons` or `pixmaps` folder of one of the `data_dirs`. Only such files are
-/// ever handed to the interface.
-pub fn is_icon_file(path: &Path, data_dirs: &[PathBuf]) -> bool {
-    use std::path::Component;
-    let image = path
-        .extension()
+fn is_image_name(path: &Path) -> bool {
+    path.extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("png") || e.eq_ignore_ascii_case("svg"));
+        .is_some_and(|e| e.eq_ignore_ascii_case("png") || e.eq_ignore_ascii_case("svg"))
+}
+
+/// The folders an icon file may really be in, resolved: `icons` and `pixmaps`
+/// of the `data_dirs`. Flatpak exports its icons as links into the deployed
+/// apps, so for an `exports/share` folder its installation's `app` folder
+/// counts too (the second value), but only its exported icons.
+fn icon_roots(data_dirs: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let real = |p: PathBuf| p.canonicalize().ok();
+    let folders = data_dirs
+        .iter()
+        .flat_map(|d| [d.join("icons"), d.join("pixmaps")])
+        .filter_map(real)
+        .collect();
+    let deployed = data_dirs
+        .iter()
+        .filter(|d| d.ends_with("exports/share"))
+        .filter_map(|d| real(d.parent()?.parent()?.join("app")))
+        .collect();
+    (folders, deployed)
+}
+
+/// The real file behind `path` when `path` is a PNG or SVG inside the
+/// `icons` or `pixmaps` folder of one of the `data_dirs`, and the file it
+/// stands for (after links) is one too, or an icon a Flatpak app exports.
+fn icon_target(path: &Path, data_dirs: &[PathBuf]) -> Option<PathBuf> {
+    use std::path::Component;
     let plain = path.is_absolute()
         && path
             .components()
@@ -457,10 +477,44 @@ pub fn is_icon_file(path: &Path, data_dirs: &[PathBuf]) -> bool {
     let inside = data_dirs
         .iter()
         .any(|d| path.starts_with(d.join("icons")) || path.starts_with(d.join("pixmaps")));
-    image
-        && plain
-        && inside
-        && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= ICON_MAX_BYTES)
+    if !(is_image_name(path) && plain && inside) {
+        return None;
+    }
+    let target = path.canonicalize().ok()?;
+    let (folders, deployed) = icon_roots(data_dirs);
+    let exported = |root: &PathBuf| {
+        target.strip_prefix(root).is_ok_and(|rest| {
+            let parts: Vec<_> = rest.components().collect();
+            parts.windows(3).any(|w| {
+                w[0].as_os_str() == "export"
+                    && w[1].as_os_str() == "share"
+                    && w[2].as_os_str() == "icons"
+            })
+        })
+    };
+    let allowed = folders.iter().any(|f| target.starts_with(f)) || deployed.iter().any(exported);
+    (is_image_name(&target) && allowed).then_some(target)
+}
+
+/// Whether `path` is an icon file tuxhub may hand to the interface: see
+/// [`icon_target`], and at most `ICON_MAX_BYTES` large.
+pub fn is_icon_file(path: &Path, data_dirs: &[PathBuf]) -> bool {
+    icon_target(path, data_dirs).is_some_and(|t| {
+        std::fs::metadata(t).is_ok_and(|m| m.is_file() && m.len() <= ICON_MAX_BYTES)
+    })
+}
+
+/// The bytes of an icon file (see [`is_icon_file`]). The file is opened once
+/// and read up to the limit, so a file that grows in between is refused too.
+pub fn read_icon(path: &Path, data_dirs: &[PathBuf]) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let file = std::fs::File::open(icon_target(path, data_dirs)?).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut body = Vec::new();
+    file.take(ICON_MAX_BYTES + 1).read_to_end(&mut body).ok()?;
+    (body.len() as u64 <= ICON_MAX_BYTES).then_some(body)
 }
 
 /// The URL the interface loads an icon file from (`appicon` protocol).
@@ -1194,6 +1248,83 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
         // The URL the interface loads carries the path, encoded.
         let url = icon_url(Path::new("/usr/share/icons/a b/ä.png"));
         assert_eq!(url, "appicon://localhost/usr/share/icons/a%20b/%C3%A4.png");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn icon_links_stay_inside_icon_folders() {
+        use std::os::unix::fs::symlink;
+        let base = std::env::temp_dir().join(format!("tuxhub-icon-links-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let put = |p: PathBuf, body: &[u8]| {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, body).unwrap();
+            p
+        };
+        let link = |target: &Path, at: PathBuf| {
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            symlink(target, &at).unwrap();
+            at
+        };
+        let usr = base.join("usr");
+        // A Flatpak installation: its exports link into the app's deploy folder.
+        let flatpak = base.join("flatpak");
+        let exports = flatpak.join("exports/share");
+        let dirs = vec![usr.clone(), exports.clone()];
+        let apps = usr.join("icons/hicolor/48x48/apps");
+
+        let plain = put(apps.join("plain.png"), b"png");
+        assert_eq!(read_icon(&plain, &dirs).as_deref(), Some(&b"png"[..]));
+
+        // A link out of the icon folders is not followed.
+        let secret = put(base.join("home/secret.png"), b"secret");
+        let escape = link(&secret, apps.join("escape.png"));
+        assert!(!is_icon_file(&escape, &dirs));
+        assert_eq!(read_icon(&escape, &dirs), None);
+        // Nor one whose target is no image.
+        let text = put(usr.join("icons/notes.txt"), b"text");
+        let disguised = link(&text, apps.join("disguised.png"));
+        assert!(!is_icon_file(&disguised, &dirs));
+        assert_eq!(read_icon(&disguised, &dirs), None);
+
+        // Flatpak icons link into the exported icons of the deployed app.
+        let deployed = put(
+            flatpak.join("app/org.x.App/x86_64/stable/abc/export/share/icons/hicolor/48x48/apps/org.x.App.png"),
+            b"flatpak",
+        );
+        let exported = link(
+            &deployed,
+            exports.join("icons/hicolor/48x48/apps/org.x.App.png"),
+        );
+        assert!(is_icon_file(&exported, &dirs));
+        assert_eq!(
+            read_icon(&exported, &dirs).as_deref(),
+            Some(&b"flatpak"[..])
+        );
+        assert_eq!(find_icon("org.x.App", &dirs), Some(exported.clone()));
+        // Other files of the deployed app stay out of reach.
+        let private = put(
+            flatpak.join("app/org.x.App/x86_64/stable/abc/files/share/secret.png"),
+            b"private",
+        );
+        let sneaky = link(
+            &private,
+            exports.join("icons/hicolor/48x48/apps/sneaky.png"),
+        );
+        assert!(!is_icon_file(&sneaky, &dirs));
+        assert_eq!(read_icon(&sneaky, &dirs), None);
+
+        // The size limit holds for what is read, not only what was stat'ed.
+        let edge = put(apps.join("edge.png"), &vec![0u8; ICON_MAX_BYTES as usize]);
+        assert_eq!(
+            read_icon(&edge, &dirs).map(|b| b.len()),
+            Some(ICON_MAX_BYTES as usize)
+        );
+        let over = put(
+            apps.join("over.png"),
+            &vec![0u8; ICON_MAX_BYTES as usize + 1],
+        );
+        assert_eq!(read_icon(&over, &dirs), None);
         std::fs::remove_dir_all(&base).unwrap();
     }
 
