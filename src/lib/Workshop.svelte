@@ -816,7 +816,7 @@
       display: none;
     }
     .sort {
-      width: 130px;
+      width: 150px;
     }
     .updates {
       flex-wrap: wrap;
