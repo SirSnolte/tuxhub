@@ -670,6 +670,35 @@ impl Programs {
         (out.status.success() && valid_flatpak_name(&origin)).then_some(origin)
     }
 
+    /// The version of the app in the installation, when flatpak tells it.
+    async fn flatpak_version(
+        &self,
+        flatpak_id: &str,
+        installation: Installation,
+    ) -> Option<String> {
+        let out = self
+            .query(
+                &self.flatpak,
+                &[
+                    "list",
+                    "--app",
+                    installation.flag(),
+                    "--columns=application,version",
+                ],
+            )
+            .await?;
+        if !out.status.success() {
+            return None;
+        }
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .find_map(|line| {
+                let (id, version) = line.split_once('\t')?;
+                (id.trim() == flatpak_id && !version.trim().is_empty())
+                    .then(|| version.trim().to_string())
+            })
+    }
+
     pub(crate) async fn flatpak_installed(
         &self,
         flatpak_id: &str,
@@ -1991,8 +2020,9 @@ pub async fn update_distro_package(
     Ok(updated)
 }
 
-/// The version of a pending Flatpak update, or its short commit when the app
-/// has no version.
+/// The version of a pending Flatpak update. Its short commit names an update
+/// without a version, and is added when the version is the installed one
+/// (a new build of the same version), e.g. "43.beta (0123456789ab)".
 async fn flatpak_update(
     programs: &Programs,
     flatpak_id: &str,
@@ -2016,17 +2046,31 @@ async fn flatpak_update(
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    Ok(String::from_utf8_lossy(&out.stdout)
+    let pending = String::from_utf8_lossy(&out.stdout)
         .lines()
         .find_map(|line| {
             let mut cols = line.split('\t').map(str::trim);
             if cols.next() != Some(flatpak_id) {
                 return None;
             }
-            let version = cols.next().unwrap_or_default();
-            let commit = cols.next().unwrap_or_default();
-            Some(if version.is_empty() { commit } else { version }.to_string())
-        }))
+            let version = cols.next().unwrap_or_default().to_string();
+            let commit: String = cols.next().unwrap_or_default().chars().take(12).collect();
+            Some((version, commit))
+        });
+    let Some((version, commit)) = pending else {
+        return Ok(None);
+    };
+    if version.is_empty() {
+        return Ok(Some(commit));
+    }
+    let installed = programs.flatpak_version(flatpak_id, installation).await;
+    Ok(Some(
+        if installed.as_deref() == Some(version.as_str()) && !commit.is_empty() {
+            format!("{version} ({commit})")
+        } else {
+            version
+        },
+    ))
 }
 
 /// Updates a Flatpak in the installation tuxhub uses. A system-wide

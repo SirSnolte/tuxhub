@@ -2853,11 +2853,21 @@ while True:
     /// A flatpak that has the app in the given installations and lists
     /// `updates` for `remote-ls --updates`.
     fn flatpak_with_updates(f: &tools::Fakes, installed: &[tools::Installation], updates: &str) {
+        flatpak_with_versions(f, installed, "", updates);
+    }
+
+    /// Like [`flatpak_with_updates`], and `list` prints `versions`.
+    fn flatpak_with_versions(
+        f: &tools::Fakes,
+        installed: &[tools::Installation],
+        versions: &str,
+        updates: &str,
+    ) {
         let flags: Vec<&str> = installed.iter().map(|i| i.flag()).collect();
         f.set(
             "flatpak",
             &format!(
-                "case \"$1\" in\n info) case \" {} \" in *\" $2 \"*) exit 0;; esac; exit 1;;\n remote-ls) printf '{updates}';;\nesac\nexit 0",
+                "case \"$1\" in\n info) case \" {} \" in *\" $2 \"*) exit 0;; esac; exit 1;;\n list) printf '{versions}';;\n remote-ls) printf '{updates}';;\nesac\nexit 0",
                 flags.join(" ")
             ),
         );
@@ -2910,6 +2920,42 @@ while True:
         assert_eq!(
             tools::check_update(&inst, &hub.programs).await.unwrap(),
             None
+        );
+
+        // A new commit of the installed version is named by its commit, so
+        // the button never offers the version that is already there.
+        let update = "net.example.demo\\t2.3.0\\t0123456789abcdef\\n";
+        flatpak_with_versions(
+            &f,
+            &[tools::Installation::System],
+            "net.example.other\\t2.2.0\\nnet.example.demo\\t2.3.0\\n",
+            update,
+        );
+        assert_eq!(
+            tools::check_update(&inst, &hub.programs)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("2.3.0 (0123456789ab)")
+        );
+        assert!(
+            f.calls()
+                .contains(&"flatpak list --app --system --columns=application,version".to_string()),
+            "{:?}",
+            f.calls()
+        );
+        flatpak_with_versions(
+            &f,
+            &[tools::Installation::System],
+            "net.example.demo\\t2.2.0\\n",
+            update,
+        );
+        assert_eq!(
+            tools::check_update(&inst, &hub.programs)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("2.3.0")
         );
     }
 
