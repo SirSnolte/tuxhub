@@ -419,6 +419,30 @@ export function sortGroups(list: WEntry[], sort: Sort): Group[] {
   return groups.filter((g) => g.entries.length > 0);
 }
 
+/** The sidebar id a member is pinned by: its start menu entry, else its
+ * tool; null when it cannot be pinned (not installed). */
+export function pinId(m: Pick<Member, "desktopId" | "installed" | "toolId">): string | null {
+  if (m.desktopId) return `desktop:${m.desktopId}`;
+  return m.installed ? m.toolId : null;
+}
+
+/** What dropping these tiles into the sidebar does: the ids to `add`, and the
+ * tools of tiles that are `present` already (by whichever member is pinned). */
+export function sidebarDrop(tiles: Pick<WEntry, "lead" | "members">[]): { add: string[]; present: string[] } {
+  const add: string[] = [];
+  const present: string[] = [];
+  for (const e of tiles) {
+    const pinned = e.members.find((m) => m.pinned);
+    if (pinned) {
+      present.push(pinned.toolId);
+    } else {
+      const id = pinId(e.lead);
+      if (id) add.push(id);
+    }
+  }
+  return { add, present };
+}
+
 /** `order` with the `ids` it does not have yet inserted at `at` (clamped to
  * the list; the end without), in their order. The input is not changed. */
 export function insertAt(order: string[], ids: string[], at: number | null): string[] {

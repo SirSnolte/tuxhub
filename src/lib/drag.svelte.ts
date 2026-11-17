@@ -1,7 +1,9 @@
 // Drag and drop with pointer events instead of HTML5 drag and drop: it works
 // the same in WebKitGTK and with touch screens, and Tauri does not take the
 // drop. Apps are dragged from the workshop into the sidebar, where the other
-// rows move aside to open a place. In the sidebar a pinned row is lifted and
+// rows move aside to open a place; an app that is there already opens none,
+// its row lights up, and on the drop the preview vanishes in a puff while
+// the row hops. In the sidebar a pinned row is lifted and
 // moved up or down; it never leaves the sidebar. Escape cancels.
 
 import { arrange, placeLifted, placeNew, type Row } from "./sortable";
@@ -10,14 +12,18 @@ import { arrange, placeLifted, placeNew, type Row } from "./sortable";
 const THRESHOLD = 6;
 /** Duration of the moves aside and of the landing; matches the CSS. */
 export const SETTLE_MS = 180;
+/** Duration of the puff of an app that is in the sidebar already. */
+export const POOF_MS = 420;
 /** Longest wait for the sidebar after a drop before the drag ends anyway. */
 const LANDING_MAX_MS = 4000;
 
 export type DragFrom = "workshop" | "pin";
 
 export type DragStart = {
-  /** Sidebar ids (tool ids or `desktop:<id>`); a pin drag has one. */
+  /** Sidebar ids (tool ids or `desktop:<id>`) to add; a pin drag has one. */
   ids: string[];
+  /** Tool ids of dragged apps that are in the sidebar already (workshop drag). */
+  present?: string[];
   from: DragFrom;
   label: string;
   icon: string | null;
@@ -49,9 +55,18 @@ export const drag = $state({
   lift: 0,
   /** The place that opens in the sidebar, in sidebar pixels. */
   slot: null as { top: number; height: number } | null,
+  /** Pinned tools among the dragged apps; their rows light up over the sidebar. */
+  present: [] as string[],
+  /** How many apps are dragged. */
+  count: 0,
   /** The drag is over and things move to their final place. */
   settling: false,
+  /** Nothing new was dropped: the preview vanishes in a puff. */
+  poof: false,
 });
+
+/** Rows that hop once to say "I am here already", after a drop. */
+export const echo = $state({ ids: [] as string[] });
 
 type Started = DragStart & {
   x0: number;
@@ -162,6 +177,8 @@ function onMove(ev: PointerEvent) {
     drag.active = true;
     drag.from = s.from;
     drag.ids = s.ids;
+    drag.present = s.present ?? [];
+    drag.count = s.ids.length + drag.present.length;
     drag.label = s.label;
     drag.icon = s.icon;
     document.body.classList.add("dragging");
@@ -186,7 +203,7 @@ function follow(s: Started, clientY: number) {
 
 /** How many rows the dragged apps add (those not in the sidebar yet). */
 function newRows(s: Started): number {
-  return Math.max(1, s.ids.filter((id) => !s.rows.some((r) => r.id === id)).length);
+  return s.ids.filter((id) => !s.rows.some((r) => r.id === id)).length;
 }
 
 /** Workshop drag: over the sidebar, a place opens where the apps would land. */
@@ -195,20 +212,21 @@ function hover(s: Started, clientX: number, clientY: number) {
   drag.y = clientY - s.dy;
   const r = sidebarEl?.getBoundingClientRect();
   drag.over = !!r && clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom;
-  if (!drag.over) {
+  const count = newRows(s);
+  if (!drag.over || count === 0) {
     drag.shift = {};
     drag.slot = null;
     return;
   }
   at = placeNew(s.rows, sidebarY(clientY));
-  const height = newRows(s) * (s.rowHeight + s.gap) - s.gap;
+  const height = count * (s.rowHeight + s.gap) - s.gap;
   const { shift, slotTop } = arrange(s.rows, s.gap, at, null, height, s.start);
   drag.shift = shift;
   drag.slot = { top: slotTop, height };
 }
 
 /** Lets things move to their final place, then runs `after`. */
-function settle(after: () => void | Promise<unknown>) {
+function settle(after: () => void | Promise<unknown>, ms = SETTLE_MS) {
   drag.settling = true;
   // A timer rather than transitionend: transitions stall in a hidden window.
   setTimeout(async () => {
@@ -217,7 +235,7 @@ function settle(after: () => void | Promise<unknown>) {
     } finally {
       reset();
     }
-  }, SETTLE_MS);
+  }, ms);
 }
 
 function reset() {
@@ -228,7 +246,21 @@ function reset() {
   drag.lift = 0;
   drag.slot = null;
   drag.ids = [];
+  drag.present = [];
+  drag.count = 0;
+  drag.poof = false;
   document.body.classList.remove("dragging");
+}
+
+/** Lets the rows of `ids` hop once. */
+let hops = 0;
+function hop(ids: string[]) {
+  if (!ids.length) return;
+  const mine = ++hops;
+  echo.ids = ids;
+  setTimeout(() => {
+    if (hops === mine) echo.ids = [];
+  }, 700);
 }
 
 /** The preview goes back to where it came from and fades. */
@@ -258,15 +290,25 @@ function onUp() {
     const place = at;
     drag.lift = (drag.slot?.top ?? s.rows[s.source].top) - s.rows[s.source].top;
     settle(() => h?.move(id, place));
+  } else if (drag.over && !drag.slot) {
+    // Everything dragged is in the sidebar already: nothing is added.
+    const present = drag.present;
+    drag.poof = true;
+    settle(() => {
+      hop(present);
+      s.dropped?.();
+    }, POOF_MS);
   } else if (drag.over && drag.slot && h && sidebarEl && listEl) {
     // The preview lands in the opened place and stays until the rows exist.
     const box = sidebarEl.getBoundingClientRect();
     drag.x = listEl.getBoundingClientRect().left;
     drag.y = box.top + sidebarEl.clientTop + drag.slot.top - sidebarEl.scrollTop;
     const ids = s.ids;
+    const present = drag.present;
     const place = at;
     settle(async () => {
       await h.pin(ids, place);
+      hop(present);
       s.dropped?.();
     });
   } else {

@@ -8,7 +8,7 @@
   import { t } from "$lib/i18n.svelte";
   import { allEntries, apps, loadApps, watchApps } from "$lib/apps.svelte";
   import { connectSidebar, move, pin, sidebar, unpin } from "$lib/sidebar.svelte";
-  import { clickSuppressed, drag, pressed, registerSidebar } from "$lib/drag.svelte";
+  import { clickSuppressed, drag, echo, pressed, registerSidebar } from "$lib/drag.svelte";
   import ToolPage from "$lib/ToolPage.svelte";
   import ToolMenu, { type MenuItem } from "$lib/ToolMenu.svelte";
   import ToolIcon from "$lib/ToolIcon.svelte";
@@ -171,6 +171,8 @@
           class="row"
           class:current={currentId === tool.entry.id}
           class:fresh={sidebar.fresh.includes(tool.entry.id)}
+          class:here={drag.over && drag.present.includes(tool.entry.id)}
+          class:echo={echo.ids.includes(tool.entry.id)}
           class:lifted={drag.active && drag.from === "pin" && drag.ids[0] === tool.entry.id}
           style:transform={drag.active && drag.from === "pin" && drag.ids[0] === tool.entry.id
             ? `translateY(${drag.lift}px)`
@@ -279,14 +281,23 @@
     class="ghost"
     class:settling={drag.settling}
     class:back={drag.settling && !drag.over}
+    class:poof={drag.poof}
     style:left="{drag.x}px"
     style:top="{drag.y}px"
     aria-hidden="true"
   >
     <ToolIcon icon={drag.icon ?? undefined} size={24} />
     <span class="label">{drag.label}</span>
-    {#if drag.ids.length > 1}<span class="more">{drag.ids.length}</span>{/if}
+    {#if drag.count > 1}<span class="more">{drag.count}</span>{/if}
   </div>
+  {#if drag.poof}
+    <!-- Already in the sidebar: the preview goes up in a small puff. -->
+    <div class="puff" style:left="{drag.x + 24}px" style:top="{drag.y + 19}px" aria-hidden="true">
+      {#each [0, 1, 2, 3, 4, 5, 6, 7] as i (i)}
+        <span style:--a="{i * 45 + 20}deg" style:--d="{i % 2 ? 18 : 26}px"></span>
+      {/each}
+    </div>
+  {/if}
 {/if}
 
 
@@ -424,6 +435,30 @@
     transition:
       transform 180ms cubic-bezier(0.2, 0, 0, 1),
       box-shadow 180ms;
+  }
+  /* An app dragged in that is here already: its row lights up softly, and
+     after the drop it hops once instead of being added again. */
+  .row.here {
+    box-shadow: inset 0 0 0 1px var(--wa-color-brand-border-normal);
+  }
+  .row.echo:not(.current) {
+    animation: echo 600ms ease-out;
+  }
+  .row.echo .pin-icon {
+    animation: hop 420ms cubic-bezier(0.3, 1.6, 0.5, 1);
+  }
+  @keyframes echo {
+    0% {
+      background: var(--wa-color-brand-fill-quiet);
+    }
+    100% {
+      background: transparent;
+    }
+  }
+  @keyframes hop {
+    40% {
+      transform: translateY(-3px) scale(1.12);
+    }
   }
   .row.fresh {
     animation: pinpop 0.6s ease-out;
@@ -577,6 +612,50 @@
   .ghost.back {
     opacity: 0;
   }
+  .ghost.poof {
+    animation: poof 360ms cubic-bezier(0.2, 0, 0, 1) forwards;
+  }
+  @keyframes poof {
+    30% {
+      opacity: 1;
+      transform: scale(1.05);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(1.2);
+      filter: blur(6px);
+    }
+  }
+  .puff {
+    position: fixed;
+    z-index: 1001;
+    pointer-events: none;
+  }
+  .puff span {
+    position: absolute;
+    left: -2px;
+    top: -2px;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--wa-color-brand-fill-loud);
+    opacity: 0;
+    animation: spark 420ms cubic-bezier(0.2, 0.6, 0.3, 1) forwards;
+  }
+  .puff span:nth-child(even) {
+    background: var(--wa-color-neutral-fill-loud);
+    animation-delay: 30ms;
+  }
+  @keyframes spark {
+    0% {
+      opacity: 0.9;
+      transform: rotate(var(--a)) translateX(6px) scale(1);
+    }
+    100% {
+      opacity: 0;
+      transform: rotate(var(--a)) translateX(var(--d)) scale(0.4);
+    }
+  }
   .ghost .more {
     min-width: 20px;
     margin-left: auto;
@@ -647,9 +726,16 @@
     .pins.dragging .row,
     .pins.settling .row.lifted,
     .ghost.settling,
+    .ghost.poof,
+    .puff span,
+    .row.echo,
+    .row.echo .pin-icon,
     .slot {
       transition: none;
       animation: none;
+    }
+    .puff {
+      display: none;
     }
   }
 </style>

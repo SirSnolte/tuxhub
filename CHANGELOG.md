@@ -34,7 +34,9 @@ All notable changes to tuxhub are documented in this file. The format follows
 
 - Drag and drop: apps are dragged from the workshop into the sidebar (also
   several selected at once) and reordered there. The other rows glide aside
-  to open the place, and the app settles into it; Escape cancels; each
+  to open the place, and the app settles into it; an app that is in the
+  sidebar already opens no place: its row lights up, and on the drop the
+  preview vanishes in a small puff while the row hops once; Escape cancels; each
   change can be undone for five seconds. An app leaves the sidebar through
   the menu of the open app ("Remove from sidebar"). Without a mouse: the pin
   button, `P` on a tile and `Alt`+arrow keys. In a window narrower than

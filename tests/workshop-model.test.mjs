@@ -13,6 +13,8 @@ import {
   entries,
   insertAt,
   matches,
+  pinId,
+  sidebarDrop,
   sortGroups,
 } from "../src/lib/workshop-model.ts";
 
@@ -320,4 +322,34 @@ test("web apps of a browser stay apart; only local starters of one folder join",
     view("chrome-ddd-Profile_1.desktop", unknown("/opt/google/chrome/google-chrome"), { name: "Mail" }),
   ]);
   assert.deepEqual(list.map((e) => e.members.length), [1, 1, 1, 1]);
+});
+
+// Dragging apps into the sidebar: which are new, which are there already.
+const member = (toolId, extra = {}) => ({ toolId, desktopId: null, installed: true, pinned: false, ...extra });
+const tile = (...members) => ({ lead: members[0], members });
+
+test("a member is pinned by its start menu entry, else by its tool", () => {
+  assert.equal(pinId(member("local.steam", { desktopId: "steam.desktop" })), "desktop:steam.desktop");
+  assert.equal(pinId(member("autoclicker")), "autoclicker");
+  assert.equal(pinId(member("autoclicker", { installed: false })), null);
+});
+
+test("dropped apps already in the sidebar are not added again", () => {
+  const drop = sidebarDrop([
+    tile(member("local.steam", { desktopId: "steam.desktop", pinned: true })),
+    tile(member("local.gimp", { desktopId: "gimp.desktop" })),
+    tile(member("autoclicker")),
+  ]);
+  assert.deepEqual(drop, { add: ["desktop:gimp.desktop", "autoclicker"], present: ["local.steam"] });
+});
+
+test("a family counts as present by whichever member is pinned", () => {
+  const drop = sidebarDrop([
+    tile(member("local.office", { desktopId: "office.desktop" }), member("local.writer", { desktopId: "writer.desktop", pinned: true })),
+  ]);
+  assert.deepEqual(drop, { add: [], present: ["local.writer"] });
+});
+
+test("apps that cannot be pinned are left out", () => {
+  assert.deepEqual(sidebarDrop([tile(member("fliq", { installed: false }))]), { add: [], present: [] });
 });

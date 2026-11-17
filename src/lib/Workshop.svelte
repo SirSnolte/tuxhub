@@ -25,6 +25,8 @@
     chipCounts,
     chipFilter,
     matches,
+    pinId,
+    sidebarDrop,
     sortGroups,
     type Area,
     type Chip,
@@ -136,12 +138,6 @@
 
   // -------------------------------------------------------------- Sidebar
 
-  /** The sidebar id a member is pinned by. */
-  function pinId(m: Member): string | null {
-    if (m.desktopId) return `desktop:${m.desktopId}`;
-    return m.installed ? m.toolId : null;
-  }
-
   function togglePin(e: WEntry, m: Member = e.members.find((x) => x.pinned) ?? e.lead) {
     if (m.pinned) {
       unpin(m.toolId, m.name, pinId(m) ?? m.toolId);
@@ -159,9 +155,9 @@
 
   function press(ev: PointerEvent, e: WEntry, icon: HTMLElement) {
     const dragged = selected.includes(e.key) ? selectedEntries.filter((x) => x.installed) : [e];
-    const ids = dragged.map((x) => pinId(x.lead)).filter((id): id is string => !!id);
-    if (!ids.length) return;
-    pressed(ev, { ids, from: "workshop", label: e.name, icon: e.lead.icon, el: icon, dropped: () => (selected = []) });
+    const { add, present } = sidebarDrop(dragged);
+    if (!add.length && !present.length) return;
+    pressed(ev, { ids: add, present, from: "workshop", label: e.name, icon: e.lead.icon, el: icon, dropped: () => (selected = []) });
   }
 
   // ------------------------------------------------------------ Open etc.
