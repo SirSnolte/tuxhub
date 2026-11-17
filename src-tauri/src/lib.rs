@@ -2617,8 +2617,8 @@ while True:
         let inst = add_local_app(&hub, &[app.clone()], vec![], "Some App.desktop")
             .await
             .unwrap();
-        assert_eq!(inst.id(), "local.some-app");
-        let saved = recorded(&hub, "local.some-app").unwrap();
+        assert_eq!(inst.id(), "local.some-app-db64a060");
+        let saved = recorded(&hub, "local.some-app-db64a060").unwrap();
         assert!(saved.adopted);
         assert_eq!(saved.window, tools::WindowMode::Own);
         assert!(matches!(
@@ -2633,8 +2633,8 @@ while True:
         assert!(err.contains("already in tuxhub"), "{err}");
 
         // Leaving the sidebar keeps the app on the computer.
-        forget(&hub, "local.some-app").unwrap();
-        assert!(recorded(&hub, "local.some-app").is_none());
+        forget(&hub, "local.some-app-db64a060").unwrap();
+        assert!(recorded(&hub, "local.some-app-db64a060").is_none());
         assert!(Path::new("/bin/sh").is_file());
     }
 

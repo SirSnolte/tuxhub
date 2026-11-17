@@ -800,21 +800,25 @@ pub fn same_source(a: &Source, b: &Source) -> bool {
 /// computer that one package holds (an office suite) are told apart by their
 /// command.
 pub fn same_app(record: &Entry, app: &LocalApp) -> bool {
-    if record.id == local_id(&app.desktop_id) {
-        return true;
-    }
     match &record.source {
+        // Its id may be one from before ids got a hash: the entry decides.
         Source::Launcher { desktop_id, .. } => *desktop_id == app.desktop_id,
         Source::DistroPackage {
             package,
             manager,
             command,
-        } if is_local_id(&record.id) => matches!(
-            local_entry(app).source,
-            Source::DistroPackage { package: ref p, manager: m, command: ref c }
-                if p == package && m == *manager && c == command
-        ),
-        _ => catalog_entry(std::slice::from_ref(record), &app.source).is_some(),
+        } if is_local_id(&record.id) => {
+            record.id == local_id(&app.desktop_id)
+                || matches!(
+                    local_entry(app).source,
+                    Source::DistroPackage { package: ref p, manager: m, command: ref c }
+                        if p == package && m == *manager && c == command
+                )
+        }
+        _ => {
+            record.id == local_id(&app.desktop_id)
+                || catalog_entry(std::slice::from_ref(record), &app.source).is_some()
+        }
     }
 }
 
@@ -827,7 +831,11 @@ pub(crate) fn is_local_id(id: &str) -> bool {
 
 /// The tool id of an app added from this computer: `local.` and its desktop
 /// file name, lowercase, other characters as `-`, at most 64 characters.
+/// When that changes the name, a hash of the desktop file id follows, so
+/// `Foo.desktop` and `foo.desktop` get ids of their own. Records keep the id
+/// they were saved with.
 pub(crate) fn local_id(desktop_id: &str) -> String {
+    const MAX: usize = 64;
     let stem = desktop_id.strip_suffix(".desktop").unwrap_or(desktop_id);
     let mut id: String = stem
         .to_lowercase()
@@ -847,9 +855,21 @@ pub(crate) fn local_id(desktop_id: &str) -> String {
     while id.contains("..") {
         id = id.replace("..", ".");
     }
+    if id.len() <= MAX && id[LOCAL_PREFIX.len()..] == *stem {
+        return id;
+    }
+    let hash = format!("-{:08x}", fnv1a(desktop_id.as_bytes()));
     // Only ASCII is left, so any length is a character boundary.
-    id.truncate(64);
-    id
+    id.truncate(MAX - hash.len());
+    id + &hash
+}
+
+/// 32-bit FNV-1a: a hash that stays the same across Rust versions, unlike
+/// the standard library's.
+fn fnv1a(bytes: &[u8]) -> u32 {
+    bytes.iter().fold(0x811c_9dc5, |h: u32, b| {
+        (h ^ u32::from(*b)).wrapping_mul(0x0100_0193)
+    })
 }
 
 /// The start command with its program by absolute path, as far as it can be
@@ -1917,8 +1937,9 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
 
     #[test]
     fn local_entry_id_is_valid() {
+        // A name that changes on the way gets a stable hash of the original.
         let e = local_entry(&local_app("Some App+Pro.desktop", unknown("/a"), &["/a"]));
-        assert_eq!(e.id, "local.some-app-pro");
+        assert_eq!(e.id, "local.some-app-pro-1e31dcf8");
         assert!(crate::manifest::valid_id(&e.id));
         let long = format!("{}.desktop", "N".repeat(80));
         let e = local_entry(&local_app(&long, unknown("/a"), &["/a"]));
@@ -1944,6 +1965,34 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
             .id,
             "local.kde-org.kde.dolphin"
         );
+    }
+
+    /// Desktop ids that only differ in case or in what is cut off get ids of
+    /// their own.
+    #[test]
+    fn local_ids_do_not_collide() {
+        assert_eq!(local_id("foo.desktop"), "local.foo");
+        assert_eq!(local_id("Foo.desktop"), "local.foo-3d24c559");
+        let long = |end: &str| format!("{}{end}.desktop", "n".repeat(80));
+        let (a, b) = (local_id(&long("a")), local_id(&long("b")));
+        assert_ne!(a, b);
+        for id in [&a, &b] {
+            assert!(crate::manifest::valid_id(id), "{id}");
+        }
+        assert_ne!(local_id("a..b.desktop"), local_id("a.b.desktop"));
+        assert_ne!(local_id("a b.desktop"), local_id("a-b.desktop"));
+    }
+
+    /// A record saved before the ids got a hash keeps its id and is still
+    /// found for its start menu entry, and not for another one.
+    #[test]
+    fn older_local_records_are_still_found() {
+        let app = local_app("Foo.desktop", unknown("/a"), &["/a"]);
+        let mut record = local_entry(&app);
+        record.id = "local.foo".into();
+        assert!(same_app(&record, &app));
+        let other = local_app("foo.desktop", unknown("/b"), &["/b"]);
+        assert!(!same_app(&record, &other));
     }
 
     #[test]
