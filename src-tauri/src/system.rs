@@ -183,8 +183,8 @@ pub fn set_tray_updates(app: &AppHandle, count: usize) {
     if let Some(items) = app.try_state::<TrayItems>() {
         let text = match count {
             0 => tr("No updates", "Keine Updates").to_string(),
-            1 => tr("1 tool update available", "1 Tool-Update verfügbar").to_string(),
-            n if german() => format!("{n} Tool-Updates verfügbar"),
+            1 => tr("1 update available", "1 Update verfügbar").to_string(),
+            n if german() => format!("{n} Updates verfügbar"),
             n => format!("{n} tool updates available"),
         };
         let _ = items.updates.set_text(text);

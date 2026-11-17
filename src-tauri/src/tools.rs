@@ -138,7 +138,7 @@ fn valid_command(command: &[String]) -> bool {
 }
 
 /// Whether a package name can be passed to a package manager as an argument.
-fn valid_package_name(package: &str) -> bool {
+pub(crate) fn valid_package_name(package: &str) -> bool {
     !package.is_empty()
         && !package.starts_with('-')
         && package
@@ -1925,7 +1925,7 @@ pub async fn check_update(inst: &Installed, programs: &Programs) -> Result<Optio
 
 /// Version of a pending package update. Anything that is not a plain version
 /// (spaces, control characters, an absurd length) is rejected.
-fn clean_version(raw: &str) -> Result<String, String> {
+pub(crate) fn clean_version(raw: &str) -> Result<String, String> {
     // Epoch ("2:") and release or revision ("-1.fc44") are not part of it;
     // the upstream version may hold `-` itself ("2.3-rc1-1").
     let v = raw.split_once(':').map_or(raw, |(_, v)| v);
@@ -2008,7 +2008,7 @@ pub async fn distro_update(
     }
 }
 
-fn failure_text(out: &std::process::Output) -> String {
+pub(crate) fn failure_text(out: &std::process::Output) -> String {
     let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if err.is_empty() {
         format!("the package manager failed ({})", out.status)

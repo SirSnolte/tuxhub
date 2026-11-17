@@ -188,6 +188,13 @@ export type LiveEvent =
 export type LiveNote = { tool: string; method: string; params: unknown };
 
 /** Where an app of this computer comes from. */
+/** The result of updating one start menu app; `error` is "updated
+ * elsewhere" or "cancelled" for those cases. */
+export type UpdateResult = { desktop_id: string; ok: boolean; error: string | null };
+
+/** Progress of `localAppsUpdate`: stage "dnf", "flatpak", "done" or "failed". */
+export type LocalUpdateProgress = { desktop_id: string; stage: "dnf" | "flatpak" | "done" | "failed" };
+
 export type LocalSource =
   /** `origin`: the remote of the installation tuxhub uses; null when flatpak did not name one. */
   | { kind: "flatpak"; flatpak_id: string; installations: ("user" | "system")[]; origin: string | null }
@@ -249,6 +256,11 @@ export const api = {
   sidebarPin: (ids: string[], at: number | null = null) => invoke<string[]>("sidebar_pin", { ids, at }),
   /** Takes a tool out of the sidebar; returns the new order. */
   sidebarUnpin: (id: string) => invoke<string[]>("sidebar_unpin", { id }),
+  /** Checks every package and Flatpak of the start menu: desktop id -> new version. */
+  localUpdatesCheck: () => invoke<Record<string, string>>("local_updates_check"),
+  /** Updates these start menu apps: packages with one password prompt.
+   * Progress comes as the event `local-update-progress`. */
+  localAppsUpdate: (desktopIds: string[]) => invoke<UpdateResult[]>("local_apps_update", { desktopIds }),
   /** Saves a new order of the pinned tools (each of them once). */
   sidebarSetOrder: (order: string[]) => invoke<void>("sidebar_set_order", { order }),
   tools: () => invoke<Tool[]>("tool_list"),

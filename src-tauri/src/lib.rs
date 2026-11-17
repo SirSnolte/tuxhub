@@ -3,6 +3,7 @@ mod embed;
 mod github;
 mod live;
 mod local_apps;
+mod local_updates;
 mod manifest;
 mod native;
 mod shortcuts;
@@ -57,6 +58,8 @@ pub struct Hub {
     /// Installed apps found on this PC, with the newest application folder
     /// time they were built for.
     local_apps: std::sync::Mutex<local_apps::Cache>,
+    /// Pending updates of the start menu apps.
+    local_updates: std::sync::Mutex<local_updates::Pending>,
     /// The folder of the entries the desktop starts at login.
     autostart_dir: PathBuf,
 }
@@ -79,6 +82,7 @@ impl Hub {
             live_starts: Default::default(),
             programs: Default::default(),
             local_apps: Default::default(),
+            local_updates: Default::default(),
         }
     }
 
@@ -683,7 +687,7 @@ struct LocalAppView {
 
 /// The catalog the installed apps are matched with. It is the bundled
 /// index: opening the workshop's installed apps needs no network.
-fn local_catalog() -> Vec<Entry> {
+pub(crate) fn local_catalog() -> Vec<Entry> {
     parse_workshop(WORKSHOP_BUNDLED).unwrap_or_default()
 }
 
@@ -725,11 +729,15 @@ async fn local_app_views(
     let pinned = sidebar_state(hub, &records).1;
     let pinned = &pinned;
     let updates = hub.updates.lock().unwrap().clone();
+    let local = hub.local_updates.lock().unwrap().versions.clone();
     let apps = apps.into_iter().filter(|a| !is_own_tool(hub, a));
     let views = apps.map(|app| {
         let tool_id = local_tool_id(&app, catalog, &records);
         let record = records.iter().find(|r| r.entry.id == tool_id);
-        let update = updates.get(&tool_id).cloned();
+        let update = updates
+            .get(&tool_id)
+            .or_else(|| local.get(&app.desktop_id))
+            .cloned();
         let integration = match catalog.iter().find(|e| e.id == tool_id) {
             Some(entry) => workshop_integration(&hub.tools_dir, entry, record),
             // Without a manifest an app runs inside tuxhub or in its own window.
@@ -1638,6 +1646,57 @@ async fn updates_check(app: AppHandle) -> std::collections::BTreeMap<String, Str
 }
 
 #[tauri::command]
+async fn local_updates_check(app: AppHandle) -> std::collections::BTreeMap<String, String> {
+    updates::check_local(&app).await
+}
+
+#[derive(Clone, Serialize)]
+struct LocalUpdateProgress<'a> {
+    desktop_id: &'a str,
+    stage: &'a str,
+}
+
+/// Updates the apps of the start menu `desktop_ids` names: all packages with
+/// one password prompt, Flatpaks per installation. Apps must be quit first
+/// (the user interface asks once for all running ones).
+#[tauri::command]
+async fn local_apps_update(
+    app: AppHandle,
+    desktop_ids: Vec<String>,
+) -> Vec<local_updates::UpdateResult> {
+    let hub = app.state::<Hub>();
+    let catalog = local_catalog();
+    let apps = local_apps::list_cached(&hub.local_apps, &hub.programs, &catalog).await;
+    let results = local_updates::update(&hub.programs, &apps, &desktop_ids, |d, stage| {
+        let _ = app.emit(
+            "local-update-progress",
+            LocalUpdateProgress {
+                desktop_id: d,
+                stage,
+            },
+        );
+    })
+    .await;
+    let done: Vec<String> = results
+        .iter()
+        .filter(|r| r.ok)
+        .map(|r| r.desktop_id.clone())
+        .collect();
+    updates::forget_local(&app, &done);
+    // A tool that is one of these apps has the new version too.
+    let records = tools::load_all(&hub.tools_dir);
+    for d in &done {
+        if let Some(a) = apps.iter().find(|a| a.desktop_id == *d)
+            && let Some(r) = records.iter().find(|r| local_apps::same_app(&r.entry, a))
+        {
+            updates::forget(&app, &r.entry.id);
+        }
+    }
+    let _ = app.emit("tools-changed", ());
+    results
+}
+
+#[tauri::command]
 async fn tool_web_status(app: AppHandle, id: String) -> Result<bool, String> {
     let url = webui::web_url(&app, &id)?;
     Ok(webui::reachable(&url).await)
@@ -1890,6 +1949,7 @@ pub fn run() {
                 live_starts: Default::default(),
                 programs: Default::default(),
                 local_apps: Default::default(),
+                local_updates: Default::default(),
                 autostart_dir: local_apps::autostart_dir(),
             });
 
@@ -1936,6 +1996,8 @@ pub fn run() {
             sidebar_pin,
             sidebar_unpin,
             sidebar_set_order,
+            local_updates_check,
+            local_apps_update,
             tool_remove_copy,
             tool_dismiss_duplicate,
             tool_forget,
