@@ -774,6 +774,11 @@ pub fn catalog_entry(catalog: &[Entry], source: &LocalSource) -> Option<usize> {
 
 const LOCAL_PREFIX: &str = "local.";
 
+/// Whether a tool id belongs to an app added from this computer.
+pub(crate) fn is_local_id(id: &str) -> bool {
+    id.starts_with(LOCAL_PREFIX)
+}
+
 /// The tool id of an app added from this computer: `local.` and its desktop
 /// file name, lowercase, other characters as `-`, at most 64 characters.
 pub(crate) fn local_id(desktop_id: &str) -> String {

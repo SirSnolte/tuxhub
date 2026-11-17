@@ -470,22 +470,51 @@ where
     })
 }
 
+/// The record of an app that is updated where it is, never from the
+/// workshop: a tool installed outside tuxhub, and any app adopted from this
+/// computer (`local.*`), which only its own package manager updates.
+fn updated_in_place(existing: Option<&Installed>) -> Option<&Installed> {
+    existing.filter(|i| {
+        local_apps::is_local_id(i.id())
+            || matches!(
+                i.entry.source,
+                Source::External { .. } | Source::DistroPackage { .. } | Source::Launcher { .. }
+            )
+    })
+}
+
+/// Updates an app where it is (see [`updated_in_place`]): a Flatpak through
+/// flatpak in its installation, a distribution package through its package
+/// manager. An app without such a way, like a launcher, has no updates.
+async fn update_in_place<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    hub: &Hub,
+    inst: &Installed,
+) -> Result<(), String> {
+    match &inst.entry.source {
+        Source::External { .. } => tools::update_external(app, inst).await,
+        Source::DistroPackage { .. } => {
+            tools::update_distro_package(&hub.tools_dir, &hub.programs, inst)
+                .await
+                .map(drop)
+        }
+        Source::Flatpak { .. } => {
+            tools::update_flatpak(app, &hub.tools_dir, &hub.programs, inst, &inst.entry)
+                .await
+                .map(drop)
+        }
+        _ => Err(format!("{} has no updates in tuxhub", inst.entry.name)),
+    }
+}
+
 /// Installs or updates a tool. A running app is quit first when `restart`
 /// says the user agreed; the returned state tells where it ran.
 #[tauri::command]
 async fn tool_install(app: AppHandle, id: String, restart: bool) -> Result<InstallOutcome, String> {
     let hub = app.state::<Hub>();
     let existing = tools::load(&hub.tools_dir, &id).ok();
-    // A tool installed outside tuxhub is updated where it is.
-    let external = existing
-        .clone()
-        .filter(|i| matches!(i.entry.source, Source::External { .. }));
-    // An app adopted from the package manager is updated by it, never from
-    // the workshop.
-    let distro = existing
-        .clone()
-        .filter(|i| matches!(i.entry.source, Source::DistroPackage { .. }));
-    let entry = match external.as_ref().or(distro.as_ref()) {
+    let in_place = updated_in_place(existing.as_ref());
+    let entry = match in_place {
         Some(_) => None,
         None => {
             let (entries, _) = workshop_entries().await;
@@ -513,12 +542,8 @@ async fn tool_install(app: AppHandle, id: String, restart: bool) -> Result<Insta
         // Background processes stop for the update and start again below.
         hub.runtime.stop(&id).await;
         embed::stop(&app, &id).await;
-        match (&external, &entry) {
-            (Some(inst), _) => tools::update_external(&app, inst).await?,
-            (None, None) if distro.is_some() => {
-                let inst = distro.as_ref().unwrap();
-                tools::update_distro_package(&hub.tools_dir, &hub.programs, inst).await?;
-            }
+        match (in_place, &entry) {
+            (Some(inst), _) => update_in_place(&app, &hub, inst).await?,
             (None, Some(entry)) => {
                 install_entry(&app, &hub, entry).await?;
             }
@@ -2864,6 +2889,92 @@ while True:
             ["flatpak uninstall --system -y --noninteractive net.example.demo"]
         );
         assert!(recorded(&hub, "demo").is_none());
+    }
+
+    /// An app adopted from this computer that is a Flatpak (`local.*`).
+    fn adopted_local_flatpak(hub: &Hub) -> Installed {
+        let entry = workshop_entry(
+            "local.demo",
+            json!({ "type": "flatpak", "flatpak_id": "net.example.demo" }),
+        );
+        let inst = Installed {
+            adopted: true,
+            installation: tools::Installation::System,
+            ..Installed::new(entry)
+        };
+        record(hub, &inst);
+        inst
+    }
+
+    /// An adopted Flatpak is updated by flatpak in its own installation; the
+    /// workshop is never asked for it.
+    #[tokio::test]
+    async fn updates_an_adopted_flatpak_through_flatpak() {
+        let (hub, f) = hub_with_fakes("update-adopted-flatpak");
+        f.flatpak_with(&[tools::Installation::System]);
+        let inst = adopted_local_flatpak(&hub);
+        assert_eq!(
+            updated_in_place(Some(&inst)).map(Installed::id),
+            Some(inst.id())
+        );
+        let app = tauri::test::mock_app();
+        update_in_place(app.handle(), &hub, &inst).await.unwrap();
+        assert_eq!(
+            f.calls(),
+            ["flatpak update --system -y --noninteractive net.example.demo"]
+        );
+        let saved = recorded(&hub, "local.demo").unwrap();
+        assert_eq!(json!(saved.entry), json!(inst.entry));
+        assert!(saved.adopted);
+        assert_eq!(saved.installation, tools::Installation::System);
+
+        // A user installation is updated as one.
+        let user = Installed {
+            installation: tools::Installation::User,
+            ..inst
+        };
+        record(&hub, &user);
+        update_in_place(app.handle(), &hub, &user).await.unwrap();
+        assert_eq!(
+            f.calls().last().map(String::as_str),
+            Some("flatpak update --user -y --noninteractive net.example.demo")
+        );
+    }
+
+    /// A Flatpak of the workshop takes the workshop way, even when it was on
+    /// the computer before tuxhub.
+    #[test]
+    fn workshop_apps_are_not_updated_in_place() {
+        let (hub, _f) = hub_with_fakes("update-workshop-flatpak");
+        let inst = adopted_system_flatpak(&hub);
+        assert!(updated_in_place(Some(&inst)).is_none());
+        assert!(updated_in_place(None).is_none());
+    }
+
+    /// A launcher has no updates: none is offered, and an update fails
+    /// without running anything or asking the workshop.
+    #[tokio::test]
+    async fn an_adopted_launcher_has_no_update() {
+        let (hub, f) = hub_with_fakes("update-launcher");
+        let entry = workshop_entry(
+            "local.clock",
+            json!({ "type": "launcher", "desktop_id": "clock.desktop", "command": ["/usr/bin/true"] }),
+        );
+        let inst = Installed {
+            adopted: true,
+            ..Installed::new(entry)
+        };
+        record(&hub, &inst);
+        assert_eq!(tools::check_update(&inst, &hub.programs).await, Ok(None));
+        assert!(updated_in_place(Some(&inst)).is_some());
+        let app = tauri::test::mock_app();
+        let err = update_in_place(app.handle(), &hub, &inst)
+            .await
+            .unwrap_err();
+        assert!(err.contains("no updates"), "{err}");
+        assert!(!err.contains("workshop"), "{err}");
+        assert!(f.calls().is_empty(), "{:?}", f.calls());
+        assert_eq!(json!(recorded(&hub, "local.clock").unwrap()), json!(inst));
     }
 
     #[tokio::test]
