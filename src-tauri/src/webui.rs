@@ -175,12 +175,17 @@ mod tests {
     use std::path::PathBuf;
 
     /// Minimal server: one response per connection, records the requests.
+    /// It closes every connection after its response and says so, otherwise
+    /// the pooled proxy client may reuse a connection the server just closed.
     fn serve(
         responses: impl FnOnce(u16) -> Vec<String>,
     ) -> (u16, std::sync::mpsc::Receiver<String>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let responses = responses(port);
+        let responses: Vec<String> = responses(port)
+            .into_iter()
+            .map(|r| r.replacen("\r\n", "\r\nConnection: close\r\n", 1))
+            .collect();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             for resp in responses {
