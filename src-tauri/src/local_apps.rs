@@ -489,14 +489,11 @@ fn icon_target(path: &Path, data_dirs: &[PathBuf]) -> Option<PathBuf> {
     }
     let target = path.canonicalize().ok()?;
     let (folders, deployed) = icon_roots(data_dirs);
+    // `<id>/<arch>/<branch>/<commit>/export/share/icons/…` of a deployment.
     let exported = |root: &PathBuf| {
         target.strip_prefix(root).is_ok_and(|rest| {
-            let parts: Vec<_> = rest.components().collect();
-            parts.windows(3).any(|w| {
-                w[0].as_os_str() == "export"
-                    && w[1].as_os_str() == "share"
-                    && w[2].as_os_str() == "icons"
-            })
+            let parts: Vec<_> = rest.components().map(|c| c.as_os_str()).collect();
+            parts.len() > 7 && parts[4..7] == ["export", "share", "icons"]
         })
     };
     let allowed = folders.iter().any(|f| target.starts_with(f)) || deployed.iter().any(exported);
@@ -1422,6 +1419,24 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
         );
         assert!(!is_icon_file(&sneaky, &dirs));
         assert_eq!(read_icon(&sneaky, &dirs), None);
+        // Only the exported icons at their place in the deployment count,
+        // not a folder of the same name deeper in the app's files.
+        for (i, inside) in [
+            "org.x.App/x86_64/stable/abc/files/export/share/icons/hicolor/48x48/apps/a.png",
+            "org.x.App/x86_64/stable/abc/files/x/export/share/icons/a.png",
+            "org.x.App/export/share/icons/a.png",
+            "export/share/icons/a.png",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let hidden = put(flatpak.join("app").join(inside), b"private");
+            let shown = link(
+                &hidden,
+                exports.join(format!("icons/hicolor/48x48/apps/deep{i}.png")),
+            );
+            assert!(!is_icon_file(&shown, &dirs), "{inside}");
+        }
 
         // The size limit holds for what is read, not only what was stat'ed.
         let edge = put(apps.join("edge.png"), &vec![0u8; ICON_MAX_BYTES as usize]);
