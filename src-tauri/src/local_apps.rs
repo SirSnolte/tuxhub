@@ -25,6 +25,8 @@ pub struct DesktopApp {
     pub categories: Vec<String>,
     pub flatpak_id: Option<String>,
     pub no_display: bool,
+    /// `Terminal=true`: the app needs a terminal to run.
+    pub terminal: bool,
     pub only_show_in: Vec<String>,
     pub not_show_in: Vec<String>,
     pub path: PathBuf,
@@ -132,10 +134,6 @@ pub fn parse_desktop_for(
     if exec.is_empty() {
         return None;
     }
-    // A terminal app is a console app; reuse the category the filter already knows.
-    if terminal && !categories.iter().any(|c| c == "ConsoleOnly") {
-        categories.push("ConsoleOnly".into());
-    }
     Some(DesktopApp {
         desktop_id: desktop_id.to_string(),
         name,
@@ -149,6 +147,7 @@ pub fn parse_desktop_for(
         categories,
         flatpak_id: flatpak_id.filter(|f| !f.is_empty()),
         no_display,
+        terminal,
         only_show_in,
         not_show_in,
         path: path.to_path_buf(),
@@ -228,9 +227,10 @@ fn is_env_assignment(a: &str) -> bool {
 /// `XDG_CURRENT_DESKTOP` (for example `KDE` or `ubuntu:GNOME`). Settings, system
 /// and console apps, Wine's own tools, help screens and game shortcuts of
 /// store clients are hidden unless `show_all`; `NoDisplay` apps, ones not
-/// meant for this desktop and tuxhub itself are always hidden.
+/// meant for this desktop, terminal apps (tuxhub cannot run them without a
+/// terminal) and tuxhub itself are always hidden.
 pub fn is_visible(app: &DesktopApp, desktop: &str, show_all: bool) -> bool {
-    if app.no_display || OWN_DESKTOP_IDS.contains(&app.desktop_id.as_str()) {
+    if app.no_display || app.terminal || OWN_DESKTOP_IDS.contains(&app.desktop_id.as_str()) {
         return false;
     }
     let current: Vec<&str> = desktop.split(':').filter(|s| !s.is_empty()).collect();
@@ -569,10 +569,13 @@ pub struct LocalApp {
     pub source: LocalSource,
     pub command: Vec<String>,
     pub autostart: bool,
+    /// A settings module, system or console tool, Wine tool, help screen or
+    /// game shortcut: shown with "Show more" and found by the search.
+    pub system: bool,
 }
 
-/// Cached list: newest application folder time, `show_all`, apps.
-pub type Cache = Option<(SystemTime, bool, Vec<LocalApp>)>;
+/// Cached list: newest application folder time, apps.
+pub type Cache = Option<(SystemTime, Vec<LocalApp>)>;
 
 /// Finds where an app comes from: Flatpak by its ID, otherwise the package
 /// that owns its program, an AppImage by file name, or nothing known.
@@ -931,6 +934,7 @@ fn apply_catalog(mut apps: Vec<LocalApp>, catalog: &[Entry]) -> Vec<LocalApp> {
 
 async fn build_app(
     app: DesktopApp,
+    system: bool,
     autostart_dir: &Path,
     index: &HashMap<String, AppInfo>,
     programs: &Programs,
@@ -968,6 +972,7 @@ async fn build_app(
         source,
         command: app.exec,
         autostart,
+        system,
     }
 }
 
@@ -975,18 +980,24 @@ async fn build_app(
 /// processes, and too many at once run into the timeout.
 const RESOLVE_CONCURRENCY: usize = 16;
 
-/// The apps of the start menu with their source, without the catalog.
+/// The apps of the start menu with their source, without the catalog; the
+/// ones hidden by default marked [`LocalApp::system`]. `apps` are the
+/// scanned desktop entries ([`scan_dirs`]).
 async fn scan_apps(
+    apps: Vec<DesktopApp>,
     dirs: &[PathBuf],
     desktop: &str,
     autostart_dir: &Path,
     index: &HashMap<String, AppInfo>,
     programs: &Programs,
-    show_all: bool,
 ) -> Vec<LocalApp> {
-    let visible: Vec<DesktopApp> = scan_dirs(dirs)
+    let visible: Vec<(DesktopApp, bool)> = apps
         .into_iter()
-        .filter(|a| is_visible(a, desktop, show_all))
+        .filter(|a| is_visible(a, desktop, true))
+        .map(|a| {
+            let system = !is_visible(&a, desktop, false);
+            (a, system)
+        })
         .collect();
     // The data folders the application folders belong to hold the icons.
     let data: Vec<PathBuf> = dirs
@@ -996,7 +1007,7 @@ async fn scan_apps(
     futures_util::stream::iter(
         visible
             .into_iter()
-            .map(|a| build_app(a, autostart_dir, index, programs, &data)),
+            .map(|(a, system)| build_app(a, system, autostart_dir, index, programs, &data)),
     )
     .buffered(RESOLVE_CONCURRENCY)
     .collect()
@@ -1012,9 +1023,16 @@ async fn list_in(
     index: &HashMap<String, AppInfo>,
     programs: &Programs,
     catalog: &[Entry],
-    show_all: bool,
 ) -> Vec<LocalApp> {
-    let apps = scan_apps(dirs, desktop, autostart_dir, index, programs, show_all).await;
+    let apps = scan_apps(
+        scan_dirs(dirs),
+        dirs,
+        desktop,
+        autostart_dir,
+        index,
+        programs,
+    )
+    .await;
     apply_catalog(apps, catalog)
 }
 
@@ -1045,23 +1063,20 @@ fn newest_mtime(dirs: &[PathBuf]) -> SystemTime {
 /// catalog knows (by Flatpak ID or package) take their texts, icon and repo
 /// from the catalog and show once; their `desktop_id` stays.
 ///
-/// The scanned apps stay in `cache` until an application folder changes (or
-/// `show_all` does). The catalog is not part of the cache: it is applied on
-/// every call.
+/// The scanned apps stay in `cache` until an application folder changes.
+/// The catalog is not part of the cache: it is applied on every call.
 pub async fn list_cached(
     cache: &std::sync::Mutex<Cache>,
     programs: &Programs,
     catalog: &[Entry],
-    show_all: bool,
 ) -> Vec<LocalApp> {
     let apps = cached_apps(
         cache,
         &application_dirs(),
         &current_desktop(),
         &autostart_dir(),
-        &crate::appstream::load_index,
+        crate::appstream::load_index,
         programs,
-        show_all,
     )
     .await;
     apply_catalog(apps, catalog)
@@ -1072,29 +1087,26 @@ async fn cached_apps(
     dirs: &[PathBuf],
     desktop: &str,
     autostart_dir: &Path,
-    load_index: &(dyn Fn() -> HashMap<String, AppInfo> + Sync),
+    load_index: fn() -> HashMap<String, AppInfo>,
     programs: &Programs,
-    show_all: bool,
 ) -> Vec<LocalApp> {
     let stamp = newest_mtime(dirs);
     if let Ok(guard) = cache.lock()
-        && let Some((t, all, apps)) = guard.as_ref()
+        && let Some((t, apps)) = guard.as_ref()
         && *t == stamp
-        && *all == show_all
     {
         return apps.clone();
     }
-    let apps = scan_apps(
-        dirs,
-        desktop,
-        autostart_dir,
-        &load_index(),
-        programs,
-        show_all,
-    )
-    .await;
+    // Reading many files (and unpacking AppStream data) blocks: not on the
+    // async runtime's threads.
+    let owned = dirs.to_vec();
+    let read = tokio::task::spawn_blocking(move || (scan_dirs(&owned), load_index()));
+    let Ok((entries, index)) = read.await else {
+        return vec![];
+    };
+    let apps = scan_apps(entries, dirs, desktop, autostart_dir, &index, programs).await;
     if let Ok(mut guard) = cache.lock() {
-        *guard = Some((stamp, show_all, apps.clone()));
+        *guard = Some((stamp, apps.clone()));
     }
     apps
 }
@@ -1117,6 +1129,7 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
             categories: categories.iter().map(|s| s.to_string()).collect(),
             flatpak_id: None,
             no_display: false,
+            terminal: false,
             only_show_in: vec![],
             not_show_in: vec![],
             path: PathBuf::from("/x.desktop"),
@@ -1194,6 +1207,10 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
         assert!(is_visible(&app(&["Game"]), "KDE", false));
         let mut a = app(&["Game"]);
         a.desktop_id = "io.github.sirsnolte.tuxhub.desktop".into();
+        assert!(!is_visible(&a, "KDE", true));
+        // A terminal app cannot run without a terminal: never listed.
+        let mut a = app(&["Game"]);
+        a.terminal = true;
         assert!(!is_visible(&a, "KDE", true));
     }
 
@@ -1601,7 +1618,6 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
             &HashMap::new(),
             &f.programs,
             &catalog,
-            true,
         )
         .await;
         let sc: Vec<_> = apps
@@ -1620,8 +1636,10 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
         assert_eq!(names, ["Stream Controller", "Zed"]);
     }
 
+    /// Every listed app comes back, system apps marked, so the search finds
+    /// them; terminal apps never show.
     #[tokio::test]
-    async fn list_hides_console_only_marker_and_filters() {
+    async fn list_marks_system_apps_and_leaves_out_terminal_apps() {
         let f = Fakes::new("local-list");
         let dir = f.dir.join("apps");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1630,11 +1648,32 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
             "[Desktop Entry]\nType=Application\nName=Term\nExec=t\nTerminal=true\nCategories=Game;\n",
         )
         .unwrap();
-        let dirs = [dir];
+        std::fs::write(
+            dir.join("c.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Console\nExec=c\nCategories=Game;ConsoleOnly;\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("s.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Settings\nExec=s\nCategories=Settings;\n",
+        )
+        .unwrap();
+        desktop_file(&dir, "g.desktop", "Game", "g");
         let (none, index) = (f.dir.join("none"), HashMap::new());
-        let run = |show_all| list_in(&dirs, "KDE", &none, &index, &f.programs, &[], show_all);
-        assert!(run(false).await.is_empty());
-        let apps = run(true).await;
+        let apps = list_in(&[dir], "KDE", &none, &index, &f.programs, &[]).await;
+        let listed: Vec<_> = apps
+            .iter()
+            .map(|a| (a.desktop_id.as_str(), a.system))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("c.desktop", true),
+                ("g.desktop", false),
+                ("s.desktop", true)
+            ]
+        );
+        // `ConsoleOnly` is a marker, not a category to show.
         assert_eq!(apps[0].categories, ["Game"]);
     }
 
@@ -1714,17 +1753,7 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
         let dirs = [dir.clone()];
         let cache = std::sync::Mutex::new(None);
         let none = f.dir.join("none");
-        let scan = || {
-            cached_apps(
-                &cache,
-                &dirs,
-                "KDE",
-                &none,
-                &HashMap::new,
-                &f.programs,
-                true,
-            )
-        };
+        let scan = || cached_apps(&cache, &dirs, "KDE", &none, HashMap::new, &f.programs);
         let first = scan().await;
         assert_eq!(first.len(), 1);
 
@@ -1743,17 +1772,7 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
         f.flatpak_with(&[Installation::User]);
         let dirs = [flatpak_dir];
         let cache = std::sync::Mutex::new(None);
-        let scan = || {
-            cached_apps(
-                &cache,
-                &dirs,
-                "KDE",
-                &none,
-                &HashMap::new,
-                &f.programs,
-                true,
-            )
-        };
+        let scan = || cached_apps(&cache, &dirs, "KDE", &none, HashMap::new, &f.programs);
         let apps = scan().await;
         assert_eq!(apply_catalog(apps, &[])[0].name, "StreamController");
         let catalog = [entry(
@@ -1783,7 +1802,6 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
             &HashMap::new(),
             &f.programs,
             &catalog,
-            true,
         )
         .await;
         assert_eq!(apps.len(), 1);
@@ -1799,7 +1817,6 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
             &HashMap::new(),
             &f.programs,
             &catalog,
-            true,
         )
         .await;
         assert_eq!(apps.len(), 1);
@@ -1823,7 +1840,6 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
             &HashMap::new(),
             &f.programs,
             &[],
-            true,
         )
         .await;
         assert_eq!(apps.len(), 60);
@@ -1846,6 +1862,7 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
             source,
             command: command.iter().map(|s| s.to_string()).collect(),
             autostart: false,
+            system: false,
         }
     }
 

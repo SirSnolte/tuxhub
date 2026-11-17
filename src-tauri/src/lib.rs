@@ -727,10 +727,10 @@ async fn local_app_views(
 }
 
 #[tauri::command]
-async fn local_apps_list(app: AppHandle, show_all: bool) -> Vec<LocalAppView> {
+async fn local_apps_list(app: AppHandle) -> Vec<LocalAppView> {
     let hub = app.state::<Hub>();
     let catalog = local_catalog();
-    let apps = local_apps::list_cached(&hub.local_apps, &hub.programs, &catalog, show_all).await;
+    let apps = local_apps::list_cached(&hub.local_apps, &hub.programs, &catalog).await;
     let mut in_hub = std::collections::HashSet::new();
     for inst in tools::load_all(&hub.tools_dir) {
         if embed::status(&app, inst.id()).await.is_some() {
@@ -783,13 +783,7 @@ async fn local_app_add(app: AppHandle, desktop_id: String) -> Result<String, Str
     let hub = app.state::<Hub>();
     let catalog = local_catalog();
     // The list the user chose from; usually cached, so nothing is scanned.
-    let show_all = hub
-        .local_apps
-        .lock()
-        .ok()
-        .and_then(|c| c.as_ref().map(|(_, all, _)| *all))
-        .unwrap_or(true);
-    let apps = local_apps::list_cached(&hub.local_apps, &hub.programs, &catalog, show_all).await;
+    let apps = local_apps::list_cached(&hub.local_apps, &hub.programs, &catalog).await;
     let inst = add_local_app(&hub, &apps, catalog, &desktop_id).await?;
     shortcuts::rebind(app.clone());
     start_background_tools(app).await;
@@ -2490,6 +2484,7 @@ while True:
             source,
             command: command.iter().map(|s| s.to_string()).collect(),
             autostart: false,
+            system: false,
         }
     }
 

@@ -112,7 +112,9 @@ The tab "Installed" next to the catalog shows the apps of your start menu. It
 reads the desktop entries and the local AppStream data and needs no network.
 Settings modules, system and console tools, Wine's built-in tools, help
 screens and game shortcuts of Steam, Heroic and Lutris are hidden until you
-choose "Show more (system apps)"; the search always looks through all apps.
+choose "Show more (system apps)"; the search always looks through all apps,
+and apps in the sidebar always stay in the list. Apps that need a terminal
+are not listed.
 
 - **Sidebar:** the switch adds the app to the sidebar or removes it. The app
   stays on the computer either way.

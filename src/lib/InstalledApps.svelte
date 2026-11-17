@@ -12,7 +12,7 @@
   import { canToggleWindow } from "./apps/integration";
   import {
     canUpdate,
-    filterApps,
+    listedApps,
     localSystemUpdateOf,
     sourceLabelKey,
     systemUpdateOf,
@@ -60,22 +60,22 @@
   async function load() {
     error = "";
     try {
-      apps = await api.localAppsList(showAll);
-      count = apps.length;
+      apps = await api.localAppsList();
     } catch (e) {
       error = errText(e);
     }
   }
   load();
 
-  const visible = $derived(filterApps(apps ?? [], query));
+  const visible = $derived(listedApps(apps ?? [], query, showAll));
+  $effect(() => {
+    count = apps ? listedApps(apps, "", showAll).length : null;
+  });
   const selected = $derived(apps?.find((v) => v.app.desktop_id === selectedId) ?? null);
   const selectedTool = $derived(selected ? tools.find((tool) => tool.entry.id === selected.tool_id) : undefined);
 
   function showMore() {
     showAll = true;
-    apps = null;
-    load();
   }
 
   async function setSidebar(view: LocalAppView, e: Event) {
@@ -277,7 +277,7 @@
   {/if}
 </div>
 
-{#if apps && !showAll}
+{#if apps && !showAll && !query.trim() && apps.some((view) => view.app.system && !view.in_sidebar)}
   <div class="more">
     <wa-button appearance="outlined" onclick={showMore}>{t("installed.showMore")}</wa-button>
   </div>

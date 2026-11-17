@@ -208,6 +208,9 @@ export type LocalApp = {
   command: string[];
   /** It starts when the user logs in. */
   autostart: boolean;
+  /** A settings module, system or console tool, Wine tool, help screen or
+   * game shortcut: listed with "Show more" and found by the search. */
+  system: boolean;
 };
 
 /** An app of the start menu with its state in tuxhub. */
@@ -236,8 +239,8 @@ export const api = {
   removeCopy: (id: string) => invoke<void>("tool_remove_copy", { id }),
   dismissDuplicate: (id: string) => invoke<void>("tool_dismiss_duplicate", { id }),
   forget: (id: string) => invoke<void>("tool_forget", { id }),
-  /** The apps of the start menu; `showAll` adds system, settings and console apps. */
-  localAppsList: (showAll: boolean) => invoke<LocalAppView[]>("local_apps_list", { showAll }),
+  /** All apps of the start menu, system apps marked (`app.system`). */
+  localAppsList: () => invoke<LocalAppView[]>("local_apps_list"),
   /** Adds an app of the start menu to the sidebar and returns its tool id. */
   localAppAdd: (desktopId: string) => invoke<string>("local_app_add", { desktopId }),
   tools: () => invoke<Tool[]>("tool_list"),

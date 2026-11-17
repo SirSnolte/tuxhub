@@ -14,8 +14,10 @@ All notable changes to tuxhub are documented in this file. The format follows
   from the desktop entries and the local AppStream data. Settings modules,
   system and console tools, Wine's built-in tools, help screens and game
   shortcuts of Steam, Heroic and Lutris stay hidden until "Show more (system
-  apps)"; the search always looks through all apps. Catalog apps that are
-  already on the computer appear once, with the catalog's texts.
+  apps)"; the search always looks through all apps, and apps in the sidebar
+  always stay in the list. Apps that need a terminal are not listed. Catalog
+  apps that are already on the computer appear once, with the catalog's
+  texts.
 - The switch "Sidebar" on each card adds any installed app to the sidebar
   without installing it a second time, and removes it again; the app always
   stays on the computer. The detail dialog shows the description, the README

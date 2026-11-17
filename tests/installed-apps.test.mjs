@@ -11,6 +11,7 @@ import {
   systemUpdateOf,
   updateWithConsent,
   filterApps,
+  listedApps,
   needsRestartDialog,
   runningUnknown,
   sourceLabelKey,
@@ -93,6 +94,7 @@ const view = (app, rest = {}) => ({
     source: { kind: "unknown", program: "/usr/bin/x" },
     command: ["/usr/bin/x"],
     autostart: false,
+    system: false,
     ...app,
   },
   tool_id: "local.x",
@@ -127,6 +129,18 @@ test("the search finds installed apps by name, summary, desktop id and package",
   assert.deepEqual(filterApps(apps, ""), apps);
   assert.deepEqual(filterApps(apps, "   "), apps);
   assert.deepEqual(filterApps(apps, "nothing like it"), []);
+});
+
+test("system apps show with Show more, in the search and while in the sidebar", () => {
+  const settings = view({ desktop_id: "kcm.desktop", name: "Stream Settings", system: true });
+  const pinned = view({ desktop_id: "konsole.desktop", name: "Konsole", system: true }, { in_sidebar: true });
+  const all = [streamController, obs, settings, pinned];
+  assert.deepEqual(listedApps(all, "", false), [streamController, obs, pinned]);
+  assert.deepEqual(listedApps(all, "  ", false), [streamController, obs, pinned]);
+  assert.deepEqual(listedApps(all, "", true), all);
+  // The search always looks through all apps, Show more or not.
+  assert.deepEqual(listedApps(all, "stream", false), [streamController, obs, settings]);
+  assert.deepEqual(listedApps(all, "settings", true), [settings]);
 });
 
 test("every source of an installed app has a label in English and German", () => {

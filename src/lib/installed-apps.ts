@@ -35,6 +35,14 @@ export function filterApps(apps: LocalAppView[], query: string): LocalAppView[] 
   });
 }
 
+/** The apps the tab shows: with a search, every app it finds; otherwise
+ * every app with `showAll`, or the apps that are no system apps and the ones
+ * in the sidebar (so they can be taken out again). */
+export function listedApps(apps: LocalAppView[], query: string, showAll: boolean): LocalAppView[] {
+  if (query.trim()) return filterApps(apps, query);
+  return showAll ? apps : apps.filter((view) => !view.app.system || view.in_sidebar);
+}
+
 /** The i18n key that names where an installed app comes from. */
 export function sourceLabelKey(source: LocalSource): `installed.source.${LocalSource["kind"]}` {
   return `installed.source.${source.kind}`;
