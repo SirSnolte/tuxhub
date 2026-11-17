@@ -383,6 +383,14 @@ fn read_limited(path: &Path) -> Option<String> {
 }
 
 pub fn application_dirs() -> Vec<PathBuf> {
+    data_dirs()
+        .into_iter()
+        .map(|d| d.join("applications"))
+        .collect()
+}
+
+/// The XDG data folders, `XDG_DATA_HOME` first.
+pub fn data_dirs() -> Vec<PathBuf> {
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     let home = env("XDG_DATA_HOME")
         .map(PathBuf::from)
@@ -395,8 +403,77 @@ pub fn application_dirs() -> Vec<PathBuf> {
                 .filter(|s| !s.is_empty())
                 .map(PathBuf::from),
         )
-        .map(|d| d.join("applications"))
         .collect()
+}
+
+/// Largest icon file tuxhub shows.
+const ICON_MAX_BYTES: u64 = 1024 * 1024;
+/// Sizes of the `hicolor` theme to look in, best first.
+const ICON_SIZES: [&str; 10] = [
+    "scalable", "512x512", "256x256", "192x192", "128x128", "96x96", "72x72", "64x64", "48x48",
+    "32x32",
+];
+
+/// The file of a desktop entry's `Icon`: an icon name looked up in the
+/// `hicolor` theme and `pixmaps` of the `data_dirs`, or an absolute path inside
+/// those folders.
+pub fn find_icon(icon: &str, data_dirs: &[PathBuf]) -> Option<PathBuf> {
+    if icon.starts_with('/') {
+        let path = PathBuf::from(icon);
+        return is_icon_file(&path, data_dirs).then_some(path);
+    }
+    if icon.is_empty() || icon.len() > 255 || icon.contains(['/', '\0']) || icon.starts_with('.') {
+        return None;
+    }
+    let name = icon
+        .strip_suffix(".png")
+        .or_else(|| icon.strip_suffix(".svg"))
+        .unwrap_or(icon);
+    let theme = ICON_SIZES.iter().flat_map(|size| {
+        data_dirs
+            .iter()
+            .map(move |d| d.join("icons/hicolor").join(size).join("apps"))
+    });
+    let pixmaps = data_dirs.iter().map(|d| d.join("pixmaps"));
+    theme
+        .chain(pixmaps)
+        .flat_map(|dir| ["svg", "png"].map(|ext| dir.join(format!("{name}.{ext}"))))
+        .find(|p| is_icon_file(p, data_dirs))
+}
+
+/// Whether `path` is a PNG or SVG file of at most `ICON_MAX_BYTES` inside the
+/// `icons` or `pixmaps` folder of one of the `data_dirs`. Only such files are
+/// ever handed to the interface.
+pub fn is_icon_file(path: &Path, data_dirs: &[PathBuf]) -> bool {
+    use std::path::Component;
+    let image = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("png") || e.eq_ignore_ascii_case("svg"));
+    let plain = path.is_absolute()
+        && path
+            .components()
+            .all(|c| matches!(c, Component::RootDir | Component::Normal(_)));
+    let inside = data_dirs
+        .iter()
+        .any(|d| path.starts_with(d.join("icons")) || path.starts_with(d.join("pixmaps")));
+    image
+        && plain
+        && inside
+        && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= ICON_MAX_BYTES)
+}
+
+/// The URL the interface loads an icon file from (`appicon` protocol).
+pub fn icon_url(path: &Path) -> String {
+    let mut url = String::from("appicon://localhost");
+    for b in path.to_string_lossy().bytes() {
+        if b.is_ascii_alphanumeric() || b"/-_.~".contains(&b) {
+            url.push(b as char);
+        } else {
+            url.push_str(&format!("%{b:02X}"));
+        }
+    }
+    url
 }
 
 /// Where an installed app comes from.
@@ -785,6 +862,7 @@ async fn build_app(
     autostart_dir: &Path,
     index: &HashMap<String, AppInfo>,
     programs: &Programs,
+    data_dirs: &[PathBuf],
 ) -> LocalApp {
     let source = resolve_source(&app, programs).await;
     let id = app.desktop_id.as_str();
@@ -800,7 +878,13 @@ async fn build_app(
         name: app.name,
         summary: app.comment.or_else(|| info.and_then(|i| i.summary.clone())),
         description: info.and_then(|i| i.description.clone()),
-        icon: app.icon.or_else(|| info.and_then(|i| i.icon.clone())),
+        // A file the interface can load, or nothing (the placeholder shows).
+        icon: app
+            .icon
+            .iter()
+            .chain(info.and_then(|i| i.icon.as_ref()))
+            .find_map(|i| find_icon(i, data_dirs))
+            .map(|p| icon_url(&p)),
         homepage: info.and_then(|i| i.homepage.clone()),
         repo: info.and_then(|i| crate::appstream::github_repo(&i.urls)),
         // `ConsoleOnly` is only the marker for `Terminal=true`, not a category.
@@ -832,10 +916,15 @@ async fn scan_apps(
         .into_iter()
         .filter(|a| is_visible(a, desktop, show_all))
         .collect();
+    // The data folders the application folders belong to hold the icons.
+    let data: Vec<PathBuf> = dirs
+        .iter()
+        .filter_map(|d| d.parent().map(Path::to_path_buf))
+        .collect();
     futures_util::stream::iter(
         visible
             .into_iter()
-            .map(|a| build_app(a, autostart_dir, index, programs)),
+            .map(|a| build_app(a, autostart_dir, index, programs, &data)),
     )
     .buffered(RESOLVE_CONCURRENCY)
     .collect()
@@ -1034,6 +1123,65 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
         let mut a = app(&["Game"]);
         a.desktop_id = "io.github.sirsnolte.tuxhub.desktop".into();
         assert!(!is_visible(&a, "KDE", true));
+    }
+
+    #[test]
+    fn finds_icons_of_the_icon_theme_and_pixmaps() {
+        let base = std::env::temp_dir().join(format!("tuxhub-icons-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (home, usr) = (base.join("home"), base.join("usr"));
+        let put = |p: PathBuf| {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, "img").unwrap();
+            p
+        };
+        let big = put(usr.join("icons/hicolor/256x256/apps/org.a.App.png"));
+        let small = put(usr.join("icons/hicolor/48x48/apps/org.a.App.png"));
+        let svg = put(home.join("icons/hicolor/scalable/apps/b.svg"));
+        let pixmap = put(usr.join("pixmaps/c.png"));
+        let elsewhere = put(base.join("games/icon.png"));
+        put(usr.join("icons/hicolor/48x48/apps/text.txt"));
+        let dirs = vec![home.clone(), usr.clone()];
+
+        // The largest size wins, scalable before all.
+        assert_eq!(find_icon("org.a.App", &dirs), Some(big.clone()));
+        std::fs::remove_file(&big).unwrap();
+        assert_eq!(find_icon("org.a.App", &dirs), Some(small.clone()));
+        assert_eq!(find_icon("b", &dirs), Some(svg.clone()));
+        assert_eq!(find_icon("c", &dirs), Some(pixmap.clone()));
+        // A name with its extension, as some entries give it.
+        assert_eq!(find_icon("c.png", &dirs), Some(pixmap.clone()));
+        // An absolute path counts only inside the icon folders.
+        assert_eq!(
+            find_icon(small.to_str().unwrap(), &dirs),
+            Some(small.clone())
+        );
+        assert_eq!(find_icon(elsewhere.to_str().unwrap(), &dirs), None);
+        for bad in ["", "missing", "../c", "text", "a/b", "/etc/passwd"] {
+            assert_eq!(find_icon(bad, &dirs), None, "{bad}");
+        }
+        // Only image files inside the icon folders are ever served.
+        assert!(is_icon_file(&small, &dirs));
+        assert!(is_icon_file(&svg, &dirs));
+        assert!(!is_icon_file(&elsewhere, &dirs));
+        assert!(!is_icon_file(
+            &usr.join("icons/hicolor/48x48/apps/text.txt"),
+            &dirs
+        ));
+        let sneaky = usr.join("icons/../../games/icon.png");
+        assert!(!is_icon_file(&sneaky, &dirs));
+        assert!(!is_icon_file(
+            Path::new("icons/hicolor/48x48/apps/org.a.App.png"),
+            &dirs
+        ));
+        let huge = usr.join("pixmaps/huge.png");
+        std::fs::write(&huge, vec![0u8; ICON_MAX_BYTES as usize + 1]).unwrap();
+        assert!(!is_icon_file(&huge, &dirs));
+
+        // The URL the interface loads carries the path, encoded.
+        let url = icon_url(Path::new("/usr/share/icons/a b/ä.png"));
+        assert_eq!(url, "appicon://localhost/usr/share/icons/a%20b/%C3%A4.png");
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

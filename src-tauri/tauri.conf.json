@@ -25,7 +25,7 @@
         "default-src": "'self'",
         "script-src": "'self'",
         "style-src": "'self' 'unsafe-inline'",
-        "img-src": "'self' data: blob: https: tool:",
+        "img-src": "'self' data: blob: https: tool: appicon:",
         "font-src": "'self' data:",
         "connect-src": "'self' ipc: http://ipc.localhost ws://127.0.0.1:* data:",
         "frame-src": "'self' tool: toolweb: http://127.0.0.1:* http://localhost:* https:",

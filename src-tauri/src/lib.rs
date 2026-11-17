@@ -1444,6 +1444,28 @@ fn serve_tool(app: &AppHandle, uri: &tauri::http::Uri) -> Response<Vec<u8>> {
     }
 }
 
+/// Icons of installed apps (`appicon://localhost/<path>`): only PNG and SVG
+/// files inside the icon folders of the XDG data folders.
+fn serve_app_icon(uri: &tauri::http::Uri) -> Response<Vec<u8>> {
+    let path = PathBuf::from(percent_decode(uri.path()));
+    let body = local_apps::is_icon_file(&path, &local_apps::data_dirs())
+        .then(|| std::fs::read(&path).ok())
+        .flatten();
+    let builder = Response::builder().header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
+    match body {
+        Some(body) => builder
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, mime_for(&path))
+            .body(body)
+            .unwrap(),
+        None => builder
+            .status(StatusCode::NOT_FOUND)
+            .header(header::CONTENT_TYPE, "text/plain")
+            .body(b"not found".to_vec())
+            .unwrap(),
+    }
+}
+
 fn mime_for(p: &Path) -> &'static str {
     match p
         .extension()
@@ -1503,6 +1525,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .register_uri_scheme_protocol("tool", |ctx, req| serve_tool(ctx.app_handle(), req.uri()))
+        .register_uri_scheme_protocol("appicon", |_ctx, req| serve_app_icon(req.uri()))
         .register_asynchronous_uri_scheme_protocol("toolweb", |ctx, req, responder| {
             let app = ctx.app_handle().clone();
             tauri::async_runtime::spawn(async move {
