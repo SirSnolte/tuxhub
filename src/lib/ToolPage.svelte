@@ -175,17 +175,18 @@
     });
   }
 
-  /** Installs or updates the tool; a system-wide update is confirmed first,
-   * a running app is quit after asking and started again. */
+  /** Installs or updates the tool; a system-wide update is confirmed first
+   * (the page shows no progress while it asks), a running app is quit after
+   * asking and started again. */
   function installUpdate(ok: string) {
-    run(async () => {
-      const done = await updateWithConsent(systemUpdateOf(tool), askSystem, () =>
-        updateApp(id, askUpdate, embedPanel ? () => embedPanel!.startInHub() : undefined),
-      );
-      if (done) {
-        update = null;
-        toast(ok, "info");
-      }
+    updateWithConsent(systemUpdateOf(tool), askSystem, async () => {
+      await run(async () => {
+        if (await updateApp(id, askUpdate, embedPanel ? () => embedPanel!.startInHub() : undefined)) {
+          update = null;
+          toast(ok, "info");
+        }
+      });
+      return true;
     });
   }
 

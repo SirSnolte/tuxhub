@@ -73,13 +73,13 @@
     if (running.length > 0 || system.length > 0) {
       const names = running.map(nameOf).join(", ");
       const systemNames = system.map(nameOf).join(", ");
+      // No progress while the question is open.
+      updatingAll = false;
       const yes = await new Promise<boolean>(
         (answer) => (runningAsk = { names, system: systemNames, password, answer }),
       );
-      if (!yes) {
-        updatingAll = false;
-        return;
-      }
+      if (!yes) return;
+      updatingAll = true;
     }
     for (const id of ids) {
       const name = nameOf(id);

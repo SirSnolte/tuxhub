@@ -118,7 +118,6 @@
     const version = view.update ?? "";
     const tool = tools.find((x) => x.entry.id === view.tool_id);
     const system = tool ? systemUpdateOf(tool) : localSystemUpdateOf(view.app.source);
-    busy = view.app.desktop_id;
     try {
       const confirm = (update: SystemUpdate) =>
         new Promise<boolean>((resolve) => {
@@ -133,7 +132,12 @@
         });
       const ask = (state: RunState) =>
         new Promise<boolean>((answer) => (updateAsk = { name: view.app.name, state, answer }));
-      if (await updateWithConsent(system, confirm, () => updateApp(view.tool_id, ask))) {
+      // The card shows progress only once the user said yes.
+      const run = () => {
+        busy = view.app.desktop_id;
+        return updateApp(view.tool_id, ask);
+      };
+      if (await updateWithConsent(system, confirm, run)) {
         toast(`${view.app.name}: ${t("tool.updatedTo", { version })}`, "info");
       }
     } catch (err) {
