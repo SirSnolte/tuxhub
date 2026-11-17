@@ -23,13 +23,16 @@ All notable changes to tuxhub are documented in this file. The format follows
 - Apps that start at login in the background get "Own window" by default
   when they are added. tuxhub never changes their autostart.
 - Installed apps are updated only through their source: `flatpak update` for
-  Flatpaks, the package manager (dnf, zypper or apt, through pkexec) for
+  Flatpaks, the package manager (dnf or apt-get, through pkexec) for
   distribution packages. They are never updated from GitHub. AppImages and
   other programs can be started but not updated by tuxhub. Updates show on
-  the card and in the sidebar.
-
-### Fixed
-
+  the card, in a row of their own below the switch, and in the sidebar. A
+  Flatpak keeps the remote it was installed from; a new build of the
+  installed version is offered with its commit, e.g. "43.beta (a1b2c3d4e5f6)".
+- An update that changes the system asks first: a distribution package, or
+  a Flatpak of the system installation, names the package and the program,
+  e.g. "Update kcalc system-wide with dnf? Other packages may be updated
+  too." "Update all" asks once for all of them.
 - tuxhub never starts a second instance of an app inside tuxhub. When the
   app already runs outside, for example as a background service, a dialog
   asks first; on confirmation tuxhub quits it, gives it time to end and
@@ -37,6 +40,9 @@ All notable changes to tuxhub are documented in this file. The format follows
 - Shared launchers (shells, interpreters, `flatpak`, `snap`, Wine, Steam
   and similar) are never treated as an app's own program, so tuxhub never
   quits or watches them.
+
+### Fixed
+
 - AppStream descriptions keep text blocks that have no translation.
 
 ## [0.10.0] - 2026-11-16

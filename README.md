@@ -122,10 +122,12 @@ choose "Show more (system apps)"; the search always looks through all apps.
 - **Running instances:** if the app already runs outside tuxhub, starting it
   inside tuxhub asks first, then quits the running instance and starts it in
   the hub. tuxhub never starts a second instance.
-- **Updates:** Flatpaks are updated with `flatpak update`, distribution
-  packages with dnf, zypper or apt (through pkexec). Installed apps are never
-  updated from GitHub. AppImages and other programs can be started, but
-  tuxhub does not update them.
+- **Updates:** Flatpaks are updated with `flatpak update` from the remote
+  they came from, distribution packages with dnf or apt-get (through pkexec).
+  Before an update changes the system (a distribution package or a Flatpak
+  of the system installation), tuxhub names the package and the program and
+  asks first. Installed apps are never updated from GitHub. AppImages and
+  other programs can be started, but tuxhub does not update them.
 
 ## For app developers
 
