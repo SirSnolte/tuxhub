@@ -27,9 +27,9 @@ use it either in its own window or directly inside tuxhub.
   family. Catalog tools install from GitHub releases, distribution packages or
   Flathub with one click; apps already on the computer are never installed a
   second time.
-- **Your sidebar:** drag any app into the sidebar, reorder it there, or drag
-  it out again, with undo. Without a mouse: the pin button, the `P` key, the
-  `+` list, `Alt`+arrow keys and `Delete`.
+- **Your sidebar:** drag any app into the sidebar and reorder it there, with
+  undo; the open app's menu takes it out again. Without a mouse: the pin
+  button, the `P` key and `Alt`+arrow keys.
 - **Updates:** tuxhub checks its tools, every Flatpak and every distribution
   package of the start menu, and updates them all with one click: all
   packages with one password prompt. Updates of tuxhub itself are

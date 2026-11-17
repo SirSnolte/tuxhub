@@ -2,9 +2,8 @@
 // Placeholders use `{name}` and are filled by `t(key, { name })`.
 
 const en = {
-  "nav.myTools": "My tools",
   "nav.settings": "Settings",
-  "nav.empty": "Drag apps here, or add them with +.",
+  "nav.empty": "Drag apps here, or choose “Add to sidebar”.",
   "nav.updateTo": "Update available: {version}",
   "nav.active": "Active",
 
@@ -277,10 +276,7 @@ const en = {
   "sel.count": "{count} selected",
   "sel.done": "Done",
   "nav.home": "All apps",
-  "nav.add": "Add an app to the sidebar",
-  "nav.dropHint": "Drag apps here",
-  "nav.pins": "My tools – move with Alt+arrow keys, remove with Delete",
-  "nav.pickerSearch": "Search apps",
+  "nav.pins": "Sidebar apps – move with Alt+arrow keys",
   "nav.updates": "{count} updates available",
   "common.undo": "Undo",
 
@@ -463,9 +459,8 @@ const en = {
 export type Key = keyof typeof en;
 
 const de: Record<Key, string> = {
-  "nav.myTools": "Meine Tools",
   "nav.settings": "Einstellungen",
-  "nav.empty": "Programme hierher ziehen oder mit + hinzufügen.",
+  "nav.empty": "Programme hierher ziehen oder „Zur Seitenleiste“ wählen.",
   "nav.updateTo": "Update verfügbar: {version}",
   "nav.active": "Aktiv",
 
@@ -738,10 +733,7 @@ const de: Record<Key, string> = {
   "sel.count": "{count} ausgewählt",
   "sel.done": "Fertig",
   "nav.home": "Alle Programme",
-  "nav.add": "Programm zur Seitenleiste hinzufügen",
-  "nav.dropHint": "Programme hierher ziehen",
-  "nav.pins": "Meine Tools – mit Alt+Pfeiltasten verschieben, mit Entf entfernen",
-  "nav.pickerSearch": "Programm suchen",
+  "nav.pins": "Apps in der Seitenleiste – mit Alt+Pfeiltasten verschieben",
   "nav.updates": "{count} Updates verfügbar",
   "common.undo": "Rückgängig",
 

@@ -33,11 +33,12 @@ All notable changes to tuxhub are documented in this file. The format follows
 ### Added
 
 - Drag and drop: apps are dragged from the workshop into the sidebar (also
-  several selected at once), reordered there, or dragged out to unpin them.
-  An insert line shows the place; Escape cancels; each change can be undone
-  for five seconds. Without a mouse: the pin button, `P` on a tile, the `+`
-  list in the sidebar, `Alt`+arrow keys and `Delete`. In a window narrower
-  than 860 px the sidebar shows icons only.
+  several selected at once) and reordered there. The other rows glide aside
+  to open the place, and the app settles into it; Escape cancels; each
+  change can be undone for five seconds. An app leaves the sidebar through
+  the menu of the open app ("Remove from sidebar"). Without a mouse: the pin
+  button, `P` on a tile and `Alt`+arrow keys. In a window narrower than
+  860 px the sidebar shows icons only.
 - The order of the sidebar is kept in `sidebar.json`. A tool tuxhub
   installed can leave the sidebar and stay installed; an app added from the
   start menu is forgotten and stays on the computer.
