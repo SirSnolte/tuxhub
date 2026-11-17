@@ -187,7 +187,8 @@ export type LiveNote = { tool: string; method: string; params: unknown };
 
 /** Where an app of this computer comes from. */
 export type LocalSource =
-  | { kind: "flatpak"; flatpak_id: string; installations: ("user" | "system")[] }
+  /** `origin`: the remote of the installation tuxhub uses; null when flatpak did not name one. */
+  | { kind: "flatpak"; flatpak_id: string; installations: ("user" | "system")[]; origin: string | null }
   | { kind: "rpm"; package: string }
   | { kind: "deb"; package: string }
   | { kind: "appimage"; path: string }

@@ -179,6 +179,15 @@ where
     Ok(v.and_then(|v| serde_json::from_value(v).ok()))
 }
 
+/// Whether a Flatpak ID or remote name is safe to pass to flatpak. It never
+/// starts with "-", which flatpak would parse as an option.
+pub(crate) fn valid_flatpak_name(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with('-')
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+}
+
 fn default_remote() -> String {
     "flathub".into()
 }
@@ -259,17 +268,10 @@ impl Entry {
         {
             return Err(format!("{}: invalid desktop file id", self.id));
         }
-        if let Source::Flatpak { flatpak_id, remote } = &self.source {
-            // Never let an id start with "-": it would be parsed as a flatpak option.
-            let ok = |s: &str| {
-                !s.is_empty()
-                    && !s.starts_with('-')
-                    && s.chars()
-                        .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
-            };
-            if !ok(flatpak_id) || !ok(remote) {
-                return Err(format!("{}: invalid Flatpak id or remote", self.id));
-            }
+        if let Source::Flatpak { flatpak_id, remote } = &self.source
+            && (!valid_flatpak_name(flatpak_id) || !valid_flatpak_name(remote))
+        {
+            return Err(format!("{}: invalid Flatpak id or remote", self.id));
         }
         if let Some(m) = &self.manifest {
             m.validate()?;
@@ -649,6 +651,23 @@ impl Programs {
         self.query(&self.flatpak, &["info", installation.flag(), flatpak_id])
             .await
             .map(|o| o.status.success())
+    }
+
+    /// The remote the app in the installation came from, when flatpak names
+    /// a valid one in time.
+    pub(crate) async fn flatpak_origin(
+        &self,
+        flatpak_id: &str,
+        installation: Installation,
+    ) -> Option<String> {
+        let out = self
+            .query(
+                &self.flatpak,
+                &["info", installation.flag(), "--show-origin", flatpak_id],
+            )
+            .await?;
+        let origin = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (out.status.success() && valid_flatpak_name(&origin)).then_some(origin)
     }
 
     pub(crate) async fn flatpak_installed(
@@ -2129,6 +2148,19 @@ impl Fakes {
             "flatpak",
             &format!(
                 "if [ \"$1\" = info ]; then case \" {} \" in *\" $2 \"*) exit 0;; esac; exit 1; fi\nexit 0",
+                flags.join(" ")
+            ),
+        );
+    }
+
+    /// A flatpak like [`Self::flatpak_with`] that names `origin` as the
+    /// remote the app came from (`info --show-origin`).
+    pub fn flatpak_from(&self, installed: &[Installation], origin: &str) {
+        let flags: Vec<&str> = installed.iter().map(|i| i.flag()).collect();
+        self.set(
+            "flatpak",
+            &format!(
+                "if [ \"$1\" = info ]; then case \" {} \" in *\" $2 \"*) ;; *) exit 1;; esac\n  [ \"$3\" = --show-origin ] && printf '%s\\n' '{origin}'\n  exit 0\nfi\nexit 0",
                 flags.join(" ")
             ),
         );

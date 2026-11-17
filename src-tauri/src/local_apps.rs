@@ -483,6 +483,9 @@ pub enum LocalSource {
     Flatpak {
         flatpak_id: String,
         installations: Vec<Installation>,
+        /// The remote of the installation tuxhub uses (the system one when
+        /// both have it); `None` when flatpak did not name a valid one.
+        origin: Option<String>,
     },
     Rpm {
         package: String,
@@ -584,9 +587,11 @@ async fn flatpak_source(id: &str, path: &Path, programs: &Programs) -> LocalSour
     if installations.is_empty() {
         installations.push(Installation::User);
     }
+    let origin = programs.flatpak_origin(id, installations[0]).await;
     LocalSource::Flatpak {
         flatpak_id: id.to_string(),
         installations,
+        origin,
     }
 }
 
@@ -756,14 +761,20 @@ fn absolute_command(command: &[String]) -> Vec<String> {
 }
 
 /// The entry an app of this computer gets in tuxhub: a Flatpak stays a
-/// Flatpak, a distribution package is updated by its package manager, and
-/// anything else is only started. It has no manifest.
+/// Flatpak of the remote it came from, a distribution package is updated by
+/// its package manager, and anything else is only started. A Flatpak whose
+/// remote flatpak does not name is only started too: tuxhub never guesses a
+/// remote (installing from Flathub would add that remote). It has no manifest.
 pub fn local_entry(app: &LocalApp) -> Entry {
     let command = absolute_command(&app.command);
     let source = match &app.source {
-        LocalSource::Flatpak { flatpak_id, .. } => Source::Flatpak {
+        LocalSource::Flatpak {
+            flatpak_id,
+            origin: Some(remote),
+            ..
+        } => Source::Flatpak {
             flatpak_id: flatpak_id.clone(),
-            remote: "flathub".into(),
+            remote: remote.clone(),
         },
         LocalSource::Rpm { package } => Source::DistroPackage {
             package: package.clone(),
@@ -775,7 +786,9 @@ pub fn local_entry(app: &LocalApp) -> Entry {
             manager: PackageFormat::Deb,
             command,
         },
-        LocalSource::Appimage { .. } | LocalSource::Unknown { .. } => Source::Launcher {
+        LocalSource::Flatpak { origin: None, .. }
+        | LocalSource::Appimage { .. }
+        | LocalSource::Unknown { .. } => Source::Launcher {
             desktop_id: app.desktop_id.clone(),
             command,
         },
@@ -1295,8 +1308,49 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
             LocalSource::Flatpak {
                 flatpak_id: "com.core447.StreamController".into(),
                 installations: vec![Installation::System, Installation::User],
+                origin: None,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn reads_the_remote_a_flatpak_came_from() {
+        let f = Fakes::new("local-flatpak-origin");
+        f.flatpak_from(&[Installation::System], "fedora");
+        let mut a = app(&[]);
+        a.flatpak_id = Some("org.gnome.SoundRecorder".into());
+        a.path = PathBuf::from("/var/lib/flatpak/exports/share/applications/x.desktop");
+        let source = resolve_source(&a, &f.programs).await;
+        assert_eq!(
+            source,
+            LocalSource::Flatpak {
+                flatpak_id: "org.gnome.SoundRecorder".into(),
+                installations: vec![Installation::System],
+                origin: Some("fedora".into()),
+            }
+        );
+        // The origin of the installation tuxhub adopts (the system one).
+        assert!(
+            f.calls()
+                .iter()
+                .any(|c| c == "flatpak info --system --show-origin org.gnome.SoundRecorder")
+        );
+        let e = local_entry(&local_app(
+            "org.gnome.SoundRecorder.desktop",
+            source,
+            &["/usr/bin/flatpak"],
+        ));
+        assert!(matches!(&e.source, Source::Flatpak { remote, .. } if remote == "fedora"));
+
+        // An origin flatpak cannot tell, or one that could be an option, is
+        // never replaced by a guess.
+        for bad in ["", "-x", "two words", "a/b"] {
+            f.flatpak_from(&[Installation::System], bad);
+            let LocalSource::Flatpak { origin, .. } = resolve_source(&a, &f.programs).await else {
+                panic!("not a flatpak")
+            };
+            assert_eq!(origin, None, "{bad:?}");
+        }
     }
 
     #[tokio::test]
@@ -1701,6 +1755,7 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
         let flatpak = LocalSource::Flatpak {
             flatpak_id: "org.x.App".into(),
             installations: vec![Installation::User],
+            origin: Some("flathub".into()),
         };
         let e = local_entry(&local_app(
             "org.x.App.desktop",
@@ -1748,6 +1803,13 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
                 path: "/opt/a.AppImage".into(),
             },
             unknown("/opt/a/run"),
+            // A Flatpak whose remote is unknown is only started, never
+            // installed or updated from a guessed remote.
+            LocalSource::Flatpak {
+                flatpak_id: "org.x.App".into(),
+                installations: vec![Installation::System],
+                origin: None,
+            },
         ] {
             let e = local_entry(&local_app("a.desktop", source, &["/opt/a/run", "-v"]));
             let Source::Launcher {

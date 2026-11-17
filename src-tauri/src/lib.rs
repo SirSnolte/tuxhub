@@ -2428,6 +2428,7 @@ while True:
             local_apps::LocalSource::Flatpak {
                 flatpak_id: flatpak_id.into(),
                 installations: vec![tools::Installation::User],
+                origin: Some("flathub".into()),
             },
             &["/usr/bin/flatpak", "run", flatpak_id],
         )
