@@ -4,7 +4,7 @@ All notable changes to tuxhub are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [0.12.0] - 2026-11-17
+## [0.12.0] - 2026-11-18
 
 ### Changed
 
