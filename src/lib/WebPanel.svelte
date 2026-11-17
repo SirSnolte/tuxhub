@@ -3,6 +3,7 @@
   import { onDestroy } from "svelte";
   import { api, errText, type Tool } from "./api";
   import { toast } from "./state.svelte";
+  import { launchedKey } from "./installed-apps";
 
   let { tool }: { tool: Tool } = $props();
 
@@ -46,8 +47,8 @@
 
   async function start() {
     try {
-      await api.launch(id);
-      toast(t("web.startedWaiting", { name: tool.entry.name }), "info");
+      const started = await api.launch(id);
+      toast(t(launchedKey(started, "web.startedWaiting"), { name: tool.entry.name }), "info");
       poll();
     } catch (e) {
       toast(errText(e));

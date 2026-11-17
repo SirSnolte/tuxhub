@@ -4,6 +4,69 @@ All notable changes to tuxhub are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.11.0] - 2026-11-17
+
+### Added
+
+- The workshop has a second tab, "Installed (n)", next to the catalog. It
+  lists the apps of the start menu with their icon, source (Flatpak, RPM,
+  Debian package, AppImage or program) and integration level, read offline
+  from the desktop entries and the local AppStream data. Settings modules,
+  system and console tools, Wine's built-in tools, help screens, game
+  shortcuts of Steam, Heroic and Lutris and web apps of browsers stay hidden
+  until "Show more (system apps)"; the search always looks through all
+  apps, and apps in the sidebar always stay in the list. Apps that need a
+  terminal are not listed. Catalog apps that are already on the computer
+  appear once, with the catalog's texts.
+- The switch "Sidebar" on each card adds any installed app to the sidebar
+  without installing it a second time, and removes it again; the app always
+  stays on the computer. The detail dialog shows the description, the README
+  when the app links a GitHub repository, and the window choice.
+- Apps that start at login in the background get "Own window" by default
+  when they are added. tuxhub never changes their autostart. So do apps that
+  start through a script or a shared launcher, whose running state tuxhub
+  can't tell.
+- Installed apps are updated only through their source: `flatpak update` for
+  Flatpaks, the package manager (dnf or apt-get, through pkexec) for
+  distribution packages. Apps added from the start menu are never updated
+  from GitHub; an app the catalog knows is added through its catalog entry
+  and keeps the catalog's way of updating. AppImages and other programs can
+  be started but not updated by tuxhub. Updates show on the card, in a row
+  of their own below the switch, and in the sidebar. A Flatpak keeps the
+  remote it was installed from; a new build of the installed version is
+  offered with its commit, e.g. "43.beta (a1b2c3d4e5f6)". A Flatpak whose
+  remote flatpak cannot name is not added; tuxhub asks to try again.
+- An update that changes the system asks first: a distribution package, or
+  a Flatpak of the system installation, names the package and the program,
+  e.g. "Update kcalc system-wide with dnf? Other packages may be updated
+  too." "Update all" asks once for all of them.
+- tuxhub never starts a second instance of an app inside tuxhub. When the
+  app already runs outside, for example as a background service, a dialog
+  asks first; on confirmation tuxhub quits it, gives it time to end and
+  starts it in the hub. Flatpaks are recognised with `flatpak ps`. When
+  tuxhub cannot tell whether an installed app runs (it starts through a
+  script such as `/usr/bin/libreoffice` or a shared launcher), it does not
+  start it inside tuxhub and suggests "Own window" instead.
+- An app is in the sidebar only once: a second start menu entry of the
+  same Flatpak or program, or its catalog entry, shows it as already added.
+- "Own window" of an installed app that already runs starts it anyway, so
+  the app brings up its own window. tuxhub only says "started" when it
+  started something; otherwise it says the app is already running.
+- Shared launchers (shells, interpreters, `flatpak`, `snap`, Wine, Steam
+  and similar) are never treated as an app's own program, so tuxhub never
+  quits or watches them. A browser's web app (`--app-id=`, `--app=`) is
+  treated the same way: tuxhub never quits or updates the browser for it.
+
+### Fixed
+
+- AppStream descriptions keep text blocks that have no translation.
+- Large Flathub collections (up to 256 MB) are read, a broken entry no
+  longer drops the AppStream data of all apps, and a collection shared by
+  the system and the user installation is read once. The data of other
+  architectures than x86_64 is found too.
+- Package versions with a hyphen in the upstream version (Debian's
+  `2.3-rc1-1`) are accepted.
+
 ## [0.10.0] - 2026-11-16
 
 ### Added
@@ -240,6 +303,7 @@ First public release.
 - System tray, autostart and single-instance behavior.
 - English and German user interface.
 
+[0.11.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.11.0
 [0.10.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.10.0
 [0.9.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.9.0
 [0.8.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.8.0

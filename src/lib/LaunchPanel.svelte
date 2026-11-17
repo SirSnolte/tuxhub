@@ -5,6 +5,7 @@
   import { onDestroy } from "svelte";
   import { api, describe, errText, type Tool } from "./api";
   import { toast } from "./state.svelte";
+  import { launchedKey } from "./installed-apps";
 
   // Applications that belong on the desktop, such as overlays: tuxhub only
   // starts and stops them and never shows them inside its window. For live
@@ -39,9 +40,9 @@
   export async function start() {
     busy = true;
     try {
-      await api.launch(id);
+      const started = await api.launch(id);
       running = true;
-      toast(t("tool.started", { name }), "info");
+      toast(t(launchedKey(started, "tool.started"), { name }), "info");
     } catch (e) {
       toast(errText(e));
     } finally {

@@ -19,9 +19,11 @@
   import SettingsForm from "./SettingsForm.svelte";
   import WebPanel from "./WebPanel.svelte";
   import EmbedPanel from "./EmbedPanel.svelte";
+  import { launchedKey, needsRestartDialog, runningUnknown, systemUpdateOf, updateWithConsent, type SystemUpdate } from "./installed-apps";
+  import SystemUpdateDialog from "./SystemUpdateDialog.svelte";
   import LaunchPanel from "./LaunchPanel.svelte";
   import LivePanel from "./LivePanel.svelte";
-  import { asksHowToRemove, installHint, needsPassword } from "./install-state";
+  import { asksHowToRemove, installHint, needsPassword, tuxhubInstalls } from "./install-state";
   import { INTEGRATIONS, canToggleWindow } from "./apps/integration";
   import { updateApp } from "./update";
   import type { RunState } from "./api";
@@ -52,13 +54,17 @@
     source.type === "github-release" ||
       source.type === "system-package" ||
       source.type === "flatpak" ||
+      source.type === "distro-package" ||
       (ownedExternal && source.type === "external" && !!source.asset && !!tool.entry.repo),
   );
   const removable = $derived(source.type !== "external" || (ownedExternal && !!m.uninstall));
   /** The app is gone from the computer, or installed twice. */
   const hint = $derived(installHint(tool));
+  /** A package of the distribution or an app tuxhub only starts: it can
+   * leave tuxhub, but tuxhub neither installs nor uninstalls it. */
+  const forgetOnly = $derived(!tuxhubInstalls(tool));
   /** Adopted apps can leave tuxhub without being uninstalled. */
-  const askHow = $derived(asksHowToRemove(tool));
+  const askHow = $derived(asksHowToRemove(tool) && !forgetOnly);
   const webTool = $derived(!!m.web_url && !m.ui);
   const plainApp = $derived(tool.level === 0 && tool.can_launch);
   /** Runs on its own and offers its settings over the live interface. */
@@ -134,7 +140,11 @@
   /** Starts the app inside tuxhub, in this page when it shows the app. */
   export async function startInHub() {
     if (embedPanel) await embedPanel.startInHub();
-    else await api.embedStart(id);
+    else
+      await api.embedStart(id, false).catch((e) => {
+        if (needsRestartDialog(e)) throw t("embed.runningOutside.title", { name: tool.entry.name });
+        throw runningUnknown(e) ? t("embed.runningUnknown", { name: tool.entry.name }) : e;
+      });
   }
 
   /** The question before quitting a running app for an update. */
@@ -149,14 +159,34 @@
     updateAsk = null;
   }
 
-  /** Installs or updates the tool; a running app is quit after asking and started again. */
+  /** The question before an update that changes the system. */
+  let systemAsk = $state<{ name: string; update: SystemUpdate; answer: (yes: boolean) => void } | null>(null);
+
+  function askSystem(update: SystemUpdate): Promise<boolean> {
+    return new Promise((resolve) => {
+      systemAsk = {
+        name: tool.entry.name,
+        update,
+        answer: (yes) => {
+          systemAsk = null;
+          resolve(yes);
+        },
+      };
+    });
+  }
+
+  /** Installs or updates the tool; a system-wide update is confirmed first
+   * (the page shows no progress while it asks), a running app is quit after
+   * asking and started again. */
   function installUpdate(ok: string) {
-    run(async () => {
-      const done = await updateApp(id, askUpdate, embedPanel ? () => embedPanel!.startInHub() : undefined);
-      if (done) {
-        update = null;
-        toast(ok, "info");
-      }
+    updateWithConsent(systemUpdateOf(tool), askSystem, async () => {
+      await run(async () => {
+        if (await updateApp(id, askUpdate, embedPanel ? () => embedPanel!.startInHub() : undefined)) {
+          update = null;
+          toast(ok, "info");
+        }
+      });
+      return true;
     });
   }
 
@@ -211,7 +241,7 @@
       );
     items.push({
       value: "remove",
-      label: isLocal ? t("tool.unlink") : t("tool.uninstall"),
+      label: forgetOnly ? t("tool.forget") : isLocal ? t("tool.unlink") : t("tool.uninstall"),
       icon: isLocal ? Unlink : Trash,
       danger: true,
       disabled: busy || !removable,
@@ -238,7 +268,11 @@
     if (webTool) webPanel?.openWindow();
     else if (plainApp && !launchOnly) embedPanel?.ownWindow();
     else if (livePage) launcher?.start();
-    else run(() => api.launch(id), t("tool.started", { name: tool.entry.name }));
+    else
+      run(async () => {
+        const started = await api.launch(id);
+        toast(t(launchedKey(started, "tool.started"), { name: tool.entry.name }), "info");
+      });
   }
 
   function uninstall() {
@@ -358,14 +392,16 @@
       <div class="hint">
         <span>{t("tool.missing", { name: tool.entry.name })}</span>
         <div class="hint-buttons">
-          <wa-button
-            size="s"
-            variant="brand"
-            loading={busy}
-            onclick={() => installUpdate(t("workshop.installedToast", { name: tool.entry.name }))}
-          >
-            {t("tool.install")}
-          </wa-button>
+          {#if !forgetOnly}
+            <wa-button
+              size="s"
+              variant="brand"
+              loading={busy}
+              onclick={() => installUpdate(t("workshop.installedToast", { name: tool.entry.name }))}
+            >
+              {t("tool.install")}
+            </wa-button>
+          {/if}
           <wa-button size="s" appearance="outlined" disabled={busy} onclick={forget}>{t("tool.forget")}</wa-button>
         </div>
       </div>
@@ -389,6 +425,10 @@
         </div>
       </div>
     </wa-callout>
+  {/if}
+
+  {#if tool.autostart}
+    <p class="small muted">{t("tool.autostartNote")}</p>
   {/if}
 
   {#if m.notice && dismissedNotice !== m.notice}
@@ -487,7 +527,7 @@
 </div>
 
 <wa-dialog
-  label={askHow
+  label={askHow || forgetOnly
     ? t("tool.confirmRemove", { name: tool.entry.name })
     : t(isLocal ? "tool.confirmUnlink" : "tool.confirmUninstall", { name: tool.entry.name })}
   open={confirming}
@@ -495,17 +535,21 @@
     if (e.target === e.currentTarget) confirming = false;
   }}
 >
-  {#if askHow}
+  {#if forgetOnly && !tool.missing}
+    <p>{t("tool.forgetHint", { name: tool.entry.name })}</p>
+  {:else if askHow}
     <p>{t("tool.adoptedHint", { name: tool.entry.name })}</p>
   {:else}
     <p>{t(isLocal ? "tool.unlinkHint" : "tool.uninstallHint")}</p>
   {/if}
-  {#if needsPassword(tool) && !tool.missing}
+  {#if needsPassword(tool) && !tool.missing && !forgetOnly}
     <p class="muted">{t("tool.passwordHint")}</p>
   {/if}
   <div slot="footer" class="dialog-buttons">
     <wa-button appearance="outlined" onclick={() => (confirming = false)}>{t("common.cancel")}</wa-button>
-    {#if askHow}
+    {#if forgetOnly}
+      <wa-button variant="danger" onclick={forget}>{t("tool.forget")}</wa-button>
+    {:else if askHow}
       <wa-button appearance="outlined" onclick={forget}>{t("tool.forgetOnly")}</wa-button>
       <wa-button variant="danger" onclick={uninstall}>{t("tool.uninstallFromPc")}</wa-button>
     {:else}
@@ -515,6 +559,8 @@
     {/if}
   </div>
 </wa-dialog>
+
+<SystemUpdateDialog ask={systemAsk} />
 
 <wa-dialog
   label={t("update.confirmTitle", { name: tool.entry.name })}

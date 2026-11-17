@@ -46,7 +46,11 @@ export type Source =
   | { type: "system-package"; package: string; rpm?: string; deb?: string; command: string }
   | { type: "local"; path: string }
   /** Installed outside tuxhub; `user` marks an installation in the user's home. */
-  | { type: "external"; path: string; asset?: string; user: boolean };
+  | { type: "external"; path: string; asset?: string; user: boolean }
+  /** A package of the distribution, found on this computer; `command` starts it. */
+  | { type: "distro-package"; package: string; manager: "rpm" | "deb"; command: string[] }
+  /** An app found on this computer that tuxhub only starts with `command`. */
+  | { type: "launcher"; desktop_id: string; command: string[] };
 
 export type Entry = {
   id: string;
@@ -84,6 +88,8 @@ export type Tool = {
   integration: Integration;
   /** Where an embedded app runs when it is started. */
   window: WindowMode;
+  /** The app was on this computer before and starts at login. */
+  autostart: boolean;
 };
 
 export type WindowMode = "hub" | "own";
@@ -179,6 +185,48 @@ export type LiveEvent =
  * application's own ones for its interface in tuxhub. */
 export type LiveNote = { tool: string; method: string; params: unknown };
 
+/** Where an app of this computer comes from. */
+export type LocalSource =
+  /** `origin`: the remote of the installation tuxhub uses; null when flatpak did not name one. */
+  | { kind: "flatpak"; flatpak_id: string; installations: ("user" | "system")[]; origin: string | null }
+  | { kind: "rpm"; package: string }
+  | { kind: "deb"; package: string }
+  | { kind: "appimage"; path: string }
+  | { kind: "unknown"; program: string };
+
+/** An app of the start menu, with its source. */
+export type LocalApp = {
+  desktop_id: string;
+  name: string;
+  summary: string | null;
+  description: string | null;
+  icon: string | null;
+  homepage: string | null;
+  repo: string | null;
+  categories: string[];
+  source: LocalSource;
+  command: string[];
+  /** It starts when the user logs in. */
+  autostart: boolean;
+  /** A settings module, system or console tool, Wine tool, help screen or
+   * game shortcut: listed with "Show more" and found by the search. */
+  system: boolean;
+};
+
+/** An app of the start menu with its state in tuxhub. */
+export type LocalAppView = {
+  app: LocalApp;
+  /** Its id in tuxhub: the catalog's id, or its own `local.…` id. */
+  tool_id: string;
+  in_sidebar: boolean;
+  /** A newer version found by the update check. */
+  update: string | null;
+  /** Where it runs; `stopped` for apps that are not in the sidebar. */
+  run_state: RunState;
+  /** How deeply tuxhub integrates it; null when the catalog does not say. */
+  integration: Integration | null;
+};
+
 /** Tool-ID → neue Version */
 export type Updates = Record<string, string>;
 
@@ -191,8 +239,14 @@ export const api = {
   removeCopy: (id: string) => invoke<void>("tool_remove_copy", { id }),
   dismissDuplicate: (id: string) => invoke<void>("tool_dismiss_duplicate", { id }),
   forget: (id: string) => invoke<void>("tool_forget", { id }),
+  /** All apps of the start menu, system apps marked (`app.system`). */
+  localAppsList: () => invoke<LocalAppView[]>("local_apps_list"),
+  /** Adds an app of the start menu to the sidebar and returns its tool id. */
+  localAppAdd: (desktopId: string) => invoke<string>("local_app_add", { desktopId }),
   tools: () => invoke<Tool[]>("tool_list"),
-  launch: (id: string) => invoke<void>("tool_launch", { id }),
+  /** Starts the app in its own window; `false` when it already runs and
+   * nothing was started. */
+  launch: (id: string) => invoke<boolean>("tool_launch", { id }),
   setWindow: (id: string, mode: WindowMode) => invoke<void>("tool_set_window", { id, mode }),
   runState: (id: string) => invoke<RunState>("tool_run_state", { id }),
   appRunning: (id: string) => invoke<boolean>("tool_app_running", { id }),
@@ -216,7 +270,9 @@ export const api = {
   webStatus: (id: string) => invoke<boolean>("tool_web_status", { id }),
   webWindow: (id: string) => invoke<void>("tool_web_window", { id }),
   embedMissing: () => invoke<string | null>("embed_missing"),
-  embedStart: (id: string) => invoke<{ url: string }>("embed_start", { id }),
+  /** Fails with `running-outside` when the app runs outside tuxhub;
+   * `restart` closes it first. */
+  embedStart: (id: string, restart = false) => invoke<{ url: string }>("embed_start", { id, restart }),
   embedStatus: (id: string) => invoke<{ url: string } | null>("embed_status", { id }),
   embedStop: (id: string) => invoke<void>("embed_stop", { id }),
   liveStatus: (id: string, locale: string) => invoke<LiveStatus>("live_status", { id, locale }),

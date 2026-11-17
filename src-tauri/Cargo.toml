@@ -1,6 +1,6 @@
 [package]
 name = "tuxhub"
-version = "0.10.0"
+version = "0.11.0"
 description = "Modular hub for gaming on Linux"
 authors = ["SirSnolte"]
 edition = "2024"
@@ -26,6 +26,8 @@ futures-util = "0.3"
 url = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+quick-xml = "0.42"
+flate2 = "1"
 
 
 [dev-dependencies]

@@ -25,3 +25,23 @@ export function needsPassword(tool: { entry: Pick<Tool["entry"], "source">; inst
   const { source } = tool.entry;
   return source.type === "system-package" || (source.type === "flatpak" && tool.installation === "system");
 }
+
+/** tuxhub installs and uninstalls an app itself, unless it is a package of
+ * the distribution or an app it found on the computer and only starts. */
+export function tuxhubInstalls(tool: { entry: Pick<Tool["entry"], "source"> }): boolean {
+  const { type } = tool.entry.source;
+  return type !== "distro-package" && type !== "launcher";
+}
+
+/** The catalog after an app was added to or removed from the sidebar in the
+ * installed tab: removed, it stays on the computer. Saves loading the
+ * catalog, which may ask the network, again. */
+export function markInSidebar<T extends Pick<WorkshopItem, "entry" | "installed" | "present">>(
+  items: T[],
+  toolId: string,
+  inSidebar: boolean,
+): T[] {
+  return items.map((item) =>
+    item.entry.id === toolId ? { ...item, installed: inSidebar, present: item.present || !inSidebar } : item,
+  );
+}

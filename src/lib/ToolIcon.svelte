@@ -15,7 +15,7 @@
     toolId,
     size = 40,
   }: {
-    /** HTTPS URL, or an image path relative to the tool folder. */
+    /** HTTPS or `appicon://` URL, or an image path relative to the tool folder. */
     icon?: string;
     category?: string;
     /** Required to resolve relative icon paths of installed tools. */
@@ -36,7 +36,7 @@
 
   const src = $derived.by(() => {
     if (!icon || failed) return null;
-    if (icon.startsWith("https://")) return icon;
+    if (icon.startsWith("https://") || icon.startsWith("appicon://")) return icon;
     if (toolId && /\.(png|svg|webp|jpe?g)$/i.test(icon) && !icon.includes("..")) {
       return `tool://${toolId}/${icon.replace(/^\/+/, "")}`;
     }

@@ -24,6 +24,12 @@ use it either in its own window or directly inside tuxhub.
   distribution packages or Flathub with a single click. Apps that are already
   on the computer (Flatpak or system package) are added to the sidebar
   instead of being installed a second time.
+- **Installed apps:** the workshop tab "Installed" lists the apps already on
+  the computer, from the start menu, and adds any of them to the sidebar with
+  one switch. tuxhub never installs them again, never starts a second
+  instance and updates them only through their own source (Flatpak or the
+  package manager); apps the catalog knows keep the catalog's way of
+  updating.
 - **Updates:** tuxhub checks installed tools, Flatpaks and itself for new
   releases.
   Updates of tuxhub are cryptographically signed and verified before they are
@@ -100,6 +106,36 @@ does not modify them.
 
 Proposals for new entries are welcome as issues. Please include the repository,
 the source (GitHub release or Flathub) and a short description.
+
+### Installed apps
+
+The tab "Installed" next to the catalog shows the apps of your start menu. It
+reads the desktop entries and the local AppStream data and needs no network.
+Settings modules, system and console tools, Wine's built-in tools, help
+screens, game shortcuts of Steam, Heroic and Lutris and web apps of browsers
+are hidden until you choose "Show more (system apps)"; the search always
+looks through all apps, and apps in the sidebar always stay in the list.
+Apps that need a terminal are not listed.
+
+- **Sidebar:** the switch adds the app to the sidebar or removes it. The app
+  stays on the computer either way.
+- **Window:** an app can run inside tuxhub or in its own window. Apps that
+  start at login in the background default to their own window, and tuxhub
+  never changes their autostart.
+- **Running instances:** if the app already runs outside tuxhub, starting it
+  inside tuxhub asks first, then quits the running instance and starts it in
+  the hub. When tuxhub cannot tell whether the app runs (it starts through a
+  script or a shared launcher such as a shell), it does not start it inside
+  tuxhub and suggests its own window instead. tuxhub never starts a second
+  instance.
+- **Updates:** Flatpaks are updated with `flatpak update` from the remote
+  they came from, distribution packages with dnf or apt-get (through pkexec).
+  Before an update changes the system (a distribution package or a Flatpak
+  of the system installation), tuxhub names the package and the program and
+  asks first. Apps added from the start menu are never updated from GitHub.
+  An app the catalog knows is added through its catalog entry and keeps the
+  catalog's way of updating, which can be a GitHub release. AppImages and
+  other programs can be started, but tuxhub does not update them.
 
 ## For app developers
 

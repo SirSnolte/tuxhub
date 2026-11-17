@@ -7,6 +7,7 @@
   import { api, describe, errText, type Tool, type WindowMode } from "./api";
   import { toast } from "./state.svelte";
   import { canToggleWindow } from "./apps/integration";
+  import { launchedKey, needsRestartDialog, runningUnknown } from "./installed-apps";
   import { valueOf } from "./wa";
 
   let {
@@ -54,6 +55,9 @@
   /** The mode the user switches to while the app runs in the other one. */
   let switching = $state<WindowMode | null>(null);
   let switchBusy = $state(false);
+  /** The app already runs outside tuxhub: ask to close it and start it here. */
+  let outside = $state(false);
+  let outsideBusy = $state(false);
 
   /** Where the app runs right now, or null when it does not run. An app
    * whose state is unknown counts as running in its own window, so the
@@ -237,8 +241,8 @@
     if (toggle && mode === "own") {
       starting = true;
       try {
-        await api.launch(id);
-        toast(t("embed.startedWindow", { name: tool.entry.name }), "info");
+        const started = await api.launch(id);
+        toast(t(launchedKey(started, "embed.startedWindow"), { name: tool.entry.name }), "info");
       } catch (e) {
         toast(errText(e));
       } finally {
@@ -254,13 +258,36 @@
     }
   }
 
-  /** Starts the app inside tuxhub and shows it; throws when that fails. */
-  export async function startInHub() {
+  /** Starts the app inside tuxhub and shows it. An app that already runs
+   * outside tuxhub is not started a second time: this opens the dialog that
+   * asks to close it and start it here (`restart`), and returns without
+   * starting. Throws when starting fails otherwise. */
+  export async function startInHub(restart = false) {
     starting = true;
     try {
-      attach((await api.embedStart(id)).url);
+      attach((await api.embedStart(id, restart)).url);
+    } catch (e) {
+      if (!restart && needsRestartDialog(e)) {
+        outside = true;
+        return;
+      }
+      throw runningUnknown(e) ? t("embed.runningUnknown", { name: tool.entry.name }) : e;
     } finally {
       starting = false;
+    }
+  }
+
+  /** Closes the app running outside tuxhub and starts it here. */
+  async function confirmOutside() {
+    outsideBusy = true;
+    try {
+      await startInHub(true);
+    } catch (e) {
+      toast(errText(e));
+    } finally {
+      outside = false;
+      outsideBusy = false;
+      onchanged?.();
     }
   }
 
@@ -287,7 +314,7 @@
   export async function ownWindow() {
     if (url) await stop();
     api.launch(id).then(
-      () => toast(t("embed.startedWindow", { name: tool.entry.name }), "info"),
+      (started) => toast(t(launchedKey(started, "embed.startedWindow"), { name: tool.entry.name }), "info"),
       (e) => toast(errText(e)),
     );
   }
@@ -406,6 +433,27 @@
   <div slot="footer" class="dialog-buttons">
     <wa-button appearance="outlined" disabled={switchBusy} onclick={cancelSwitch}>{t("common.cancel")}</wa-button>
     <wa-button variant="brand" loading={switchBusy} onclick={confirmSwitch}>{t("embed.switch")}</wa-button>
+  </div>
+</wa-dialog>
+
+<wa-dialog
+  label={t("embed.runningOutside.title", { name: tool.entry.name })}
+  open={outside}
+  onwa-after-hide={(e: Event) => {
+    if (e.target === e.currentTarget && !outsideBusy) outside = false;
+  }}
+>
+  <p>{t("embed.runningOutside.body", { name: tool.entry.name })}</p>
+  {#if tool.autostart}
+    <wa-callout variant="warning">{t("embed.runningOutside.autostartHint", { name: tool.entry.name })}</wa-callout>
+  {/if}
+  <div slot="footer" class="dialog-buttons">
+    <wa-button appearance="outlined" disabled={outsideBusy} onclick={() => (outside = false)}>
+      {t("embed.runningOutside.cancel")}
+    </wa-button>
+    <wa-button variant="brand" loading={outsideBusy} onclick={confirmOutside}>
+      {t("embed.runningOutside.confirm")}
+    </wa-button>
   </div>
 </wa-dialog>
 
