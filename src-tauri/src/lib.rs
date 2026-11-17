@@ -54,7 +54,7 @@ pub struct Hub {
     /// flatpak, rpm and dpkg-query, which tell where apps are installed
     programs: tools::Programs,
     /// Installed apps found on this PC, with the newest application folder
-    /// time and the `show_all` setting they were built for.
+    /// time they were built for.
     local_apps: std::sync::Mutex<local_apps::Cache>,
     /// The folder of the entries the desktop starts at login.
     autostart_dir: PathBuf,
@@ -798,7 +798,9 @@ async fn add_local_app(
             tools::adopt(&hub.tools_dir, &hub.programs, &entry).await?
         }
     };
-    if app.autostart {
+    // An app that starts at login already runs; one whose run state tuxhub
+    // can't tell (a script or shared launcher) can't start in the hub.
+    if app.autostart || tools::script_program(&inst) || tools::shared_launcher(&inst) {
         inst.window = tools::WindowMode::Own;
         tools::save(&hub.tools_dir, &inst)?;
     }
@@ -2695,6 +2697,38 @@ while True:
         assert!(
             matches!(&inst.entry.source, Source::Flatpak { remote, .. } if remote == "flathub")
         );
+    }
+
+    /// tuxhub can't tell whether a script or a shared launcher runs, so such
+    /// an app can't start in the hub: it opens in its own window from the
+    /// start. Its own program keeps the default.
+    #[tokio::test]
+    async fn apps_of_unknown_run_state_start_in_their_own_window() {
+        let (hub, _f) = hub_with_fakes("local-add-unknown");
+        let dir = hub.tools_dir.parent().unwrap().join("bin");
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("office");
+        std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let own = dir.join("calc");
+        std::fs::copy("/usr/bin/true", &own).unwrap();
+        let apps = [
+            installed_program("office.desktop", script.to_str().unwrap()),
+            installed_program("shell.desktop", "/bin/sh"),
+            installed_program("calc.desktop", own.to_str().unwrap()),
+        ];
+        for (desktop_id, window) in [
+            ("office.desktop", tools::WindowMode::Own),
+            ("shell.desktop", tools::WindowMode::Own),
+            ("calc.desktop", tools::WindowMode::default()),
+        ] {
+            let inst = add_local_app(&hub, &apps, vec![], desktop_id)
+                .await
+                .unwrap();
+            let saved = recorded(&hub, inst.id()).unwrap();
+            assert_eq!(saved.window, window, "{desktop_id}");
+        }
     }
 
     /// An app that starts at login already runs: it opens in its own window.

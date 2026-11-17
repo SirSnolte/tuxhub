@@ -23,7 +23,9 @@ All notable changes to tuxhub are documented in this file. The format follows
   stays on the computer. The detail dialog shows the description, the README
   when the app links a GitHub repository, and the window choice.
 - Apps that start at login in the background get "Own window" by default
-  when they are added. tuxhub never changes their autostart.
+  when they are added. tuxhub never changes their autostart. So do apps that
+  start through a script or a shared launcher, whose running state tuxhub
+  can't tell.
 - Installed apps are updated only through their source: `flatpak update` for
   Flatpaks, the package manager (dnf or apt-get, through pkexec) for
   distribution packages. Apps added from the start menu are never updated
