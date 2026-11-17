@@ -39,6 +39,11 @@ All notable changes to tuxhub are documented in this file. The format follows
   the menu of the open app ("Remove from sidebar"). Without a mouse: the pin
   button, `P` on a tile and `Alt`+arrow keys. In a window narrower than
   860 px the sidebar shows icons only.
+- A drag always ends: a release outside the window, switching to another
+  window or a lost release finishes or cancels it, so nothing stays stuck to
+  the pointer. The interface itself cannot be selected (`Ctrl`+`A` marks
+  nothing) or carried along like a web page; search fields, code and README
+  text stay selectable.
 - The order of the sidebar is kept in `sidebar.json`. A tool tuxhub
   installed can leave the sidebar and stay installed; an app added from the
   start menu is forgotten and stays on the computer.

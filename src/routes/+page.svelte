@@ -105,6 +105,10 @@
   }
 
   onMount(() => {
+    // No native drag and drop: WebKit would carry selected text, images and
+    // links along with the pointer. Only what tuxhub drags itself moves.
+    const noNativeDrag = (e: DragEvent) => e.preventDefault();
+    document.addEventListener("dragstart", noNativeDrag);
     startListening();
     connectSidebar(refresh);
     if (nav && pinList) {
@@ -136,6 +140,7 @@
       }),
     ];
     return () => {
+      document.removeEventListener("dragstart", noNativeDrag);
       stopWatching();
       unlisten.forEach((u) => u.then((f) => f()));
     };

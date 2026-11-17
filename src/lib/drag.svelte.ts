@@ -10,6 +10,8 @@ import { arrange, placeLifted, placeNew, type Row } from "./sortable";
 const THRESHOLD = 6;
 /** Duration of the moves aside and of the landing; matches the CSS. */
 export const SETTLE_MS = 180;
+/** Longest wait for the sidebar after a drop before the drag ends anyway. */
+const LANDING_MAX_MS = 4000;
 
 export type DragFrom = "workshop" | "pin";
 
@@ -91,10 +93,19 @@ export function clickSuppressed(): boolean {
 export function pressed(ev: PointerEvent, what: DragStart) {
   if (ev.button !== 0 || start || drag.active) return;
   start = { ...what, x0: ev.clientX, y0: ev.clientY, dx: 0, dy: 0, rows: [], gap: 0, source: -1, start: 0, rowHeight: 0 };
+  // The release reaches tuxhub even outside its window.
+  try {
+    (ev.target as Element | null)?.setPointerCapture?.(ev.pointerId);
+  } catch {
+    // Not every pointer can be captured; the checks below cover it.
+  }
   addEventListener("pointermove", onMove);
   addEventListener("pointerup", onUp);
   addEventListener("pointercancel", cancel);
   addEventListener("keydown", onKey, true);
+  // A drag never outlives the window's focus (Alt+Tab, a dialog).
+  addEventListener("blur", cancel);
+  document.addEventListener("visibilitychange", cancel);
 }
 
 function stopListening() {
@@ -102,6 +113,8 @@ function stopListening() {
   removeEventListener("pointerup", onUp);
   removeEventListener("pointercancel", cancel);
   removeEventListener("keydown", onKey, true);
+  removeEventListener("blur", cancel);
+  document.removeEventListener("visibilitychange", cancel);
 }
 
 /** A pointer's position in sidebar pixels (the sidebar may be scrolled). */
@@ -136,6 +149,12 @@ function measure(s: Started) {
 function onMove(ev: PointerEvent) {
   const s = start;
   if (!s) return;
+  // No button pressed any more: the release went missing (outside the
+  // window, or taken by the system). The drag ends here, as if released.
+  if (ev.buttons === 0) {
+    onUp();
+    return;
+  }
   if (!drag.active) {
     if (Math.hypot(ev.clientX - s.x0, ev.clientY - s.y0) < THRESHOLD) return;
     measure(s);
@@ -194,7 +213,7 @@ function settle(after: () => void | Promise<unknown>) {
   // A timer rather than transitionend: transitions stall in a hidden window.
   setTimeout(async () => {
     try {
-      await after();
+      await Promise.race([after(), new Promise((done) => setTimeout(done, LANDING_MAX_MS))]);
     } finally {
       reset();
     }
