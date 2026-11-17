@@ -10,7 +10,16 @@
   import ToolIcon from "./ToolIcon.svelte";
   import IntegrationTag from "./IntegrationTag.svelte";
   import { canToggleWindow } from "./apps/integration";
-  import { canUpdate, filterApps, sourceLabelKey } from "./installed-apps";
+  import {
+    canUpdate,
+    filterApps,
+    localSystemUpdateOf,
+    sourceLabelKey,
+    systemUpdateOf,
+    updateWithConsent,
+    type SystemUpdate,
+  } from "./installed-apps";
+  import SystemUpdateDialog from "./SystemUpdateDialog.svelte";
   import { runStateOf, updateApp } from "./update";
   import { checkedOf, valueOf } from "./wa";
 
@@ -100,14 +109,31 @@
     updateAsk = null;
   }
 
-  /** Updates through the app's own source, with the question of the app page. */
+  /** The question before an update that changes the system. */
+  let systemAsk = $state<{ name: string; update: SystemUpdate; answer: (yes: boolean) => void } | null>(null);
+
+  /** Updates through the app's own source, with the questions of the app
+   * page: first whether to change the system, then whether to quit it. */
   async function update(view: LocalAppView) {
     const version = view.update ?? "";
+    const tool = tools.find((x) => x.entry.id === view.tool_id);
+    const system = tool ? systemUpdateOf(tool) : localSystemUpdateOf(view.app.source);
     busy = view.app.desktop_id;
     try {
+      const confirm = (update: SystemUpdate) =>
+        new Promise<boolean>((resolve) => {
+          systemAsk = {
+            name: view.app.name,
+            update,
+            answer: (yes) => {
+              systemAsk = null;
+              resolve(yes);
+            },
+          };
+        });
       const ask = (state: RunState) =>
         new Promise<boolean>((answer) => (updateAsk = { name: view.app.name, state, answer }));
-      if (await updateApp(view.tool_id, ask)) {
+      if (await updateWithConsent(system, confirm, () => updateApp(view.tool_id, ask))) {
         toast(`${view.app.name}: ${t("tool.updatedTo", { version })}`, "info");
       }
     } catch (err) {
@@ -217,18 +243,21 @@
         >
           {t("installed.sidebar")}<span class="wa-visually-hidden">: {view.app.name}</span>
         </wa-switch>
-        {#if canUpdate(view)}
-          <wa-button
-            size="s"
-            variant="brand"
-            appearance="outlined"
-            loading={busy === id}
-            disabled={busy !== null && busy !== id}
-            onclick={() => update(view)}
-          >
-            {t("tool.updateTo", { version: view.update ?? "" })}
-          </wa-button>
-        {/if}
+        <!-- Reserved below the switch: an update found later never moves it. -->
+        <div class="update-slot">
+          {#if canUpdate(view)}
+            <wa-button
+              size="s"
+              variant="brand"
+              appearance="outlined"
+              loading={busy === id}
+              disabled={busy !== null && busy !== id}
+              onclick={() => update(view)}
+            >
+              {t("tool.updateTo", { version: view.update ?? "" })}
+            </wa-button>
+          {/if}
+        </div>
       </div>
       {#if busy === id && hub.progress[view.tool_id]}
         {@const p = hub.progress[view.tool_id]}
@@ -337,6 +366,8 @@
   {/if}
 </wa-dialog>
 
+<SystemUpdateDialog ask={systemAsk} />
+
 <wa-dialog
   label={t("update.confirmTitle", { name: updateAsk?.name ?? "" })}
   open={updateAsk !== null}
@@ -412,13 +443,19 @@
     flex-wrap: wrap;
     align-items: center;
   }
+  /* The switch keeps its place: the update button gets a row of its own
+     that is there before an update is found. */
   .controls {
+    display: grid;
+    justify-items: start;
+    align-items: center;
+    gap: var(--wa-space-2xs);
+    grid-template-rows: minmax(44px, auto) minmax(var(--wa-form-control-height), auto);
+  }
+  .update-slot {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: var(--wa-space-xs);
-    flex-wrap: wrap;
-    min-height: 44px;
+    max-width: 100%;
   }
   .skeleton wa-skeleton {
     height: 0.8em;

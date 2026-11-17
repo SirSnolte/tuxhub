@@ -5,6 +5,7 @@
   import { ArrowUp, CircleAlert, CircleCheck, Settings, X } from "@lucide/svelte";
   import { api, errText, type RunState, type ShortcutStatus, type Tool, type Updates } from "$lib/api";
   import { mayQuit, updateNeedsConfirm } from "$lib/apps/integration";
+  import { systemUpdateOf } from "$lib/installed-apps";
   import { installAndRestart, runStateOf } from "$lib/update";
   import { dismissToast, hub, startListening, toast } from "$lib/state.svelte";
   import { t } from "$lib/i18n.svelte";
@@ -39,8 +40,14 @@
     }
   }
 
-  /** Names of running apps the user is asked about before "Update all". */
-  let runningAsk = $state<{ names: string; answer: (yes: boolean) => void } | null>(null);
+  /** Names of running apps and of system-wide updates the user is asked
+   * about before "Update all". */
+  let runningAsk = $state<{
+    names: string;
+    system: string;
+    password: boolean;
+    answer: (yes: boolean) => void;
+  } | null>(null);
 
   function answerRunning(yes: boolean) {
     runningAsk?.answer(yes);
@@ -54,9 +61,21 @@
     const states: Record<string, RunState | null> = {};
     for (const id of ids) states[id] = await runStateOf(id);
     const running = ids.filter((id) => states[id] && updateNeedsConfirm(states[id]!));
-    if (running.length > 0) {
+    // Packages of the distribution and system Flatpaks change the system.
+    const systemUpdates = ids.flatMap((id) => {
+      const tool = tools.find((x) => x.entry.id === id);
+      const update = tool ? systemUpdateOf(tool) : null;
+      return update ? [{ id, update }] : [];
+    });
+    const system = systemUpdates.map((s) => s.id);
+    // pkexec asks for the password for packages of the distribution.
+    const password = systemUpdates.some((s) => s.update.manager !== "flatpak");
+    if (running.length > 0 || system.length > 0) {
       const names = running.map(nameOf).join(", ");
-      const yes = await new Promise<boolean>((answer) => (runningAsk = { names, answer }));
+      const systemNames = system.map(nameOf).join(", ");
+      const yes = await new Promise<boolean>(
+        (answer) => (runningAsk = { names, system: systemNames, password, answer }),
+      );
       if (!yes) {
         updatingAll = false;
         return;
@@ -67,7 +86,7 @@
       try {
         const startInHub =
           view.kind === "tool" && view.id === id && page ? () => page!.startInHub() : undefined;
-        // The question above covered every running app.
+        // The question above covered every running app and system-wide update.
         await installAndRestart(id, mayQuit(states[id], true), startInHub);
         toast(t("tool.updatedTo", { version: updates[id] ?? "" }) + ` (${name})`, "info");
       } catch (e) {
@@ -210,10 +229,20 @@
     if (e.target === e.currentTarget && runningAsk) answerRunning(false);
   }}
 >
-  <p>{t("update.runningMany", { names: runningAsk?.names ?? "" })}</p>
+  {#if runningAsk?.names}
+    <p>{t("update.runningMany", { names: runningAsk.names })}</p>
+  {/if}
+  {#if runningAsk?.system}
+    <p>{t("update.systemMany", { names: runningAsk.system })}</p>
+    {#if runningAsk.password}
+      <p class="small muted">{t("tool.passwordHint")}</p>
+    {/if}
+  {/if}
   <div slot="footer" class="dialog-buttons">
     <wa-button appearance="outlined" onclick={() => answerRunning(false)}>{t("common.cancel")}</wa-button>
-    <wa-button variant="brand" onclick={() => answerRunning(true)}>{t("update.quitAndUpdate")}</wa-button>
+    <wa-button variant="brand" onclick={() => answerRunning(true)}>
+      {runningAsk?.names ? t("update.quitAndUpdate") : t("update.systemConfirm")}
+    </wa-button>
   </div>
 </wa-dialog>
 

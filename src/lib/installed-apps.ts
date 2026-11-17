@@ -1,6 +1,6 @@
 // Apps of this computer in tuxhub, without Svelte. Tested in
 // tests/installed-apps.test.mjs.
-import type { LocalAppView, LocalSource } from "./api";
+import type { LocalAppView, LocalSource, Tool } from "./api";
 
 /** Error of `embed_start` when the app already runs outside tuxhub; it
  * would start a second time inside it. */
@@ -33,4 +33,44 @@ export function sourceLabelKey(source: LocalSource): `installed.source.${LocalSo
  * source; AppImages and other programs update themselves. */
 export function canUpdate(view: Pick<LocalAppView, "app" | "update">): boolean {
   return ["flatpak", "rpm", "deb"].includes(view.app.source.kind) && view.update !== null;
+}
+
+/** An update that changes the system: the package and the program that
+ * installs it as root. */
+export type SystemUpdate = { package: string; manager: "dnf" | "apt-get" | "flatpak" };
+
+/** The system-wide update of a tool, which the user confirms first: a package
+ * of the distribution (tuxhub runs dnf or apt-get through pkexec) or a
+ * Flatpak of the system installation. Null for everything else. */
+export function systemUpdateOf(tool: Pick<Tool, "entry" | "installation">): SystemUpdate | null {
+  const s = tool.entry.source;
+  if (s.type === "distro-package") return { package: s.package, manager: s.manager === "rpm" ? "dnf" : "apt-get" };
+  if (s.type === "flatpak" && tool.installation === "system") return { package: s.flatpak_id, manager: "flatpak" };
+  return null;
+}
+
+/** Like `systemUpdateOf`, from what the installed apps list knows. A Flatpak
+ * in both installations counts as system-wide, as tuxhub uses that one. */
+export function localSystemUpdateOf(source: LocalSource): SystemUpdate | null {
+  switch (source.kind) {
+    case "rpm":
+      return { package: source.package, manager: "dnf" };
+    case "deb":
+      return { package: source.package, manager: "apt-get" };
+    case "flatpak":
+      return source.installations.includes("system") ? { package: source.flatpak_id, manager: "flatpak" } : null;
+    default:
+      return null;
+  }
+}
+
+/** Runs `update` for a system-wide update only after `confirm` says yes;
+ * any other update runs at once. False when the user said no. */
+export async function updateWithConsent(
+  system: SystemUpdate | null,
+  confirm: (update: SystemUpdate) => Promise<boolean>,
+  update: () => Promise<boolean>,
+): Promise<boolean> {
+  if (system && !(await confirm(system))) return false;
+  return update();
 }

@@ -6,6 +6,9 @@ import { readFileSync } from "node:fs";
 import {
   RUNNING_OUTSIDE,
   canUpdate,
+  localSystemUpdateOf,
+  systemUpdateOf,
+  updateWithConsent,
   filterApps,
   needsRestartDialog,
   sourceLabelKey,
@@ -158,4 +161,83 @@ test("every text of the installed tab exists in English and German", () => {
   assert.ok(en.includes(`"installed.selfUpdates": "Updates through the app itself",`));
   assert.ok(en.includes(`"installed.comingSoon": "Coming soon: tuxhub menu",`));
   assert.ok(en.includes(`"installed.showMore": "Show more (system apps)",`));
+});
+
+const toolWith = (source, installation = "user") => ({ entry: { source }, installation });
+const kcalc = toolWith({ type: "distro-package", package: "kcalc", manager: "rpm", command: ["/usr/bin/kcalc"] });
+
+test("updates that change the system ask first and name package and manager", () => {
+  assert.deepEqual(systemUpdateOf(kcalc), { package: "kcalc", manager: "dnf" });
+  assert.deepEqual(
+    systemUpdateOf(toolWith({ type: "distro-package", package: "kcalc", manager: "deb", command: [] })),
+    { package: "kcalc", manager: "apt-get" },
+  );
+  const recorder = { type: "flatpak", flatpak_id: "org.gnome.SoundRecorder", remote: "fedora" };
+  assert.deepEqual(systemUpdateOf(toolWith(recorder, "system")), {
+    package: "org.gnome.SoundRecorder",
+    manager: "flatpak",
+  });
+  // A Flatpak of the user and tuxhub's own downloads change nothing system-wide.
+  assert.equal(systemUpdateOf(toolWith(recorder, "user")), null);
+  assert.equal(systemUpdateOf(toolWith({ type: "github-release", asset: "a" }, "system")), null);
+  assert.equal(systemUpdateOf(toolWith({ type: "launcher", desktop_id: "a.desktop", command: ["/a"] })), null);
+
+  // Without the tool, the source of the installed app decides.
+  assert.deepEqual(localSystemUpdateOf({ kind: "rpm", package: "kcalc" }), { package: "kcalc", manager: "dnf" });
+  assert.deepEqual(localSystemUpdateOf({ kind: "deb", package: "kcalc" }), { package: "kcalc", manager: "apt-get" });
+  assert.deepEqual(
+    localSystemUpdateOf({ kind: "flatpak", flatpak_id: "a.b.C", installations: ["system", "user"], origin: "fedora" }),
+    { package: "a.b.C", manager: "flatpak" },
+  );
+  assert.equal(
+    localSystemUpdateOf({ kind: "flatpak", flatpak_id: "a.b.C", installations: ["user"], origin: "flathub" }),
+    null,
+  );
+  assert.equal(localSystemUpdateOf({ kind: "appimage", path: "/a.AppImage" }), null);
+});
+
+test("a system-wide update starts only after the user agrees", async () => {
+  const system = systemUpdateOf(kcalc);
+  let updates = 0;
+  const update = async () => {
+    updates++;
+    return true;
+  };
+  let answer;
+  const asked = [];
+  const pending = updateWithConsent(
+    system,
+    (s) => {
+      asked.push(s);
+      return new Promise((resolve) => (answer = resolve));
+    },
+    update,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(asked, [{ package: "kcalc", manager: "dnf" }]);
+  assert.equal(updates, 0, "nothing runs while the question is open");
+  answer(false);
+  assert.equal(await pending, false);
+  assert.equal(updates, 0, "a no updates nothing");
+
+  const yes = updateWithConsent(system, async () => true, update);
+  assert.equal(await yes, true);
+  assert.equal(updates, 1);
+
+  // An update for the user alone needs no question.
+  let questions = 0;
+  assert.equal(
+    await updateWithConsent(null, async () => (questions++, false), update),
+    true,
+  );
+  assert.equal(questions, 0);
+  assert.equal(updates, 2);
+});
+
+test("the question before a system-wide update exists in English and German", () => {
+  for (const key of ["update.systemTitle", "update.systemBody", "update.systemMany", "update.systemConfirm", "tool.passwordHint"]) {
+    assert.ok(en.includes(`"${key}":`), `${key} in en`);
+    assert.ok(de.includes(`"${key}":`), `${key} in de`);
+  }
+  assert.ok(en.includes(`"update.systemBody": "Update {package} system-wide with {manager}? Other packages may be updated too.",`));
 });

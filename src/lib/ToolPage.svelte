@@ -19,7 +19,8 @@
   import SettingsForm from "./SettingsForm.svelte";
   import WebPanel from "./WebPanel.svelte";
   import EmbedPanel from "./EmbedPanel.svelte";
-  import { needsRestartDialog } from "./installed-apps";
+  import { needsRestartDialog, systemUpdateOf, updateWithConsent, type SystemUpdate } from "./installed-apps";
+  import SystemUpdateDialog from "./SystemUpdateDialog.svelte";
   import LaunchPanel from "./LaunchPanel.svelte";
   import LivePanel from "./LivePanel.svelte";
   import { asksHowToRemove, installHint, needsPassword, tuxhubInstalls } from "./install-state";
@@ -157,10 +158,29 @@
     updateAsk = null;
   }
 
-  /** Installs or updates the tool; a running app is quit after asking and started again. */
+  /** The question before an update that changes the system. */
+  let systemAsk = $state<{ name: string; update: SystemUpdate; answer: (yes: boolean) => void } | null>(null);
+
+  function askSystem(update: SystemUpdate): Promise<boolean> {
+    return new Promise((resolve) => {
+      systemAsk = {
+        name: tool.entry.name,
+        update,
+        answer: (yes) => {
+          systemAsk = null;
+          resolve(yes);
+        },
+      };
+    });
+  }
+
+  /** Installs or updates the tool; a system-wide update is confirmed first,
+   * a running app is quit after asking and started again. */
   function installUpdate(ok: string) {
     run(async () => {
-      const done = await updateApp(id, askUpdate, embedPanel ? () => embedPanel!.startInHub() : undefined);
+      const done = await updateWithConsent(systemUpdateOf(tool), askSystem, () =>
+        updateApp(id, askUpdate, embedPanel ? () => embedPanel!.startInHub() : undefined),
+      );
       if (done) {
         update = null;
         toast(ok, "info");
@@ -533,6 +553,8 @@
     {/if}
   </div>
 </wa-dialog>
+
+<SystemUpdateDialog ask={systemAsk} />
 
 <wa-dialog
   label={t("update.confirmTitle", { name: tool.entry.name })}
