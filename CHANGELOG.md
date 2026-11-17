@@ -12,8 +12,8 @@ All notable changes to tuxhub are documented in this file. The format follows
   lists the apps of the start menu with their icon, source (Flatpak, RPM,
   Debian package, AppImage or program) and integration level, read offline
   from the desktop entries and the local AppStream data. Settings modules,
-  system and console tools, Wine's built-in tools, help screens and game
-  shortcuts of Steam, Heroic and Lutris stay hidden until "Show more (system
+  system and console tools, Wine's built-in tools, help screens, game
+  shortcuts of Steam, Heroic and Lutris and web apps of browsers stay hidden until "Show more (system
   apps)"; the search always looks through all apps, and apps in the sidebar
   always stay in the list. Apps that need a terminal are not listed. Catalog
   apps that are already on the computer appear once, with the catalog's
@@ -49,7 +49,8 @@ All notable changes to tuxhub are documented in this file. The format follows
   started something; otherwise it says the app is already running.
 - Shared launchers (shells, interpreters, `flatpak`, `snap`, Wine, Steam
   and similar) are never treated as an app's own program, so tuxhub never
-  quits or watches them.
+  quits or watches them. A browser's web app (`--app-id=`, `--app=`) is
+  treated the same way: tuxhub never quits or updates the browser for it.
 
 ### Fixed
 

@@ -1,7 +1,9 @@
 //! Reads the freedesktop `.desktop` entries of apps installed on this PC.
 
 use crate::appstream::AppInfo;
-use crate::tools::{Entry, Installation, PackageFormat, Programs, Source, is_shared_launcher};
+use crate::tools::{
+    Entry, Installation, PackageFormat, Programs, Source, is_shared_launcher, is_web_app,
+};
 use futures_util::StreamExt;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -225,9 +227,9 @@ fn is_env_assignment(a: &str) -> bool {
 
 /// Whether the start menu shows the app. `desktop` is the colon-separated
 /// `XDG_CURRENT_DESKTOP` (for example `KDE` or `ubuntu:GNOME`). Settings, system
-/// and console apps, Wine's own tools, help screens and game shortcuts of
-/// store clients are hidden unless `show_all`; `NoDisplay` apps, ones not
-/// meant for this desktop, terminal apps (tuxhub cannot run them without a
+/// and console apps, Wine's own tools, help screens, game shortcuts of store
+/// clients and web apps of browsers are hidden unless `show_all`; `NoDisplay`
+/// apps, ones not meant for this desktop, terminal apps (tuxhub cannot run them without a
 /// terminal) and tuxhub itself are always hidden.
 pub fn is_visible(app: &DesktopApp, desktop: &str, show_all: bool) -> bool {
     if app.no_display || app.terminal || OWN_DESKTOP_IDS.contains(&app.desktop_id.as_str()) {
@@ -272,7 +274,12 @@ pub fn is_visible(app: &DesktopApp, desktop: &str, show_all: bool) -> bool {
     // and welcome screens name no main category of their own.
     let main = APP_CATEGORIES.iter().any(|c| has(c));
     let side_tool = !main && (has("X-Wine") || has("Documentation"));
-    !(settings || system_only || side_tool || has("ConsoleOnly") || is_game_shortcut(&app.exec))
+    !(settings
+        || system_only
+        || side_tool
+        || has("ConsoleOnly")
+        || is_game_shortcut(&app.exec)
+        || is_web_app(&app.exec))
 }
 
 /// Links a store client uses to start one of its games.
@@ -580,6 +587,13 @@ pub type Cache = Option<(SystemTime, Vec<LocalApp>)>;
 /// Finds where an app comes from: Flatpak by its ID, otherwise the package
 /// that owns its program, an AppImage by file name, or nothing known.
 pub async fn resolve_source(app: &DesktopApp, programs: &Programs) -> LocalSource {
+    // A browser's web app is not the browser: neither its package nor its
+    // Flatpak (updating or quitting it would hit the whole browser).
+    if is_web_app(&app.exec) {
+        return LocalSource::Unknown {
+            program: app.exec.first().cloned().unwrap_or_default(),
+        };
+    }
     if let Some(id) = &app.flatpak_id {
         return flatpak_source(id, &app.path, programs).await;
     }
@@ -2167,5 +2181,40 @@ Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=launch.sh com.
             resolve_source(&a, &f.programs).await,
             LocalSource::Flatpak { .. }
         ));
+    }
+
+    /// A web app of a browser (`--app-id=`, `--app=`) starts through the
+    /// browser like a game through its store client: hidden by default,
+    /// never the browser's package or Flatpak.
+    #[tokio::test]
+    async fn browser_web_apps_are_shortcuts() {
+        let f = Fakes::new("local-web-app");
+        f.set("rpm", "echo chromium");
+        f.flatpak_with(&[Installation::User]);
+        let browser = program_file(&f, "chromium-browser");
+        for exec in [
+            format!("{browser} --profile-directory=Default --app-id=abcdef"),
+            format!("{browser} --app=https://example.org/"),
+            "/usr/bin/flatpak run --command=/app/bin/chromium org.chromium.Chromium --app-id=abcdef"
+                .to_string(),
+        ] {
+            let mut a = app(&["Network"]);
+            a.exec = split_exec(&exec);
+            if exec.contains("org.chromium.Chromium") {
+                a.flatpak_id = Some("org.chromium.Chromium".into());
+            }
+            assert!(!is_visible(&a, "KDE", false), "{exec}");
+            assert!(is_visible(&a, "KDE", true), "{exec}");
+            assert_eq!(
+                resolve_source(&a, &f.programs).await,
+                LocalSource::Unknown {
+                    program: a.exec[0].clone()
+                },
+                "{exec}"
+            );
+        }
+        let mut a = app(&["Network"]);
+        a.exec = split_exec(&format!("{browser} --appearance=dark"));
+        assert!(is_visible(&a, "KDE", false));
     }
 }

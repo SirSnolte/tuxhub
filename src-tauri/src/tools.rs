@@ -1704,13 +1704,29 @@ pub fn is_shared_launcher(program: &Path) -> bool {
     shared(program) || program.canonicalize().is_ok_and(|real| shared(&real))
 }
 
+/// Arguments that make a browser start one of its web apps.
+const WEB_APP_ARGS: [&str; 2] = ["--app-id=", "--app="];
+
+/// Whether `command` starts a browser's web app (`--app-id=…`, `--app=…`):
+/// it runs as the browser, like a game started through its store client.
+pub fn is_web_app(command: &[String]) -> bool {
+    command
+        .iter()
+        .skip(1)
+        .any(|a| WEB_APP_ARGS.iter().any(|w| a.starts_with(w)))
+}
+
 /// Whether the app was added from this computer and starts through a shared
-/// launcher, so tuxhub cannot tell its processes from others.
+/// launcher (or is a browser's web app), so tuxhub cannot tell its
+/// processes from others.
 pub fn shared_launcher(inst: &Installed) -> bool {
     match &inst.entry.source {
-        Source::DistroPackage { command, .. } | Source::Launcher { command, .. } => command
-            .first()
-            .is_some_and(|p| is_shared_launcher(Path::new(p))),
+        Source::DistroPackage { command, .. } | Source::Launcher { command, .. } => {
+            command
+                .first()
+                .is_some_and(|p| is_shared_launcher(Path::new(p)))
+                || is_web_app(command)
+        }
         _ => false,
     }
 }
@@ -2988,6 +3004,30 @@ mod tests {
         for bad in ["", "-1", "1:-x-1", "a b-1", "1.0\n-1", &"9".repeat(65)] {
             assert!(clean_version(bad).is_err(), "{bad:?}");
         }
+    }
+
+    /// A browser's web app runs as the browser: tuxhub never watches or
+    /// quits it.
+    #[test]
+    fn web_apps_share_the_browser() {
+        for command in [
+            [
+                "/usr/bin/chromium-browser",
+                "--profile-directory=Default",
+                "--app-id=abc",
+            ],
+            [
+                "/opt/google/chrome/chrome",
+                "--app=https://example.org/",
+                "-v",
+            ],
+        ] {
+            let inst = Installed::new(launcher_entry(&command));
+            assert!(shared_launcher(&inst), "{command:?}");
+            assert!(app_program(Path::new("/nonexistent"), &inst).is_none());
+        }
+        let inst = Installed::new(launcher_entry(&["/usr/bin/app", "--appearance=dark"]));
+        assert!(!shared_launcher(&inst));
     }
 
     /// A program that is a `#!` script (like `/usr/bin/libreoffice`) runs as
