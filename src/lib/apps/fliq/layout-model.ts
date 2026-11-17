@@ -6,9 +6,9 @@
 // Every edit keeps fields the menu does not know (objects are spread, never rebuilt) and leaves
 // locked blocks alone. Before a layout goes out, the editor passes it through checkedEdit.
 import { kindInfo } from "./fliq-options.ts";
-import { gridPatchValid, isLocked } from "./layout-check.ts";
+import { checkedEdit, gridPatchValid, isLocked } from "./layout-check.ts";
 import { LayoutGrid } from "./layout-grid.ts";
-import type { CellRect, ClockLayout, LayoutBlock, MemberKind } from "./layout-types.ts";
+import type { CellRect, ClockLayout, DropZone, GroupItem, LayoutBlock, MemberKind } from "./layout-types.ts";
 
 export * from "./layout-types.ts";
 export { checkedEdit, clampText, gridValue, isColor, isLocked, readLayout, safeColor } from "./layout-check.ts";
@@ -57,6 +57,22 @@ export function updateBlock(layout: ClockLayout, id: number, patch: Partial<Layo
   return new LayoutGrid({ ...placed, blocks: blocks.filter((b) => b.id !== id) }).fits(changed) ? placed : null;
 }
 
+/**
+ * The layout with one member of a group changed (what it shows; its look is the group's).
+ * Fields set to `undefined` are removed. Null when the group is locked or the change breaks one
+ * of Fliq's rules (a progress bar, for one, cannot be a member).
+ */
+export function updateMember(layout: ClockLayout, groupId: number, index: number, patch: Partial<GroupItem>): ClockLayout | null {
+  const group = layout.blocks.find((b) => b.id === groupId);
+  const items = group?.kind === "group" ? group.items : undefined;
+  if (!group || !items || isLocked(group) || index < 0 || index >= items.length) return null;
+  const next: Record<string, unknown> = { ...items[index], ...patch };
+  for (const key of Object.keys(next)) if (next[key] === undefined) delete next[key];
+  const changed: LayoutBlock = { ...group, items: items.map((item, i) => (i === index ? (next as unknown as GroupItem) : item)) };
+  if (isLocked(changed)) return null;
+  return { ...layout, blocks: layout.blocks.map((b) => (b.id === groupId ? changed : b)) };
+}
+
 /** The layout with grid fields changed (undefined: back to the default); null past a limit. */
 export function updateGrid(layout: ClockLayout, patch: Partial<ClockLayout>): ClockLayout | null {
   if (!gridPatchValid(layout, patch)) return null;
@@ -77,6 +93,36 @@ export function placeBlock(layout: ClockLayout, id: number, rect: CellRect): Clo
   const block = layout.blocks.find((b) => b.id === id);
   if (!block || isLocked(block) || !new LayoutGrid(layout).fits(rect, id)) return null;
   return { ...layout, blocks: layout.blocks.map((b) => (b.id === id ? { ...b, ...rect } : b)) };
+}
+
+/**
+ * What dropping block `droppedId` onto `targetId` does, with the pointer at these shares of the
+ * target's width and height, as Fliq's canvas does it: the zone and the layout it makes. A new
+ * row that is not possible gives way to the other zones. Null when no zone is possible (no
+ * room, a full group, a progress bar, a locked block that would move); then the canvas shows
+ * no zone and a drop puts the block back.
+ */
+export function dropTarget(
+  layout: ClockLayout,
+  targetId: number,
+  droppedId: number,
+  shareX: number,
+  shareY: number,
+): { zone: DropZone; layout: ClockLayout } | null {
+  const grid = new LayoutGrid(layout);
+  const target = layout.blocks.find((b) => b.id === targetId);
+  const dropped = layout.blocks.find((b) => b.id === droppedId);
+  if (!target || !dropped || target === dropped || isLocked(dropped)) return null;
+  let zone = LayoutGrid.dropZone(target, dropped, shareX, shareY, true);
+  let result: ClockLayout | null = null;
+  if (zone === "above" || zone === "below") {
+    result = grid.withBlockInNewRow(targetId, droppedId, zone === "below");
+    if (!result) zone = LayoutGrid.dropZone(target, dropped, shareX, shareY, false);
+  }
+  if (zone === "group") result = grid.mergedInto(targetId, droppedId, shareX < 0.5);
+  else if (zone === "before" || zone === "after") result = grid.withBlockInserted(targetId, droppedId, zone === "before");
+  const checked = checkedEdit(layout, result);
+  return zone && checked ? { zone, layout: checked } : null;
 }
 
 /** Layouts of this session for undo and redo, at most `limit` steps back. */

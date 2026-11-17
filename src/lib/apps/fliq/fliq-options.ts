@@ -59,6 +59,9 @@ export const RANGES = {
   blockPadding: { min: 0, max: 24, unit: "px" },
   offset: { min: -64, max: 64, unit: "px" },
   itemGap: { min: 0, max: 3, unit: "em" },
+  labelSize: { min: 0, max: 120, unit: "%" },
+  barThickness: { min: 1, max: 24, unit: "px" },
+  barRadius: { min: 0, max: 12, unit: "px" },
 } satisfies Record<string, Range>;
 
 export type BlockKindInfo = {

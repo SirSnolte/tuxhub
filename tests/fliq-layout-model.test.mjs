@@ -20,6 +20,7 @@ import {
   removeBlocks,
   updateBlock,
   updateGrid,
+  updateMember,
 } from "../src/lib/apps/fliq/layout-model.ts";
 
 const text = (id, x, y, w = 1, h = 1) => ({ id, kind: "text", x, y, w, h, display: "text", text: `t${id}` });
@@ -246,6 +247,22 @@ test("grouping keeps the members' 2.1 content and the group's direction", () => 
   const stacked = { ...group, direction: "column" };
   const regrouped = new LayoutGrid(layoutOf(4, 2, [stacked, text(9, 2, 0)])).grouped([group.id, 9]);
   assert.equal(regrouped.blocks[0].direction, "column");
+});
+
+test("a group member's content can be changed within Fliq's rules", () => {
+  const group = {
+    id: 1, kind: "group", x: 0, y: 0, w: 2, h: 1, display: "group",
+    items: [{ kind: "clock", display: "HH:mm", glowPulse: 1 }, { kind: "text", display: "text", text: "a" }],
+  };
+  const layout = layoutOf(4, 2, [group]);
+  const changed = updateMember(layout, 1, 0, { clockStyle: "rings", display: "HH:mm:ss" });
+  assert.deepEqual(changed.blocks[0].items[0], { kind: "clock", display: "HH:mm:ss", clockStyle: "rings", glowPulse: 1 });
+  assert.equal(updateMember(layout, 1, 0, { clockStyle: undefined }).blocks[0].items[0].clockStyle, undefined);
+  assert.equal(updateMember(layout, 1, 1, { text: "a".repeat(201) }), null);
+  // A progress bar cannot be a member.
+  assert.equal(updateMember(layout, 1, 0, { clockStyle: "progress" }), null);
+  assert.ok(updateMember(layout, 1, 0, { clockStyle: "progress", progressShape: "ring" }));
+  assert.equal(updateMember(layout, 1, 5, { text: "x" }), null);
 });
 
 test("texts are cut at 200 characters, by character", () => {

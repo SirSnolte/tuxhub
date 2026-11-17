@@ -158,6 +158,8 @@ export const GRID_LIMITS = { minColumns: 2, maxColumns: 8, minRows: 1, maxRows: 
 /** Characters of a text, format or display id, and members of one group. */
 export const CONTENT_LIMITS = { textLength: 200, groupMembers: 16 };
 export const MAX_BLOCKS = 32;
+/** Widths of a column Fliq takes, in px at scale 1. */
+export const TRACK_LIMITS = { min: 1, max: 2048 };
 export const MAX_RANGE_DAYS = 31;
 
 export const BLOCK_DEFAULTS = {

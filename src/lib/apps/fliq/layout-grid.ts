@@ -12,11 +12,15 @@ import {
   CELL_WIDTH,
   CONTENT_FIELDS,
   CONTENT_LIMITS,
+  EDGE_ZONE,
+  GRID_LIMITS,
   isProgressBar,
   MEMBER_CONTENT_FIELDS,
   PLACEMENT_FIELDS,
+  TRACK_LIMITS,
   type CellRect,
   type ClockLayout,
+  type DropZone,
   type GapAxis,
   type GroupItem,
   type LayoutBlock,
@@ -151,6 +155,172 @@ export class LayoutGrid {
     };
     const blocks = this.layout.blocks.filter((b) => b.id !== droppedId).map((b) => (b.id === targetId ? group : b));
     return { ...this.layout, blocks };
+  }
+
+  /**
+   * What a block dropped onto `target` does, from where the pointer is on the target (shares
+   * of its width and height): an edge band slides it in beside the target, or into a new row
+   * above or below; the middle groups them. Zones that cannot happen give way; null when none can.
+   */
+  static dropZone(target: LayoutBlock, dropped: LayoutBlock, shareX: number, shareY = 0.5, canAddRow = false): DropZone | null {
+    const canGroup = ![target, dropped].some((b) => isLocked(b) || isProgressBar(b));
+    // Distance to every edge that can take the block. On a tie the first one wins.
+    const edges: [DropZone, number][] = [];
+    if (target.h === dropped.h) edges.push(["after", 1 - shareX], ["before", shareX]);
+    if (canAddRow) edges.push(["below", 1 - shareY], ["above", shareY]);
+    const nearest = edges.reduce<[DropZone, number] | null>((best, edge) => (best === null || edge[1] < best[1] ? edge : best), null);
+    if (nearest && (nearest[1] < EDGE_ZONE || !canGroup)) return nearest[0];
+    return canGroup ? "group" : null;
+  }
+
+  /**
+   * A block slid in before or after `target`, on the target's rows. The blocks of that line make
+   * room by sliding left or right, keeping their order and skipping cells other blocks hold;
+   * whichever way moves less wins. A full line gives up a column of its widest blocks at a
+   * time (never below one). Rows the dropped block leaves empty are removed. Null when even
+   * that leaves no room.
+   */
+  withBlockInserted(targetId: number, droppedId: number, before: boolean): ClockLayout | null {
+    const target = this.layout.blocks.find((b) => b.id === targetId);
+    const dropped = this.layout.blocks.find((b) => b.id === droppedId);
+    if (!target || !dropped || target === dropped || target.h !== dropped.h) return null;
+    const inLine = (b: LayoutBlock) => b.id !== droppedId && b.y === target.y && b.h === target.h;
+    const line = this.layout.blocks.filter(inLine).sort((a, b) => a.x - b.x);
+    const blocked = new Set<number>();
+    for (const b of this.layout.blocks) {
+      const crossesLine = b.y < target.y + target.h && target.y < b.y + b.h;
+      if (b.id !== droppedId && !inLine(b) && crossesLine) {
+        for (let column = b.x; column < b.x + b.w; column++) blocked.add(column);
+      }
+    }
+    const widths = new Map(line.map((b) => [b.id, b.w]));
+    for (;;) {
+      const sized = line.map((b) => ({ ...b, w: widths.get(b.id)! }));
+      const placed = this.#lineWithBlock(sized, target, dropped, before, blocked);
+      if (placed) return placed;
+      const widest = line.reduce((wide, b) => (widths.get(b.id)! > widths.get(wide.id)! ? b : wide));
+      if (widths.get(widest.id)! <= 1) return null;
+      widths.set(widest.id, widths.get(widest.id)! - 1);
+    }
+  }
+
+  #lineWithBlock(line: LayoutBlock[], target: LayoutBlock, dropped: LayoutBlock, before: boolean, blocked: Set<number>): ClockLayout | null {
+    const targetIndex = line.findIndex((b) => b.id === target.id);
+    const insertAt = targetIndex + (before ? 0 : 1);
+    const sequence = [...line.slice(0, insertAt), { ...dropped, y: target.y }, ...line.slice(insertAt)];
+    const anchor = before ? target.x : target.x + line[targetIndex].w;
+    const placements = [this.#slid(sequence, insertAt, anchor, 1, blocked), this.#slid(sequence, insertAt, anchor, -1, blocked)].filter(
+      (placement): placement is Map<number, number> => placement !== null,
+    );
+    if (placements.length === 0) return null;
+    // Distance every block travels, the dropped one included, so its old spot gets filled.
+    const travel = (placement: Map<number, number>) =>
+      [...placement].reduce((sum, [id, x]) => {
+        const original = this.layout.blocks.find((b) => b.id === id)!;
+        return sum + Math.abs(original.x - x) + Math.abs(original.y - (id === dropped.id ? target.y : original.y));
+      }, 0);
+    const best = placements.reduce((shortest, placement) => (travel(placement) < travel(shortest) ? placement : shortest));
+    const widths = new Map(line.map((b) => [b.id, b.w]));
+    const blocks = this.layout.blocks.map((b) => {
+      const w = widths.get(b.id) ?? b.w;
+      const x = best.get(b.id);
+      if (x === undefined) return w === b.w ? b : { ...b, w };
+      return b.id === dropped.id ? { ...b, x, y: target.y } : { ...b, x, w };
+    });
+    const leftRows = Array.from({ length: dropped.h }, (_, offset) => dropped.y + offset);
+    return LayoutGrid.#withoutEmptyRows({ ...this.layout, blocks }, leftRows);
+  }
+
+  /**
+   * A new row above or below `target`'s rows, holding the dropped block (one row high, at its
+   * own columns if free, else the first free ones, as wide as still fits). Rows from there on
+   * move down; blocks reaching across the new row grow over it. Rows the dropped block leaves
+   * empty are removed. Null when no columns are free or the grid would get too many rows.
+   */
+  withBlockInNewRow(targetId: number, droppedId: number, below: boolean): ClockLayout | null {
+    const target = this.layout.blocks.find((b) => b.id === targetId);
+    const dropped = this.layout.blocks.find((b) => b.id === droppedId);
+    if (!target || !dropped || target === dropped) return null;
+    const { columns, rows } = this.layout;
+    const row = below ? target.y + target.h : target.y;
+    const shifted = (b: LayoutBlock): LayoutBlock => {
+      if (b.y >= row) return { ...b, y: b.y + 1 };
+      return b.y + b.h > row ? { ...b, h: b.h + 1 } : b;
+    };
+    let layout: ClockLayout = {
+      ...this.layout,
+      rows: rows + 1,
+      blocks: this.layout.blocks.filter((b) => b.id !== droppedId).map(shifted),
+    };
+    const roomy = new LayoutGrid(layout);
+    const width = Math.min(dropped.w, columns);
+    const own = { x: Math.min(dropped.x, columns - width), y: row, w: width, h: 1 };
+    let spot: CellRect | null = roomy.fits(own) ? own : null;
+    for (let w = width; w >= 1 && !spot; w--) {
+      for (let x = 0; x + w <= columns && !spot; x++) {
+        spot = roomy.fits({ x, y: row, w, h: 1 }) ? { x, y: row, w, h: 1 } : null;
+      }
+    }
+    if (!spot) return null;
+    const placed = spot;
+    // Keep the stored order, so nothing else in the layout changes.
+    layout = {
+      ...layout,
+      blocks: this.layout.blocks.map((b) => (b.id === droppedId ? { ...b, ...placed } : layout.blocks.find((o) => o.id === b.id)!)),
+    };
+    const oldRows = Array.from({ length: dropped.h }, (_, offset) => dropped.y + offset + (dropped.y + offset >= row ? 1 : 0));
+    layout = LayoutGrid.#withoutEmptyRows(layout, oldRows);
+    return layout.rows <= GRID_LIMITS.maxRows ? layout : null;
+  }
+
+  /** The layout without those of `rows` no block covers, never below the smallest grid. */
+  static #withoutEmptyRows(layout: ClockLayout, rows: number[]): ClockLayout {
+    let result = layout;
+    // Bottom up, so the indices still to check stay put.
+    for (const row of [...rows].sort((a, b) => b - a)) {
+      const empty = result.blocks.every((b) => row < b.y || row >= b.y + b.h);
+      if (empty && result.rows > GRID_LIMITS.minRows) {
+        result = {
+          ...result,
+          rows: result.rows - 1,
+          blocks: result.blocks.map((b) => (b.y > row ? { ...b, y: b.y - 1 } : b)),
+        };
+      }
+    }
+    return result;
+  }
+
+  /**
+   * New x of the blocks from `start` onwards (direction 1) or back (-1), packed against the
+   * anchor in that direction; the others stay. Null when they run out of the grid.
+   */
+  #slid(sequence: LayoutBlock[], start: number, anchor: number, direction: 1 | -1, blocked: Set<number>): Map<number, number> | null {
+    const placement = new Map<number, number>();
+    const isFree = (x: number, w: number) => {
+      for (let column = x; column < x + w; column++) if (blocked.has(column)) return false;
+      return true;
+    };
+    let cursor = anchor;
+    if (direction === 1) {
+      for (let index = start; index < sequence.length; index++) {
+        const b = sequence[index];
+        let x = index === start ? cursor : Math.max(b.x, cursor);
+        while (x + b.w <= this.layout.columns && !isFree(x, b.w)) x++;
+        if (x + b.w > this.layout.columns) return null;
+        placement.set(b.id, x);
+        cursor = x + b.w;
+      }
+    } else {
+      for (let index = start; index >= 0; index--) {
+        const b = sequence[index];
+        let end = index === start ? cursor : Math.min(b.x + b.w, cursor);
+        while (end - b.w >= 0 && !isFree(end - b.w, b.w)) end--;
+        if (end - b.w < 0) return null;
+        placement.set(b.id, end - b.w);
+        cursor = end - b.w;
+      }
+    }
+    return placement;
   }
 
   /** An unlocked group with these id, or undefined. */
@@ -307,6 +477,12 @@ export class LayoutGrid {
 
   defaultColumnWidth(): number {
     return gridValue(this.layout, "columnWidth") ?? CELL_WIDTH;
+  }
+
+  /** A column's width after its right edge was pulled by `delta` px at scale 1, within Fliq's limits. */
+  columnWidthAfterDrag(column: number, delta: number): number {
+    const width = Math.round(this.trackSize({ axis: "column", index: column }) + delta);
+    return Math.min(TRACK_LIMITS.max, Math.max(TRACK_LIMITS.min, width));
   }
 
   /** One column set to its own width, or back to the default with null. */

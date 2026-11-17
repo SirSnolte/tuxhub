@@ -179,7 +179,8 @@
           {track}
           onselect={select}
           onselecttrack={selectTrack}
-          oncommit={(next, refusal) => commit(next, null, refusal)}
+          oncommit={(next, refusal, key) => commit(next, key ?? null, refusal)}
+          onfinish={finish}
           {groupLimit}
         />
         <AddBlockBar

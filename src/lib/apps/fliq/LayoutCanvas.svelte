@@ -3,15 +3,20 @@
   import { t, type Key } from "../../i18n.svelte";
   import { Lock } from "@lucide/svelte";
   import { knownFont } from "./fliq-options";
+  import { drawsText, itemTextStyle } from "./style-settings";
   import {
     BLOCK_DEFAULTS,
+    CONTENT_LIMITS,
+    dropTarget,
     isLocked,
     LayoutGrid,
     placeBlock,
     safeColor,
     sizesFor,
+    TRACK_LIMITS,
     type CellRect,
     type ClockLayout,
+    type DropZone,
     type GroupItem,
     type LayoutBlock,
     type TrackRef,
@@ -30,6 +35,7 @@
     onselect,
     onselecttrack,
     oncommit,
+    onfinish,
   }: {
     layout: ClockLayout;
     store: FliqStore;
@@ -38,7 +44,10 @@
     groupLimit: string;
     onselect: (id: number | null, additive?: boolean) => void;
     onselecttrack: (ref: TrackRef) => void;
-    oncommit: (next: ClockLayout | null, refusal?: string) => void;
+    /** `key` names a gesture (a column edge drag) whose steps share one undo step. */
+    oncommit: (next: ClockLayout | null, refusal?: string, key?: string | null) => void;
+    /** A gesture ended: its value goes out at once. */
+    onfinish: () => void;
   } = $props();
 
   const RULER = 18;
@@ -61,7 +70,8 @@
     additive: boolean;
     target: CellRect;
     overId: number | null;
-    before: boolean;
+    /** What dropping on `overId` here does; null: nothing (the block goes back). */
+    drop: { zone: DropZone; layout: ClockLayout } | null;
   };
   let drag = $state<Drag | null>(null);
   let memberMenu = $state<{ groupId: number; index: number; x: number; y: number } | null>(null);
@@ -71,6 +81,7 @@
     drag = null;
     memberMenu = null;
     removeListeners();
+    endColumn();
   }
 
   onDestroy(cancelDrag);
@@ -97,7 +108,7 @@
       additive: e.shiftKey || e.ctrlKey || e.metaKey,
       target: { x: block.x, y: block.y, w: block.w, h: block.h },
       overId: null,
-      before: false,
+      drop: null,
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", end);
@@ -125,9 +136,12 @@
         .map((el) => (el as HTMLElement).closest?.("[data-block]") as HTMLElement | null)
         .find((el) => el && Number(el.dataset.block) !== block.id);
       drag.overId = over ? Number(over.dataset.block) : null;
+      drag.drop = null;
       if (over) {
         const box = over.getBoundingClientRect();
-        drag.before = e.clientX < box.left + box.width / 2;
+        const shareX = (e.clientX - box.left) / box.width;
+        const shareY = (e.clientY - box.top) / box.height;
+        drag.drop = dropTarget(layout, drag.overId!, block.id, shareX, shareY);
       }
     } else {
       drag.target = grid.resizeTarget(block, drag.mode, dx / scale, dy / scale);
@@ -145,10 +159,16 @@
     }
     const block = layout.blocks.find((b) => b.id === d.id);
     if (!block) return;
-    // Dropped onto another block where it does not fit: the two become one group.
-    if (d.mode === "move" && d.overId !== null && !grid.fits(d.target, d.id)) {
-      oncommit(grid.mergedInto(d.overId, d.id, d.before), groupLimit);
-      onselect(d.overId);
+    // Dropped onto another block: its zone decides (group, beside it, a new row); without a
+    // possible zone the block goes back where it was.
+    if (d.mode === "move" && d.overId !== null) {
+      if (d.drop) {
+        oncommit(d.drop.layout);
+        onselect(d.drop.zone === "group" ? d.overId : d.id);
+      } else {
+        const over = layout.blocks.find((b) => b.id === d.overId);
+        if ((over?.items?.length ?? 0) >= CONTENT_LIMITS.groupMembers) oncommit(null, groupLimit);
+      }
       return;
     }
     const same = d.target.x === block.x && d.target.y === block.y && d.target.w === block.w && d.target.h === block.h;
@@ -156,6 +176,39 @@
   }
 
   const ghostFits = $derived(drag?.moved ? grid.fits(drag.target, drag.id) : true);
+
+  // ---- Column widths: a handle on every column's right edge ----
+
+  /** The grid when the drag began: widths are measured from there, so steps never add up. */
+  let columnDrag = $state<{ index: number; startX: number; startGrid: LayoutGrid } | null>(null);
+
+  function startColumn(e: PointerEvent, index: number) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    columnDrag = { index, startX: e.clientX, startGrid: grid };
+    window.addEventListener("pointermove", moveColumn);
+    window.addEventListener("pointerup", endColumn);
+    window.addEventListener("pointercancel", endColumn);
+  }
+
+  function moveColumn(e: PointerEvent) {
+    if (!columnDrag) return;
+    const width = columnDrag.startGrid.columnWidthAfterDrag(columnDrag.index, (e.clientX - columnDrag.startX) / scale);
+    oncommit(grid.withColumnWidth(columnDrag.index, width), undefined, `column-width-${columnDrag.index}`);
+  }
+
+  function endColumn() {
+    window.removeEventListener("pointermove", moveColumn);
+    window.removeEventListener("pointerup", endColumn);
+    window.removeEventListener("pointercancel", endColumn);
+    if (columnDrag) onfinish();
+    columnDrag = null;
+  }
+
+  function resetColumn(index: number) {
+    if (grid.columnWidthOverride(index) !== null) oncommit(grid.withColumnWidth(index, null));
+  }
 
   // ---- What a block shows, as text ----
 
@@ -261,6 +314,36 @@
         title={t("fliq.layout.column", { n: i + 1 })}
         onclick={() => onselecttrack({ axis: "column", index: i })}
       ></button>
+      <!-- Pull to set the column's width, double-click (or Delete) for the default. -->
+      <span
+        class="column-edge"
+        class:dragging={columnDrag?.index === i}
+        class:own={grid.columnWidthOverride(i) !== null}
+        style:left="{r.left + r.width}px"
+        role="slider"
+        tabindex="0"
+        aria-orientation="horizontal"
+        aria-label={t("fliq.layout.columnWidth", { n: i + 1 })}
+        aria-valuemin={TRACK_LIMITS.min}
+        aria-valuemax={TRACK_LIMITS.max}
+        aria-valuenow={grid.trackSize({ axis: "column", index: i })}
+        title={t("fliq.layout.columnWidthHint")}
+        onpointerdown={(e) => startColumn(e, i)}
+        ondblclick={() => resetColumn(i)}
+        onkeydown={(e) => {
+          const step = e.key === "ArrowRight" ? 4 : e.key === "ArrowLeft" ? -4 : 0;
+          if (step) {
+            e.preventDefault();
+            oncommit(grid.withColumnWidth(i, grid.columnWidthAfterDrag(i, step)), undefined, `column-width-${i}`);
+          } else if (e.key === "Delete" || e.key === "Backspace") {
+            e.preventDefault();
+            resetColumn(i);
+          }
+        }}
+        onkeyup={(e) => {
+          if (e.key === "ArrowRight" || e.key === "ArrowLeft") onfinish();
+        }}
+      ></span>
     {/each}
   </div>
   <div class="body">
@@ -311,8 +394,7 @@
           class:selected={isSelected}
           class:locked
           class:dragging={drag?.moved && drag.id === block.id}
-          class:drop-target={drag?.moved && drag.overId === block.id}
-          class:flip={!locked && block.textStyle === "flip"}
+          class:stacked={!locked && block.kind === "group" && block.direction === "column"}
           data-block={block.id}
           style={blockStyle(block)}
           role="button"
@@ -332,9 +414,10 @@
             <Lock size={14} aria-hidden="true" />
           {/if}
           {#each items(block) as item, index (index)}
-            {#if index > 0}<span class="sep" aria-hidden="true">·</span>{/if}
+            {#if index > 0 && block.direction !== "column"}<span class="sep" aria-hidden="true">·</span>{/if}
             <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <span class="item" oncontextmenu={(e) => openMemberMenu(e, block, index)}>{itemLabel(item)}</span>
+            <span class="item" class:card={!locked && itemTextStyle(item, block) === "flip" && drawsText(item)}
+              oncontextmenu={(e) => openMemberMenu(e, block, index)}>{itemLabel(item)}</span>
           {/each}
           {#if isSelected && selected.length === 1 && !locked}
             <span class="handle right" aria-hidden="true" onpointerdown={(e) => start(e, block, "right")}></span>
@@ -344,12 +427,27 @@
         </div>
       {/each}
 
-      {#if drag?.moved}
+      {#if drag?.moved && drag.overId !== null && drag.drop}
+        {@const over = layout.blocks.find((b) => b.id === drag?.overId)}
+        {#if over}
+          {@const z = rect(over)}
+          <div
+            class="zone zone-{drag.drop.zone}"
+            style:left="{z.left}px"
+            style:top="{z.top}px"
+            style:width="{z.width}px"
+            style:height="{z.height}px"
+          >
+            <span class="zone-label">{t(`fliq.layout.drop.${drag.drop.zone}`)}</span>
+          </div>
+        {/if}
+      {/if}
+
+      {#if drag?.moved && (drag.mode !== "move" || drag.overId === null)}
         {@const g = rect(drag.target)}
         <div
           class="ghost"
-          class:bad={!ghostFits && drag.overId === null}
-          class:merge={drag.overId !== null && !ghostFits}
+          class:bad={!ghostFits}
           style:left="{g.left}px"
           style:top="{g.top}px"
           style:width="{g.width}px"
@@ -360,6 +458,7 @@
       {#if memberMenu}
         {@const group = layout.blocks.find((b) => b.id === memberMenu?.groupId)}
         {@const count = group?.items?.length ?? 0}
+        {@const stacked = group?.direction === "column"}
         <wa-dropdown
           open
           class="member-menu"
@@ -369,8 +468,8 @@
           onwa-after-hide={() => (memberMenu = null)}
         >
           <span slot="trigger" class="menu-anchor" aria-label={t("fliq.layout.memberMenu", { n: memberMenu.index + 1 })}></span>
-          <wa-dropdown-item value="left" disabled={memberMenu.index === 0}>{t("fliq.insp.moveLeft")}</wa-dropdown-item>
-          <wa-dropdown-item value="right" disabled={memberMenu.index >= count - 1}>{t("fliq.insp.moveRight")}</wa-dropdown-item>
+          <wa-dropdown-item value="left" disabled={memberMenu.index === 0}>{t(stacked ? "fliq.insp.moveUp" : "fliq.insp.moveLeft")}</wa-dropdown-item>
+          <wa-dropdown-item value="right" disabled={memberMenu.index >= count - 1}>{t(stacked ? "fliq.insp.moveDown" : "fliq.insp.moveRight")}</wa-dropdown-item>
           <wa-dropdown-item value="detach" disabled={count < 2}>{t("fliq.insp.detach")}</wa-dropdown-item>
           <wa-dropdown-item value="remove" variant="danger" disabled={count < 2}>{t("fliq.insp.removeMember")}</wa-dropdown-item>
         </wa-dropdown>
@@ -456,7 +555,7 @@
     cursor: grab;
     line-height: 1.2;
   }
-  .block.flip .item {
+  .item.card {
     padding: 0.1em 0.3em;
     border-radius: 0.25em;
     background: var(--card);
@@ -478,9 +577,6 @@
   .block.dragging {
     opacity: 0.5;
     cursor: grabbing;
-  }
-  .block.drop-target {
-    outline: 2px dashed var(--wa-color-success-border-loud);
   }
   .item {
     overflow: hidden;
@@ -526,8 +622,79 @@
   .ghost.bad {
     border-color: var(--wa-color-danger-border-loud);
   }
-  .ghost.merge {
-    display: none;
+  .block.stacked {
+    flex-direction: column;
+    justify-content: center;
+    gap: 0;
+  }
+  .block.stacked .item {
+    max-width: 100%;
+  }
+  .column-edge {
+    position: absolute;
+    top: -2px;
+    width: 8px;
+    height: 18px;
+    margin-left: -5px;
+    border-radius: var(--wa-border-radius-s);
+    cursor: ew-resize;
+    touch-action: none;
+    z-index: 1;
+  }
+  .column-edge::after {
+    content: "";
+    position: absolute;
+    left: 3px;
+    top: 2px;
+    bottom: 2px;
+    width: 2px;
+    border-radius: 1px;
+    background: var(--wa-color-neutral-border-loud);
+  }
+  .column-edge.own::after {
+    background: var(--wa-color-brand-fill-loud);
+  }
+  .column-edge:hover::after,
+  .column-edge.dragging::after {
+    background: var(--wa-color-brand-fill-loud);
+    width: 3px;
+  }
+  .column-edge:focus-visible {
+    outline: var(--wa-focus-ring);
+  }
+  .zone {
+    position: absolute;
+    box-sizing: border-box;
+    pointer-events: none;
+    border-radius: var(--wa-border-radius-s);
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+  }
+  .zone-group {
+    border: 2px dashed var(--wa-color-success-border-loud);
+    background: color-mix(in srgb, var(--wa-color-success-fill-loud) 15%, transparent);
+  }
+  .zone-before {
+    border-left: 4px solid var(--wa-color-brand-fill-loud);
+  }
+  .zone-after {
+    border-right: 4px solid var(--wa-color-brand-fill-loud);
+  }
+  .zone-above {
+    border-top: 4px solid var(--wa-color-brand-fill-loud);
+  }
+  .zone-below {
+    border-bottom: 4px solid var(--wa-color-brand-fill-loud);
+  }
+  .zone-label {
+    margin: 2px;
+    padding: 1px 6px;
+    border-radius: var(--wa-border-radius-s);
+    background: var(--wa-color-surface-raised);
+    color: var(--wa-color-text-normal);
+    font-size: var(--wa-font-size-2xs);
+    white-space: nowrap;
   }
   .member-menu {
     position: absolute;
