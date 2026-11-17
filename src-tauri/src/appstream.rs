@@ -396,6 +396,8 @@ pub fn parse(xml: &[u8], lang: &str) -> Vec<AppInfo> {
 }
 
 /// `owner/repo` of the first `https://github.com/<owner>/<repo>[/...]` URL.
+/// Flathub's packaging repos (`flathub/<app id>`) are skipped: they hold the
+/// Flatpak recipe, not the app.
 pub fn github_repo(urls: &[String]) -> Option<String> {
     urls.iter().find_map(|u| {
         let rest = u.strip_prefix("https://github.com/")?;
@@ -404,10 +406,12 @@ pub fn github_repo(urls: &[String]) -> Option<String> {
         let repo = parts.next()?.trim_end_matches(".git");
         let ok = |s: &str| {
             !s.is_empty()
+                && s.chars().any(|c| c != '.')
                 && s.chars()
                     .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
         };
-        (ok(owner) && ok(repo)).then(|| format!("{owner}/{repo}"))
+        (ok(owner) && ok(repo) && !owner.eq_ignore_ascii_case("flathub"))
+            .then(|| format!("{owner}/{repo}"))
     })
 }
 
@@ -620,6 +624,28 @@ mod tests {
             "https://github.com/c/d".to_string(),
         ];
         assert_eq!(github_repo(&both).as_deref(), Some("c/d"));
+        // Flathub's packaging repos (its bug tracker for most apps) are not
+        // the app's own; dot segments name no repo.
+        assert_eq!(
+            github_repo(&u(
+                "https://github.com/flathub/org.gnome.SoundRecorder/issues"
+            )),
+            None
+        );
+        let packaging_first = vec![
+            "https://github.com/flathub/net.a.B/issues".to_string(),
+            "https://github.com/a/b".to_string(),
+        ];
+        assert_eq!(github_repo(&packaging_first).as_deref(), Some("a/b"));
+        for bad in [
+            "https://github.com/../b",
+            "https://github.com/a/..",
+            "https://github.com/./b",
+            "https://github.com/a/.",
+            "https://github.com/a/...git",
+        ] {
+            assert_eq!(github_repo(&u(bad)), None, "{bad}");
+        }
     }
 
     #[test]
