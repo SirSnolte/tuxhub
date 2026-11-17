@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-const MAX_GZ_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_GZ_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_METAINFO_BYTES: u64 = 1024 * 1024;
 const COMPONENT_TYPES: [&str; 3] = ["desktop-application", "desktop", "console-application"];
 
@@ -353,10 +353,11 @@ fn parse_full(xml: &[u8], lang: &str) -> Vec<(AppInfo, Vec<String>)> {
         lists: 0,
         done: Vec::new(),
     };
+    // On broken XML the components read so far stay; the broken one is
+    // left out (it never reaches `done`).
     loop {
         match reader.read_event() {
-            Err(_) => return Vec::new(),
-            Ok(Event::Eof) => break,
+            Err(_) | Ok(Event::Eof) => break,
             Ok(Event::Start(e)) => p.start(&e),
             Ok(Event::Empty(e)) => {
                 p.start(&e);
@@ -369,7 +370,7 @@ fn parse_full(xml: &[u8], lang: &str) -> Vec<(AppInfo, Vec<String>)> {
                 let resolved = if r.is_char_ref() {
                     match r.resolve_char_ref() {
                         Ok(Some(c)) => c.to_string(),
-                        _ => return Vec::new(),
+                        _ => break,
                     }
                 } else {
                     quick_xml::escape::resolve_predefined_entity(&r)
@@ -381,14 +382,11 @@ fn parse_full(xml: &[u8], lang: &str) -> Vec<(AppInfo, Vec<String>)> {
             Ok(_) => {}
         }
     }
-    if !p.stack.is_empty() {
-        return Vec::new(); // truncated document
-    }
     p.done.into_iter().map(|d| finish(d, &cands)).collect()
 }
 
 /// Parses an AppStream collection (Flathub) or a single metainfo file.
-/// Broken or truncated XML yields an empty list. The index uses
+/// Broken or truncated XML yields the components before the break. The index uses
 /// [`parse_full`], which also keeps the launchables.
 #[cfg(test)]
 pub fn parse(xml: &[u8], lang: &str) -> Vec<AppInfo> {
@@ -439,11 +437,21 @@ fn build_index(
     lang: &str,
 ) -> HashMap<String, AppInfo> {
     let mut index = HashMap::new();
+    // The system and the user installation often hold the same Flathub
+    // collection: one with the size and change time of another is skipped.
+    let mut seen = std::collections::HashSet::new();
     let sources = gz
         .iter()
         .map(|p| (p, true))
         .chain(meta.iter().map(|p| (p, false)));
     for (path, is_gz) in sources {
+        if is_gz
+            && let Ok(m) = std::fs::metadata(path)
+            && let Ok(time) = m.modified()
+            && !seen.insert((m.len(), time))
+        {
+            continue;
+        }
         let Some(xml) = read_file(path, is_gz, max_gz, max_meta) else {
             continue;
         };
@@ -484,6 +492,14 @@ fn system_language() -> String {
         .unwrap_or_else(|| "en".into())
 }
 
+/// Flatpak's name for a Rust architecture (`std::env::consts::ARCH`).
+fn flatpak_arch(arch: &str) -> &str {
+    match arch {
+        "x86" => "i386",
+        other => other,
+    }
+}
+
 /// Index of installed apps' AppStream data. Keys are component IDs with and
 /// without `.desktop` plus launchable IDs. Unreadable or oversized files are skipped.
 pub fn load_index() -> HashMap<String, AppInfo> {
@@ -501,7 +517,9 @@ pub fn load_index() -> HashMap<String, AppInfo> {
             .collect();
         remotes.sort();
         for remote in remotes {
-            let f = remote.join("x86_64/active/appstream.xml.gz");
+            let f = remote
+                .join(flatpak_arch(std::env::consts::ARCH))
+                .join("active/appstream.xml.gz");
             if f.is_file() {
                 gz.push(f);
             }
@@ -648,12 +666,82 @@ mod tests {
         }
     }
 
+    /// Broken XML keeps the components read before the break: one bad entry
+    /// late in Flathub's collection must not drop all apps.
     #[test]
-    fn broken_xml_is_empty() {
+    fn broken_xml_keeps_complete_components() {
+        let ids = |xml: &str| -> Vec<String> {
+            parse(xml.as_bytes(), "en")
+                .into_iter()
+                .map(|a| a.id)
+                .collect()
+        };
+        let first = ["com.core447.StreamController"];
         let cut = &COLLECTION[..COLLECTION.len() - 120];
-        assert!(parse(cut.as_bytes(), "en").is_empty());
+        assert_eq!(ids(cut), first, "truncated");
+        let bad_ref = COLLECTION.replace("<name>Other</name>", "<name>Other &#0;</name>");
+        assert_eq!(ids(&bad_ref), first, "invalid char reference");
+        let bad_tag = COLLECTION.replace("<name>Other</name>", "<name>Other</nam>");
+        assert_eq!(ids(&bad_tag), first, "mismatched end tag");
         assert!(parse(b"<<<not xml", "en").is_empty());
         assert!(parse(b"", "en").is_empty());
+    }
+
+    #[test]
+    fn flathub_collections_up_to_256_mb_are_read() {
+        assert_eq!(MAX_GZ_BYTES, 256 * 1024 * 1024);
+    }
+
+    #[test]
+    fn flatpak_arch_names() {
+        assert_eq!(flatpak_arch("x86_64"), "x86_64");
+        assert_eq!(flatpak_arch("aarch64"), "aarch64");
+        assert_eq!(flatpak_arch("x86"), "i386");
+        assert_eq!(flatpak_arch("arm"), "arm");
+    }
+
+    /// The same collection in the system and the user installation (same
+    /// size and change time) is parsed once.
+    #[test]
+    fn same_collection_is_read_once() {
+        let dir = temp("same");
+        // Stored without compression: the same length gives the same size.
+        let stored = |data: &str| {
+            use std::io::Write;
+            let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::none());
+            e.write_all(data.as_bytes()).unwrap();
+            e.finish().unwrap()
+        };
+        let (a, b) = (dir.join("a.xml.gz"), dir.join("b.xml.gz"));
+        std::fs::write(&a, stored(COLLECTION)).unwrap();
+        // Same size and time, other content: had it been parsed, its app
+        // would be in the index.
+        let other = COLLECTION.replace("org.example.Other", "org.example.Xther");
+        std::fs::write(&b, stored(&other)).unwrap();
+        let len = |p: &Path| std::fs::metadata(p).unwrap().len();
+        assert_eq!(len(&a), len(&b));
+        let time = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1000);
+        for p in [&a, &b] {
+            std::fs::File::options()
+                .write(true)
+                .open(p)
+                .unwrap()
+                .set_modified(time)
+                .unwrap();
+        }
+        let idx = build_index(&[a, b.clone()], &[], MAX_GZ_BYTES, MAX_METAINFO_BYTES, "en");
+        assert!(idx.contains_key("org.example.Other"));
+        assert!(!idx.contains_key("org.example.Xther"));
+        // Another time is another file.
+        std::fs::File::options()
+            .write(true)
+            .open(&b)
+            .unwrap()
+            .set_modified(time + std::time::Duration::from_secs(1))
+            .unwrap();
+        let a = dir.join("a.xml.gz");
+        let idx = build_index(&[a, b], &[], MAX_GZ_BYTES, MAX_METAINFO_BYTES, "en");
+        assert!(idx.contains_key("org.example.Xther"));
     }
 
     const INLINE_TRANSLATIONS: &str = r#"<component type="desktop-application"><id>a.b</id>
