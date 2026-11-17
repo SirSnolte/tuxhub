@@ -650,6 +650,14 @@ fn local_tool_id(app: &local_apps::LocalApp, catalog: &[Entry]) -> String {
 
 /// The apps with their state in tuxhub; `in_hub`: tools shown in an xpra
 /// session.
+/// Whether the start menu entry starts a tool tuxhub installed: such tools
+/// write their own entries, but they already are tuxhub's tools.
+fn is_own_tool(hub: &Hub, app: &local_apps::LocalApp) -> bool {
+    app.command
+        .first()
+        .is_some_and(|p| Path::new(p).starts_with(&hub.tools_dir))
+}
+
 async fn local_app_views(
     hub: &Hub,
     apps: Vec<local_apps::LocalApp>,
@@ -658,7 +666,8 @@ async fn local_app_views(
 ) -> Vec<LocalAppView> {
     let records = tools::load_all(&hub.tools_dir);
     let updates = hub.updates.lock().unwrap().clone();
-    let views = apps.into_iter().map(|app| {
+    let apps = apps.into_iter().filter(|a| !is_own_tool(hub, a));
+    let views = apps.map(|app| {
         let tool_id = local_tool_id(&app, catalog);
         let record = records.iter().find(|r| r.entry.id == tool_id);
         let update = updates.get(&tool_id).cloned();
@@ -717,6 +726,7 @@ async fn add_local_app(
     let app = (desktop_id.len() <= MAX_DESKTOP_ID)
         .then(|| apps.iter().find(|a| a.desktop_id == desktop_id))
         .flatten()
+        .filter(|a| !is_own_tool(hub, a))
         .ok_or("this is not an app on this computer")?;
     let mut inst = match local_apps::catalog_entry(&catalog, &app.source) {
         Some(i) => {
@@ -2431,6 +2441,28 @@ while True:
             },
             &[program],
         )
+    }
+
+    /// Tools tuxhub installed put their own start menu entries next to the
+    /// apps; they are tuxhub's tools already, never a second, adopted copy.
+    #[tokio::test]
+    async fn own_tools_are_not_installed_apps() {
+        let (hub, f) = hub_with_fakes("local-own-tools");
+        f.set("run-a", "exit 0");
+        let run_a = f.dir.join("run-a");
+        let own = hub.tools_dir.join("autoclicker/files/tuxhub-autoclicker");
+        let apps = vec![
+            installed_program("a.desktop", run_a.to_str().unwrap()),
+            installed_program("own.desktop", own.to_str().unwrap()),
+        ];
+        let views = local_app_views(&hub, apps.clone(), &[], &Default::default()).await;
+        let ids: Vec<_> = views.iter().map(|v| v.app.desktop_id.as_str()).collect();
+        assert_eq!(ids, ["a.desktop"]);
+        assert!(
+            add_local_app(&hub, &apps, vec![], "own.desktop")
+                .await
+                .is_err()
+        );
     }
 
     /// Only an app of the current list can be added; the string from the
