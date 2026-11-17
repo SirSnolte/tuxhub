@@ -1,7 +1,7 @@
 // Choices of the Fliq menu, taken over from Fliq 2 (MIT, github.com/Dav1d-Fn/Fliq-Desktop-Flipclock):
 // src/settings/options.ts, src/blocks/*Block.ts and the editor's SizePresets.tsx. Fliq checks
 // every value itself; these lists only decide what the menu offers.
-import type { BlockKind, LayoutBlock, MemberKind } from "./layout-model.ts";
+import type { BlockKind, LayoutBlock, MemberKind } from "./layout-types.ts";
 
 /** Fonts Fliq ships or expects; only these are ever set as CSS `font-family`. */
 export const FONT_OPTIONS: { value: string; label: string }[] = [
@@ -52,7 +52,6 @@ export const RANGES = {
   padding: { min: 0, max: 32, unit: "px" },
   gap: { min: 0, max: 48, unit: "px" },
   columnWidth: { min: 24, max: 192, unit: "px" },
-  rowHeight: { min: 24, max: 192, unit: "px" },
   textSize: { min: 30, max: 250, unit: "%" },
   letterSpacing: { min: -1, max: 0.5, unit: "em" },
   cardRadius: { min: 0, max: 50, unit: "%" },
@@ -72,20 +71,12 @@ export type BlockKindInfo = {
   alignable: boolean;
 };
 
-/** The block kinds the add bar offers, in Fliq's order. */
+/** The block kinds the add bar offers, in Fliq's order (Fliq 2.1, src/blocks/*Block.ts). */
 export const BLOCK_KINDS: BlockKindInfo[] = [
   {
-    kind: "flip",
+    kind: "clock",
     defaultSize: { w: 3, h: 1 },
-    defaults: { display: "HH:mm", customFormat: "HH:mm" },
-    displays: ["HH:mm", "HH:mm:ss"],
-    customFormat: true,
-    alignable: false,
-  },
-  {
-    kind: "time",
-    defaultSize: { w: 2, h: 1 },
-    defaults: { display: "HH:mm", customFormat: "HH:mm" },
+    defaults: { display: "HH:mm", customFormat: "HH:mm", textStyle: "flip" },
     displays: ["HH:mm", "HH:mm:ss"],
     customFormat: true,
     alignable: true,
@@ -114,9 +105,17 @@ export const BLOCK_KINDS: BlockKindInfo[] = [
     customFormat: false,
     alignable: true,
   },
+  {
+    kind: "calendar",
+    defaultSize: { w: 3, h: 1 },
+    defaults: { display: "next", calendar: {} },
+    displays: ["next", "list", "week"],
+    customFormat: false,
+    alignable: true,
+  },
 ];
 
-export function kindInfo(kind: BlockKind): BlockKindInfo | undefined {
+export function kindInfo(kind: BlockKind | string): BlockKindInfo | undefined {
   return BLOCK_KINDS.find((k) => k.kind === kind);
 }
 

@@ -24,6 +24,26 @@ test("edge case 8: a broken layout from outside is not shown, the last good one 
   assert.deepEqual(unusable, [FLIQ_LAYOUT, FLIQ_LAYOUT]);
 });
 
+test("bug of 0.12.0: Fliq 2.1's layout is taken, not reported as unusable", async () => {
+  const { store, unusable } = await menu();
+  const fliq21 = {
+    columns: 4,
+    rows: 2,
+    columnGap: 0,
+    rowGap: 0,
+    blocks: [
+      { id: 1, kind: "clock", textStyle: "flip", x: 0, y: 0, w: 4, h: 1, display: "HH:mm", cardColor: "#212121ff", letterSpacing: -0.03, textSize: 99, paddingY: 4 },
+      {
+        id: 2, kind: "group", x: 0, y: 1, w: 4, h: 1, display: "group", itemGap: 0.9, letterSpacing: -0.14, textSize: 82, paddingY: 13,
+        items: [{ kind: "date", display: "ddd, DD.MM" }, { kind: "weather", display: "sun", weatherIcon: true }, { kind: "weather", display: "temp", weatherIcon: true }],
+      },
+    ],
+  };
+  store.changed({ [FLIQ_LAYOUT]: fliq21 });
+  assert.deepEqual(unusable, []);
+  assert.deepEqual(store.values[FLIQ_LAYOUT], fliq21);
+});
+
 test("values of the wrong type are not taken over", async () => {
   const { store } = await menu();
   store.changed({ hourCycle: 12, textColor: "red", weatherLocation: 5 });

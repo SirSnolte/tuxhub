@@ -1,7 +1,7 @@
 // What the Fliq menu takes from Fliq: every value is checked for its type before the menu
 // shows it (Fliq's storage keys, see Fliq's src/tuxhub/tuxhubSchema.ts). Values that do not
 // pass keep the last good one. Tested in tests/fliq-store.test.mjs.
-import { isColor, validLayout } from "./layout-model.ts";
+import { isColor, readLayout } from "./layout-check.ts";
 
 /** Storage key of the block layout. */
 export const FLIQ_LAYOUT = "clockLayout";
@@ -27,7 +27,7 @@ const CHECKS: Record<string, (v: unknown) => boolean> = {
   hideInTaskbar: isBool,
   alwaysOnTop: isBool,
   overlayMode: oneOf("auto", "layer-shell", "x11"),
-  [FLIQ_LAYOUT]: (v) => validLayout(v) !== null,
+  [FLIQ_LAYOUT]: (v) => readLayout(v) !== null,
 };
 
 /** Whether the menu can show `value` for `key`. Keys it does not use pass unchanged. */

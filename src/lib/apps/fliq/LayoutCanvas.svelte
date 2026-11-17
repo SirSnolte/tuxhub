@@ -1,12 +1,15 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { t, type Key } from "../../i18n.svelte";
+  import { Lock } from "@lucide/svelte";
   import { knownFont } from "./fliq-options";
   import {
     BLOCK_DEFAULTS,
+    isLocked,
     LayoutGrid,
     placeBlock,
     safeColor,
+    sizesFor,
     type CellRect,
     type ClockLayout,
     type GroupItem,
@@ -80,6 +83,11 @@
     if (e.button !== 0) return;
     e.stopPropagation();
     memberMenu = null;
+    // A locked block can only be selected (and then deleted), never dragged.
+    if (isLocked(block)) {
+      onselect(block.id, e.shiftKey || e.ctrlKey || e.metaKey);
+      return;
+    }
     drag = {
       id: block.id,
       mode,
@@ -157,40 +165,54 @@
 
   function itemLabel(item: GroupItem): string {
     switch (item.kind) {
-      case "flip":
-        return `${t("fliq.kind.flip")} ${format(item)}`;
-      case "time":
+      case "clock":
+        if (item.clockStyle && item.clockStyle !== "digital") return t(`fliq.clockStyle.${item.clockStyle}` as Key);
+        return format(item);
       case "date":
         return format(item);
       case "weather":
         return `${item.weatherIcon === false ? "" : "☀ "}${t(`fliq.display.${item.display}` as Key)}`;
       case "text":
         return item.text ?? "";
+      case "calendar":
+        return `${t("fliq.kind.calendar")}: ${t(`fliq.display.${item.display}` as Key)}`;
+      default:
+        return "";
     }
   }
 
+  /** What a block shows; a locked block shows nothing of its own (its fields are unchecked). */
   function items(block: LayoutBlock): GroupItem[] {
-    return LayoutGrid.itemsOf(block);
+    return isLocked(block) ? [] : LayoutGrid.itemsOf(block);
+  }
+
+  function blockLabel(block: LayoutBlock): string {
+    if (isLocked(block)) return t("fliq.layout.locked");
+    return `${t(`fliq.kind.${block.kind}` as Key)}: ${items(block).map(itemLabel).join(", ")}`;
   }
 
   const defaultColor = $derived(safeColor(store.values.textColor, ""));
   const defaultFont = $derived(knownFont(store.values.textFont));
   const clockBackground = $derived(safeColor(store.values.boxBackgroundColor, ""));
 
+  const JUSTIFY: Record<string, string> = { left: "flex-start", right: "flex-end", center: "center" };
+
   function blockStyle(block: LayoutBlock): string {
     const r = rect(block);
     const parts = [`left:${r.left}px`, `top:${r.top}px`, `width:${r.width}px`, `height:${r.height}px`];
+    parts.push(`font-size:${Math.max(10, Math.min(r.height * 0.32, 28))}px`);
+    // A locked block's fields are unchecked: none of them reaches the CSS.
+    if (isLocked(block)) return parts.join(";");
     const color = safeColor(block.color, defaultColor);
     if (color) parts.push(`color:${color}`);
     const font = knownFont(block.font) ?? defaultFont;
     if (font) parts.push(`font-family:${font}`);
-    if (block.kind === "flip") parts.push(`--card:${safeColor(block.cardColor, BLOCK_DEFAULTS.cardColor)}`);
+    if (block.textStyle === "flip") parts.push(`--card:${safeColor(block.cardColor, BLOCK_DEFAULTS.cardColor)}`);
     if (block.background) {
       parts.push(`background:${safeColor(block.backgroundColor, BLOCK_DEFAULTS.backgroundColor)}`);
       parts.push(`border-radius:${(block.backgroundRadius ?? BLOCK_DEFAULTS.backgroundRadius) * scale}px`);
     }
-    parts.push(`font-size:${Math.max(10, Math.min(r.height * 0.32, 28))}px`);
-    parts.push(`justify-content:${{ left: "flex-start", right: "flex-end", center: "center" }[block.align ?? "center"]}`);
+    parts.push(`justify-content:${JUSTIFY[block.align ?? "center"]}`);
     return parts.join(";");
   }
 
@@ -207,14 +229,15 @@
     else if (action === "right") oncommit(grid.withMemberMoved(groupId, index, 1));
     else if (action === "remove") oncommit(grid.withMemberRemoved(groupId, index));
     else if (action === "detach") {
-      const result = grid.withMemberDetached(groupId, index);
+      const kind = layout.blocks.find((b) => b.id === groupId)?.items?.[index]?.kind ?? "text";
+      const result = grid.withMemberDetached(groupId, index, sizesFor(kind));
       oncommit(result?.layout ?? null, t("fliq.layout.full"));
       if (result) onselect(result.blockId);
     }
   }
 
   function openMemberMenu(e: MouseEvent, block: LayoutBlock, index: number) {
-    if (block.kind !== "group" || !surface) return;
+    if (block.kind !== "group" || isLocked(block) || !surface) return;
     e.preventDefault();
     e.stopPropagation();
     const box = surface.getBoundingClientRect();
@@ -282,18 +305,21 @@
 
       {#each layout.blocks as block (block.id)}
         {@const isSelected = selected.includes(block.id)}
+        {@const locked = isLocked(block)}
         <div
           class="block"
           class:selected={isSelected}
+          class:locked
           class:dragging={drag?.moved && drag.id === block.id}
           class:drop-target={drag?.moved && drag.overId === block.id}
-          class:flip={block.kind === "flip"}
+          class:flip={!locked && block.textStyle === "flip"}
           data-block={block.id}
           style={blockStyle(block)}
           role="button"
           tabindex="0"
           aria-pressed={isSelected}
-          aria-label={`${t(`fliq.kind.${block.kind}` as Key)}: ${items(block).map(itemLabel).join(", ")}`}
+          aria-label={blockLabel(block)}
+          title={locked ? t("fliq.layout.locked") : undefined}
           onpointerdown={(e) => start(e, block, "move")}
           onkeydown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
@@ -302,12 +328,15 @@
             }
           }}
         >
+          {#if locked}
+            <Lock size={14} aria-hidden="true" />
+          {/if}
           {#each items(block) as item, index (index)}
             {#if index > 0}<span class="sep" aria-hidden="true">·</span>{/if}
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <span class="item" oncontextmenu={(e) => openMemberMenu(e, block, index)}>{itemLabel(item)}</span>
           {/each}
-          {#if isSelected && selected.length === 1}
+          {#if isSelected && selected.length === 1 && !locked}
             <span class="handle right" aria-hidden="true" onpointerdown={(e) => start(e, block, "right")}></span>
             <span class="handle bottom" aria-hidden="true" onpointerdown={(e) => start(e, block, "bottom")}></span>
             <span class="handle corner" aria-hidden="true" onpointerdown={(e) => start(e, block, "corner")}></span>
@@ -431,6 +460,13 @@
     padding: 0.1em 0.3em;
     border-radius: 0.25em;
     background: var(--card);
+  }
+  .block.locked {
+    justify-content: center;
+    border-style: dashed;
+    background: var(--wa-color-neutral-fill-normal);
+    color: var(--wa-color-text-quiet);
+    cursor: default;
   }
   .block:focus-visible {
     outline: var(--wa-focus-ring);

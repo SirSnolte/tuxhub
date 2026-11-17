@@ -1,7 +1,7 @@
 <script lang="ts">
   import { t } from "../../i18n.svelte";
   import { RANGES } from "./fliq-options";
-  import { LayoutGrid, type ClockLayout } from "./layout-model";
+  import { BLOCK_DEFAULTS, gridValue, LayoutGrid, updateGrid, type ClockLayout, type RowAlign } from "./layout-model";
   import { SLIDE_DELAY, type FliqStore } from "./store.svelte";
   import type { Commit } from "./inspector";
   import ColorField from "./ColorField.svelte";
@@ -24,10 +24,12 @@
     if (done) store.blur(key);
   }
 
-  function spacing(field: "columnGap" | "rowGap" | "columnWidth" | "rowHeight", value: number, done: boolean) {
-    oncommit({ ...layout, [field]: Math.round(value) }, field);
+  function spacing(field: "columnGap" | "rowGap" | "columnWidth", value: number, done: boolean) {
+    oncommit(updateGrid(layout, { [field]: Math.round(value) }), field);
     if (done) onfinish();
   }
+
+  const valueOf = (e: Event) => (e.target as HTMLInputElement).value;
 </script>
 
 <div class="fields">
@@ -63,28 +65,33 @@
   <wa-divider></wa-divider>
   <RangeField
     label={t("fliq.insp.columnGap")}
-    value={grid.defaultGap("column")}
+    value={grid.gap("column")}
     range={RANGES.gap}
     onchange={(v, done) => spacing("columnGap", v, done)}
   />
   <RangeField
     label={t("fliq.insp.rowGap")}
-    value={grid.defaultGap("row")}
+    value={grid.gap("row")}
     range={RANGES.gap}
     onchange={(v, done) => spacing("rowGap", v, done)}
   />
   <RangeField
     label={t("fliq.insp.columnWidth")}
-    value={grid.defaultTrackSize("column")}
+    value={grid.defaultColumnWidth()}
     range={RANGES.columnWidth}
     onchange={(v, done) => spacing("columnWidth", v, done)}
   />
-  <RangeField
-    label={t("fliq.insp.rowHeight")}
-    value={grid.defaultTrackSize("row")}
-    range={RANGES.rowHeight}
-    onchange={(v, done) => spacing("rowHeight", v, done)}
-  />
+  <wa-radio-group
+    orientation="horizontal"
+    size="s"
+    value={gridValue(layout, "rowAlign") ?? BLOCK_DEFAULTS.rowAlign}
+    onchange={(e: Event) => oncommit(updateGrid(layout, { rowAlign: valueOf(e) as RowAlign }))}
+  >
+    <span slot="label">{t("fliq.insp.rowAlign")}</span>
+    {#each ["top", "center", "bottom"] as const as a (a)}
+      <wa-radio appearance="button" value={a}>{t(`fliq.insp.rowAlign.${a}`)}</wa-radio>
+    {/each}
+  </wa-radio-group>
 </div>
 
 <style>

@@ -4,12 +4,12 @@
   import { t } from "../../i18n.svelte";
   import { FLIQ_LAYOUT } from "./fliq-values";
   import {
+    checkedEdit,
     CONTENT_LIMITS,
     LayoutGrid,
     LayoutHistory,
     moveBlock,
     removeBlocks,
-    validLayout,
     type ClockLayout,
     type TrackRef,
   } from "./layout-model";
@@ -66,7 +66,8 @@
    */
   function commit(next: ClockLayout | null, key: string | null = null, refusal = t("fliq.layout.limit")) {
     if (!layout) return;
-    const checked = next && validLayout(next);
+    // Locked blocks and fields the menu does not know go out exactly as they came.
+    const checked = checkedEdit(layout, next);
     if (!checked) {
       complain(refusal);
       return;

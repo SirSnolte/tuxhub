@@ -3,7 +3,7 @@
 import { StoredSettings } from "../menu-store.ts";
 import type { MenuCall } from "../menus.ts";
 import { acceptFliq, FLIQ_LAYOUT } from "./fliq-values.ts";
-import { validLayout, type ClockLayout } from "./layout-model.ts";
+import { readLayout, type ClockLayout } from "./layout-model.ts";
 
 /** Pause after the last input of text fields, and of sliders and dragging. */
 export const TEXT_DELAY = 400;
@@ -78,8 +78,9 @@ export class FliqStore {
     this.#inner.cancel();
   }
 
+  /** Fliq's layout as the menu shows it: unknown fields kept, see layout-check.ts. */
   get layout(): ClockLayout | null {
-    return validLayout(this.values[FLIQ_LAYOUT]);
+    return readLayout(this.values[FLIQ_LAYOUT]);
   }
 
   text(key: string, fallback = ""): string {

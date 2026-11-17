@@ -10,6 +10,7 @@
     LayoutGrid,
     placeBlock,
     removeBlocks,
+    sizesFor,
     updateBlock,
     type BlockAlign,
     type ClockLayout,
@@ -72,6 +73,12 @@
     };
   }
 
+  /** Unset padding: Fliq's defaults with an own background, else none (LayoutGrid.paddingOf). */
+  const padding = $derived.by(() => {
+    const fallback = block.background ? BLOCK_DEFAULTS : { paddingX: 0, paddingY: 0 };
+    return { x: block.paddingX ?? fallback.paddingX, y: block.paddingY ?? fallback.paddingY };
+  });
+
   const presets = $derived(SIZE_PRESETS.filter((p) => p.w <= layout.columns && p.h <= layout.rows));
 </script>
 
@@ -109,7 +116,7 @@
               </wa-button>
               <wa-button size="s" appearance="plain" title={t("fliq.insp.detach")}
                 onclick={() => {
-                  const result = grid.withMemberDetached(block.id, index);
+                  const result = grid.withMemberDetached(block.id, index, sizesFor(block.items?.[index]?.kind ?? "text"));
                   oncommit(result?.layout ?? null, null, t("fliq.layout.full"));
                 }}>
                 <LogOut size={14} aria-hidden="true" /><span class="wa-visually-hidden">{t("fliq.insp.detach")}</span>
@@ -190,7 +197,7 @@
   <RangeField label={t("fliq.insp.letterSpacing")} value={block.letterSpacing ?? 0} range={RANGES.letterSpacing} step={0.01}
     onchange={(v, done) => slide("letterSpacing", v, done)} />
 
-  {#if block.kind === "flip"}
+  {#if block.textStyle === "flip"}
     <ColorField label={t("fliq.insp.cardColor")} value={block.cardColor} onchange={(cardColor) => patch({ cardColor })}
       onreset={() => patch({ cardColor: undefined })} />
     <RangeField label={t("fliq.insp.cardRadius")} value={block.cardRadius ?? BLOCK_DEFAULTS.cardRadius} range={RANGES.cardRadius}
@@ -206,8 +213,10 @@
     <RangeField label={t("fliq.insp.backgroundRadius")} value={block.backgroundRadius ?? BLOCK_DEFAULTS.backgroundRadius}
       range={RANGES.backgroundRadius} onchange={(v, done) => slide("backgroundRadius", Math.round(v), done)} />
   {/if}
-  <RangeField label={t("fliq.insp.padding")} value={block.padding ?? BLOCK_DEFAULTS.padding} range={RANGES.blockPadding}
-    onchange={(v, done) => slide("padding", Math.round(v), done)} />
+  <RangeField label={t("fliq.insp.paddingX")} value={padding.x} range={RANGES.blockPadding}
+    onchange={(v, done) => slide("paddingX", Math.round(v), done)} />
+  <RangeField label={t("fliq.insp.paddingY")} value={padding.y} range={RANGES.blockPadding}
+    onchange={(v, done) => slide("paddingY", Math.round(v), done)} />
   <RangeField label={t("fliq.insp.offsetX")} value={block.offsetX ?? 0} range={RANGES.offset}
     onchange={(v, done) => slide("offsetX", Math.round(v), done)} />
   <RangeField label={t("fliq.insp.offsetY")} value={block.offsetY ?? 0} range={RANGES.offset}
