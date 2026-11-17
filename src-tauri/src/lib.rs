@@ -306,16 +306,27 @@ async fn ensure_live_within(hub: &Hub, id: &str, wait: std::time::Duration) -> R
         return Err(format!("{} is missing", exe.display()));
     }
     // Without a shell, in its own process group: the service keeps running
-    // when tuxhub exits.
-    let mut child = tokio::process::Command::new(&exe)
-        .args(&start.args)
-        .current_dir(&root)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .process_group(0)
-        .spawn()
-        .map_err(|e| format!("{name} does not start: {e}"))?;
+    // when tuxhub exits. A program still open for writing ("Text file busy",
+    // e.g. a forked process inherited the handle or an update is finishing)
+    // is tried again for a short while.
+    let mut attempts = 0;
+    let mut child = loop {
+        let spawned = tokio::process::Command::new(&exe)
+            .args(&start.args)
+            .current_dir(&root)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0)
+            .spawn();
+        match spawned {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 20 => {
+                attempts += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+            other => break other.map_err(|e| format!("{name} does not start: {e}"))?,
+        }
+    };
     let deadline = tokio::time::Instant::now() + wait;
     let mut exited = None;
     let result = loop {
@@ -2147,6 +2158,26 @@ while True:
             .count();
         stop_services(&base);
         assert_eq!(starts, 1);
+    }
+
+    /// A program that is still open for writing for a moment (a parallel
+    /// fork inherited the handle, or an update is just finishing) starts
+    /// once it is free instead of failing with "Text file busy".
+    #[tokio::test]
+    async fn ensure_live_waits_for_a_busy_program() {
+        let (hub, base) = hub_with_service("ensure-busy", TEST_SERVICE);
+        let writer = std::fs::OpenOptions::new()
+            .append(true)
+            .open(base.join("tool/service"))
+            .unwrap();
+        let release = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            drop(writer);
+        });
+        let result = ensure_live(&hub, "livedemo").await;
+        release.await.unwrap();
+        stop_services(&base);
+        result.unwrap();
     }
 
     /// Edge case 13: a service that ends at once, or never listens, gives an
