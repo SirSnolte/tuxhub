@@ -1620,14 +1620,41 @@ fn hub_settings_get(app: AppHandle) -> system::HubSettings {
 }
 
 #[tauri::command]
-fn hub_settings_set(app: AppHandle, settings: system::HubSettings) -> Result<(), String> {
+fn hub_settings_set(app: AppHandle, mut settings: system::HubSettings) -> Result<(), String> {
     let hub = app.state::<Hub>();
+    settings.keep_workshop(&hub.settings.lock().unwrap());
     system::apply_autostart(&settings)?;
     settings
         .save(&hub.hub_settings_path)
         .map_err(|e| e.to_string())?;
     *hub.settings.lock().unwrap() = settings;
     Ok(())
+}
+
+/// Changes the saved hub settings with `change` and stores them.
+fn change_settings(
+    hub: &Hub,
+    change: impl FnOnce(&mut system::HubSettings) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut settings = hub.settings.lock().unwrap();
+    let mut next = settings.clone();
+    change(&mut next)?;
+    next.save(&hub.hub_settings_path)
+        .map_err(|e| e.to_string())?;
+    *settings = next;
+    Ok(())
+}
+
+/// The workshop area of an app; `None` goes back to the automatic one.
+#[tauri::command]
+fn app_area_set(app: AppHandle, desktop_id: String, area: Option<String>) -> Result<(), String> {
+    change_settings(&app.state::<Hub>(), |s| s.set_area(&desktop_id, area))
+}
+
+/// The workshop's view (`grid`/`list`) and folded areas.
+#[tauri::command]
+fn workshop_prefs_set(app: AppHandle, view: String, collapsed: Vec<String>) -> Result<(), String> {
+    change_settings(&app.state::<Hub>(), |s| s.set_workshop_prefs(&view, collapsed))
 }
 
 /// The version tuxhub was updated from, once per update.
@@ -2107,6 +2134,8 @@ pub fn run() {
             local_apps_update,
             local_app_remove_preview,
             local_app_remove,
+            app_area_set,
+            workshop_prefs_set,
             tool_remove_copy,
             tool_dismiss_duplicate,
             tool_forget,

@@ -126,6 +126,10 @@ export type HubSettings = {
   start_minimized: boolean;
   close_to_tray: boolean;
   check_updates: boolean;
+  /** Desktop id -> workshop area the user chose (kept by the backend). */
+  app_areas?: Record<string, string>;
+  workshop_view?: "grid" | "list";
+  workshop_collapsed?: string[];
 };
 
 /** Error of the live interface: `code` selects the text, `message` has the details. */
@@ -297,6 +301,10 @@ export const api = {
   configureShortcuts: () => invoke<void>("shortcuts_configure"),
   hubSettings: () => invoke<HubSettings>("hub_settings_get"),
   setHubSettings: (settings: HubSettings) => invoke<void>("hub_settings_set", { settings }),
+  /** The workshop area of an app; null goes back to the automatic one. */
+  appAreaSet: (desktopId: string, area: string | null) => invoke<void>("app_area_set", { desktopId, area }),
+  workshopPrefsSet: (view: "grid" | "list", collapsed: string[]) =>
+    invoke<void>("workshop_prefs_set", { view, collapsed }),
   updates: () => invoke<Updates>("updates_list"),
   checkUpdates: () => invoke<Updates>("updates_check"),
   updatedFrom: () => invoke<string | null>("self_updated_from"),
