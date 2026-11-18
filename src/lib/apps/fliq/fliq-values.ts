@@ -4,6 +4,7 @@
 import { readCalendarList } from "./calendar-model.ts";
 import { isColor, readLayout } from "./layout-check.ts";
 import { readSavedLayouts } from "./layout-library.ts";
+import { UI_LANGUAGE_OPTIONS } from "./fliq-options.ts";
 
 /** Storage key of the block layout. */
 export const FLIQ_LAYOUT = "clockLayout";
@@ -18,6 +19,7 @@ const wholeIn = (min: number, max: number) => (v: unknown) => Number.isInteger(v
 const oneOf = (...choices: string[]) => (v: unknown) => typeof v === "string" && choices.includes(v);
 
 const CHECKS: Record<string, (v: unknown) => boolean> = {
+  uiLanguage: oneOf(...UI_LANGUAGE_OPTIONS.map((o) => o.value)),
   lang: isText,
   hourCycle: oneOf("24", "12"),
   hourLeadingZero: isBool,

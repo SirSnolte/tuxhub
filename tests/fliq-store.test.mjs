@@ -54,6 +54,21 @@ test("values of the wrong type are not taken over", async () => {
   assert.equal(store.values.hourCycle, "12");
 });
 
+test("the language of Fliq's window is one of Fliq's languages", async () => {
+  const { store, unusable } = await menu();
+  store.changed({ uiLanguage: "de" });
+  assert.equal(store.values.uiLanguage, undefined);
+  const call = async () => ({ values: { uiLanguage: "en" } });
+  const fresh = new StoredSettings(call, { accept: acceptFliq });
+  await fresh.load();
+  fresh.changed({ uiLanguage: "de" });
+  assert.equal(fresh.values.uiLanguage, "de");
+  fresh.changed({ uiLanguage: "fr" });
+  fresh.changed({ uiLanguage: 1 });
+  assert.equal(fresh.values.uiLanguage, "de");
+  assert.deepEqual(unusable, []);
+});
+
 test("edge case 15: text with HTML stays text", async () => {
   const { store } = await menu();
   store.changed({ weatherLocation: "<b>Berlin</b>" });

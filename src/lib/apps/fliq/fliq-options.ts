@@ -29,6 +29,12 @@ export function fontLabel(value: string): string {
   return FONT_OPTIONS.find((f) => f.value === value)?.label ?? value;
 }
 
+/** Languages of Fliq's own window and right-click menu (Fliq's UI_LANGUAGE_OPTIONS). */
+export const UI_LANGUAGE_OPTIONS: { value: string; label: string }[] = [
+  { value: "en", label: "English" },
+  { value: "de", label: "Deutsch" },
+];
+
 /** Languages of dates and weather; names stay in their own language. */
 export const LOCALE_OPTIONS: { code: string; name: string }[] = [
   { code: "en", name: "English" },
