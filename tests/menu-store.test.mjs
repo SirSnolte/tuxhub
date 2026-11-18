@@ -137,6 +137,30 @@ test("edge case 8: a value the menu cannot show is not taken over", async () => 
   assert.deepEqual(rejected, ["b"]);
 });
 
+test("the app's answer to a set is checked and rebuilt like every value from the app", async () => {
+  const app = fakeApp();
+  const rejected = [];
+  const { store } = await loaded(app, {
+    accept: (key, value) => key !== "b" || typeof value === "string",
+    normalize: (key, value) => (key === "b" ? String(value).toUpperCase() : value),
+    onUnusable: (key) => rejected.push(key),
+  });
+  // Loaded values are rebuilt too.
+  assert.equal(store.values.b, "X");
+  app.adjust = () => 42;
+  store.set("b", "y", 0);
+  await tick();
+  await tick();
+  // The answer 42 cannot be shown: the value the menu sent stays.
+  assert.equal(store.values.b, "y");
+  assert.deepEqual(rejected, ["b"]);
+  app.adjust = (v) => `${v}!`;
+  store.set("b", "z", 0);
+  await tick();
+  await tick();
+  assert.equal(store.values.b, "Z!");
+});
+
 test("debounced input sends once after the pause, and at once on blur", async () => {
   const app = fakeApp();
   const { store } = await loaded(app);

@@ -5,7 +5,8 @@
   import type { Commit } from "./inspector";
   import RangeField from "./RangeField.svelte";
 
-  // One column or row: its own size and the space after it, each back to the default on demand.
+  // One column (its own width, back to the default on demand) or one row (as high as its
+  // highest block in Fliq 2.1, nothing to set).
   let {
     layout,
     track,
@@ -15,41 +16,28 @@
 
   const grid = $derived(new LayoutGrid(layout));
   const column = $derived(track.axis === "column");
-  const last = $derived(track.index >= (column ? layout.columns : layout.rows) - 1);
   const key = $derived(`${track.axis}-${track.index}`);
 </script>
 
 <div class="fields">
   <strong>{t(column ? "fliq.layout.column" : "fliq.layout.row", { n: track.index + 1 })}</strong>
-  <RangeField
-    label={t(column ? "fliq.insp.columnWidth" : "fliq.insp.rowHeight")}
-    value={grid.trackSize(track)}
-    range={column ? RANGES.columnWidth : RANGES.rowHeight}
-    onchange={(v, done) => {
-      oncommit(grid.withTrackSize(track, Math.round(v)), `size-${key}`);
-      if (done) onfinish();
-    }}
-  />
-  {#if grid.trackOverride(track) !== null}
-    <wa-button size="s" appearance="plain" onclick={() => oncommit(grid.withTrackSize(track, null))}>
-      {t("fliq.insp.useDefault")}
-    </wa-button>
-  {/if}
-  {#if !last}
+  {#if column}
     <RangeField
-      label={t("fliq.insp.gapAfter")}
-      value={grid.gap(track)}
-      range={RANGES.gap}
+      label={t("fliq.insp.columnWidth")}
+      value={grid.trackSize(track)}
+      range={RANGES.columnWidth}
       onchange={(v, done) => {
-        oncommit(grid.withGap(track, Math.round(v)), `gap-${key}`);
+        oncommit(grid.withColumnWidth(track.index, Math.round(v)), `size-${key}`);
         if (done) onfinish();
       }}
     />
-    {#if grid.gapOverride(track) !== null}
-      <wa-button size="s" appearance="plain" onclick={() => oncommit(grid.withGap(track, null))}>
+    {#if grid.columnWidthOverride(track.index) !== null}
+      <wa-button size="s" appearance="plain" onclick={() => oncommit(grid.withColumnWidth(track.index, null))}>
         {t("fliq.insp.useDefault")}
       </wa-button>
     {/if}
+  {:else}
+    <p class="muted">{t("fliq.insp.rowAuto")}</p>
   {/if}
 </div>
 
@@ -61,5 +49,10 @@
   }
   wa-button {
     justify-self: start;
+  }
+  .muted {
+    margin: 0;
+    color: var(--wa-color-text-quiet);
+    font-size: var(--wa-font-size-s);
   }
 </style>

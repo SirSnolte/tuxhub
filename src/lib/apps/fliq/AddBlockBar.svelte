@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { CalendarDays, Clock, CloudSun, Minus, Plus, Timer, Type } from "@lucide/svelte";
+  import { CalendarClock, CalendarDays, Clock, CloudSun, Minus, Plus, Type } from "@lucide/svelte";
   import { t, type Key } from "../../i18n.svelte";
   import { BLOCK_KINDS } from "./fliq-options";
   import { addBlock, canAdd, GRID_LIMITS, LayoutGrid, type ClockLayout, type MemberKind } from "./layout-model";
@@ -16,7 +16,7 @@
     onadded: (id: number) => void;
   } = $props();
 
-  const ICONS = { flip: Timer, time: Clock, date: CalendarDays, weather: CloudSun, text: Type };
+  const ICONS = { clock: Clock, date: CalendarDays, weather: CloudSun, text: Type, calendar: CalendarClock };
   const full = $derived(!BLOCK_KINDS.some((k) => canAdd(layout, k.kind)));
 
   function add(kind: MemberKind) {

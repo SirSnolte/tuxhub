@@ -1,7 +1,8 @@
 <script lang="ts">
   import { t } from "../../i18n.svelte";
   import { valueOf } from "../../wa";
-  import { LayoutGrid, removeBlocks, updateBlock, type BlockAlign, type ClockLayout, type LayoutBlock, type TrackRef } from "./layout-model";
+  import { Lock, Trash } from "@lucide/svelte";
+  import { isLocked, LayoutGrid, removeBlocks, updateBlock, type BlockAlign, type ClockLayout, type LayoutBlock, type TrackRef } from "./layout-model";
   import type { FliqStore } from "./store.svelte";
   import type { Commit } from "./inspector";
   import ColorField from "./ColorField.svelte";
@@ -42,6 +43,13 @@
   );
   const hasSelection = $derived(blocks.length > 0 || activeTrack !== null);
   const shown = $derived(tab === "selection" && hasSelection ? "selection" : "clock");
+  /** Locked blocks (unknown kind or a value tuxhub cannot show) can only be deleted. */
+  const anyLocked = $derived(blocks.some(isLocked));
+
+  function removeSelected() {
+    oncommit(removeBlocks(layout, selected));
+    onselect(null);
+  }
 
   /** One change applied to every selected block; refused as a whole when one breaks a limit. */
   function patchAll(patch: Partial<LayoutBlock>) {
@@ -74,9 +82,21 @@
     {#if shown === "clock"}
       <InspectorClock {layout} {store} {oncommit} {onfinish} />
       {#if !hasSelection}<p class="muted small">{t("fliq.insp.nothing")}</p>{/if}
+    {:else if anyLocked}
+      <div class="fields">
+        <wa-callout variant="neutral" size="s">
+          <Lock slot="icon" size={16} aria-hidden="true" />
+          {blocks.length > 1 ? t("fliq.layout.lockedSelection") : t("fliq.layout.locked")}
+        </wa-callout>
+        <div class="actions">
+          <wa-button size="s" variant="danger" appearance="outlined" onclick={removeSelected}>
+            <Trash size={14} aria-hidden="true" />{t("fliq.insp.delete")}
+          </wa-button>
+        </div>
+      </div>
     {:else if blocks.length === 1}
       {#key blocks[0].id}
-        <InspectorBlock {layout} block={blocks[0]} {oncommit} {onfinish} {onfocusfield} {onselect} />
+        <InspectorBlock {layout} block={blocks[0]} calendars={store.calendars} {oncommit} {onfinish} {onfocusfield} {onselect} />
       {/key}
     {:else if blocks.length > 1}
       <div class="fields">
@@ -93,10 +113,7 @@
             size="s"
             variant="danger"
             appearance="outlined"
-            onclick={() => {
-              oncommit(removeBlocks(layout, selected));
-              onselect(null);
-            }}
+            onclick={removeSelected}
           >
             {t("fliq.insp.delete")}
           </wa-button>

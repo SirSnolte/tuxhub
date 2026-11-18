@@ -4,6 +4,44 @@ All notable changes to tuxhub are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.13.0] - 2026-11-18
+
+### Fixed
+
+- The Fliq menu works with Fliq 2.1. Fliq 2.1 changed its layout model, and
+  the menu refused the whole layout ("Fliq sent a value the menu cannot show
+  (clockLayout)").
+
+### Changed
+
+- The Fliq menu follows Fliq 2.1's layout editor: clock blocks pick a text
+  style (flip cards, text, LCD, dot matrix, nixie tubes) or a face (three
+  analog styles, rings, progress as bar, ring or dots) on style tiles, and the
+  inspector shows only the settings the chosen style uses (card, glow, dial,
+  hand and ring colors with each style's own default, progress shape, unit
+  and motion, icon style). Its sections follow Fliq: content, style or text,
+  look, spacing and offset. Padding is set left/right and top/bottom.
+- Dropping a block onto another works as in Fliq: the outer 30 % slide it in
+  before or after the block or into a new row above or below, the middle
+  groups them; the zone shows while dragging. Groups can stack their members,
+  group members can be edited one by one, and every column edge can be
+  dragged to set the column's width (double-click for the default). Rows
+  follow their content, so they have no height of their own any more.
+- The menu reads layouts tolerantly: fields it does not know go back to Fliq
+  unchanged, and a block of a kind it does not know (or with a value it
+  cannot show) stays in place, locked, and can only be deleted.
+
+### Added
+
+- Calendar blocks and a Calendar tab in the Fliq menu: the refresh interval,
+  Fliq's calendars by name and color, and per block which calendars, keywords,
+  days, entries, the evening switch and more. Calendars are added in Fliq; the
+  menu never sees their links. Picking single calendars needs Fliq 2.1.1.
+- Saved layouts in the Fliq menu (with Fliq 2.1.1): save, overwrite, load,
+  rename, duplicate and delete, with a mark while the canvas differs from the
+  active one.
+- The language of Fliq's own window can be set in the Fliq menu.
+
 ## [0.12.0] - 2026-11-18
 
 ### Changed
@@ -366,6 +404,7 @@ First public release.
 - System tray, autostart and single-instance behavior.
 - English and German user interface.
 
+[0.13.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.13.0
 [0.12.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.12.0
 [0.11.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.11.0
 [0.10.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.10.0

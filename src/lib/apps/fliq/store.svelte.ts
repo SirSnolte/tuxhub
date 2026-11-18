@@ -2,8 +2,9 @@
 // the store of every own menu (../menu-store.ts) with Fliq's value checks.
 import { StoredSettings } from "../menu-store.ts";
 import type { MenuCall } from "../menus.ts";
-import { acceptFliq, FLIQ_LAYOUT } from "./fliq-values.ts";
-import { validLayout, type ClockLayout } from "./layout-model.ts";
+import { acceptFliq, FLIQ_CALENDARS, FLIQ_LAYOUT, normalizeFliq } from "./fliq-values.ts";
+import type { CalendarEntry } from "./calendar-model.ts";
+import { readLayout, type ClockLayout } from "./layout-model.ts";
 
 /** Pause after the last input of text fields, and of sliders and dragging. */
 export const TEXT_DELAY = 400;
@@ -25,6 +26,7 @@ export class FliqStore {
   constructor(call: MenuCall, onclosed: () => void) {
     this.#inner = new StoredSettings(call, {
       accept: acceptFliq,
+      normalize: normalizeFliq,
       onRefused: (key, message) => (this.notice = { kind: "refused", key, message }),
       onUnusable: (key) => (this.notice = { kind: "unusable", key, message: "" }),
       onClosed: onclosed,
@@ -78,8 +80,15 @@ export class FliqStore {
     this.#inner.cancel();
   }
 
+  /** Fliq's layout as the menu shows it: unknown fields kept, see layout-check.ts. */
   get layout(): ClockLayout | null {
-    return validLayout(this.values[FLIQ_LAYOUT]);
+    return readLayout(this.values[FLIQ_LAYOUT]);
+  }
+
+  /** Fliq's calendars (names and colors only), or null when this Fliq does not share them. */
+  get calendars(): CalendarEntry[] | null {
+    const list = this.values[FLIQ_CALENDARS];
+    return Array.isArray(list) ? (list as CalendarEntry[]) : null;
   }
 
   text(key: string, fallback = ""): string {

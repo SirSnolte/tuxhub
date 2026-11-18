@@ -3,6 +3,7 @@
   import { t } from "../../i18n.svelte";
   import { toast } from "../../state.svelte";
   import { checkedOf, valueOf } from "../../wa";
+  import { UI_LANGUAGE_OPTIONS } from "./fliq-options";
   import type { FliqStore } from "./store.svelte";
 
   let { store }: { store: FliqStore } = $props();
@@ -36,6 +37,15 @@
 
 <wa-card>
   <div class="fields">
+    {#if Object.hasOwn(store.values, "uiLanguage")}
+      <wa-select value={store.text("uiLanguage", "en")} onchange={(e: Event) => store.set("uiLanguage", valueOf(e))}>
+        <span slot="label">{t("fliq.general.uiLanguage")}</span>
+        <span slot="hint">{t("fliq.general.uiLanguageHint")}</span>
+        {#each UI_LANGUAGE_OPTIONS as language (language.value)}
+          <wa-option value={language.value} lang={language.value}>{language.label}</wa-option>
+        {/each}
+      </wa-select>
+    {/if}
     {#each ["autostart", "hideInTaskbar", "alwaysOnTop"] as const as key (key)}
       <wa-switch checked={store.flag(key)} onchange={(e: Event) => store.set(key, checkedOf(e))}>
         {t(`fliq.general.${key}`)}

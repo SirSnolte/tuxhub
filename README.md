@@ -41,6 +41,11 @@ use it either in its own window or directly inside tuxhub.
 - **Integration for tool authors:** tools can provide settings, actions,
   global hotkeys and their own interface through a small manifest and a
   JSON-RPC protocol. See [docs/tool-development.md](docs/tool-development.md).
+- **Menus of their own for apps that only share a socket:** for the flip
+  clock [Fliq](https://github.com/Dav1d-Fn/Fliq-Desktop-Flipclock), tuxhub
+  brings Fliq's whole layout editor (blocks, styles, groups, drag and drop,
+  calendars, saved layouts) in tuxhub's design. Fliq itself only provides
+  the socket.
 - **Global hotkeys on Wayland** through the XDG desktop portal, without reading
   keyboard input.
 - English and German user interface.

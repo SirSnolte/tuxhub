@@ -10,6 +10,7 @@
     value,
     onchange,
     onreset,
+    fallback,
   }: {
     label: string;
     /** The stored color; may be missing (the default applies) or invalid. */
@@ -17,6 +18,8 @@
     onchange: (color: string) => void;
     /** Back to the default; offered only while a color of its own is set. */
     onreset?: () => void;
+    /** What applies while no color is set (the style's own color); shown, never sent. */
+    fallback?: string;
   } = $props();
 
   /** What the user typed; dropped whenever the stored color changes (other block, undo, Fliq). */
@@ -36,7 +39,7 @@
 
 <div class="color-field">
   <wa-color-picker
-    value={isColor(value) ? value : ""}
+    value={isColor(value) ? value : isColor(fallback) ? fallback : ""}
     format="hex"
     opacity
     without-format-toggle
@@ -52,6 +55,7 @@
     class="hex"
     size="s"
     value={shown}
+    placeholder={value === undefined && isColor(fallback) ? fallback : undefined}
     maxlength={9}
     aria-label={`${label}: ${t("fliq.color.hex")}`}
     aria-invalid={invalid ? "true" : undefined}

@@ -4,18 +4,20 @@
   import { t } from "../../i18n.svelte";
   import { FLIQ_LAYOUT } from "./fliq-values";
   import {
+    checkedEdit,
     CONTENT_LIMITS,
     LayoutGrid,
     LayoutHistory,
     moveBlock,
+    readLayout,
     removeBlocks,
-    validLayout,
     type ClockLayout,
     type TrackRef,
   } from "./layout-model";
   import { SLIDE_DELAY, TEXT_DELAY, type FliqStore } from "./store.svelte";
   import LayoutCanvas from "./LayoutCanvas.svelte";
   import AddBlockBar from "./AddBlockBar.svelte";
+  import LayoutLibrary from "./LayoutLibrary.svelte";
   import Inspector from "./Inspector.svelte";
 
   // Fliq's layout editor in the hub: a schematic canvas, the add bar and the inspector. Every
@@ -66,7 +68,8 @@
    */
   function commit(next: ClockLayout | null, key: string | null = null, refusal = t("fliq.layout.limit")) {
     if (!layout) return;
-    const checked = next && validLayout(next);
+    // Locked blocks and fields the menu does not know go out exactly as they came.
+    const checked = checkedEdit(layout, next);
     if (!checked) {
       complain(refusal);
       return;
@@ -80,6 +83,20 @@
     gesture = key;
     const delay = key === null ? 0 : key.startsWith("text-") ? TEXT_DELAY : SLIDE_DELAY;
     store.set(FLIQ_LAYOUT, checked, delay);
+  }
+
+  /**
+   * Puts a saved layout on the canvas as one undo step. It may hold locked blocks of its own,
+   * so it is only checked for being placeable (Fliq checks it again).
+   */
+  function load(next: ClockLayout) {
+    const checked = layout && readLayout(next);
+    if (!layout || !checked) return;
+    history.record(layout);
+    syncHistory();
+    gesture = null;
+    selected = [];
+    store.set(FLIQ_LAYOUT, checked);
   }
 
   /** Ends a gesture: the value goes out at once. */
@@ -178,7 +195,8 @@
           {track}
           onselect={select}
           onselecttrack={selectTrack}
-          oncommit={(next, refusal) => commit(next, null, refusal)}
+          oncommit={(next, refusal, key) => commit(next, key ?? null, refusal)}
+          onfinish={finish}
           {groupLimit}
         />
         <AddBlockBar
@@ -186,6 +204,7 @@
           oncommit={(next, refusal) => commit(next, null, refusal)}
           onadded={(id) => select(id)}
         />
+        <LayoutLibrary {store} {layout} onload={load} oncomplain={complain} />
       </div>
       <div class="inspector">
         <Inspector
