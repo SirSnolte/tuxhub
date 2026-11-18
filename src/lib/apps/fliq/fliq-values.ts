@@ -3,6 +3,7 @@
 // pass keep the last good one. Tested in tests/fliq-store.test.mjs.
 import { readCalendarList } from "./calendar-model.ts";
 import { isColor, readLayout } from "./layout-check.ts";
+import { readSavedLayouts } from "./layout-library.ts";
 
 /** Storage key of the block layout. */
 export const FLIQ_LAYOUT = "clockLayout";
@@ -35,6 +36,8 @@ const CHECKS: Record<string, (v: unknown) => boolean> = {
   calendarRefreshMinutes: wholeIn(REFRESH_LIMITS.min, REFRESH_LIMITS.max),
   [FLIQ_CALENDARS]: (v) => readCalendarList(v) !== null,
   [FLIQ_LAYOUT]: (v) => readLayout(v) !== null,
+  savedLayouts: (v) => readSavedLayouts(v) !== null,
+  activeLayoutId: (v) => v === null || (Number.isInteger(v) && (v as number) >= 1),
 };
 
 /** Whether the menu can show `value` for `key`. Keys it does not use pass unchanged. */
