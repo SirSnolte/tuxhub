@@ -16,6 +16,7 @@ import {
   GRID_LIMITS,
   isProgressBar,
   MEMBER_CONTENT_FIELDS,
+  overlap,
   PLACEMENT_FIELDS,
   TRACK_LIMITS,
   type CellRect,
@@ -520,8 +521,4 @@ export class LayoutGrid {
     }
     return best;
   }
-}
-
-function overlap(a: CellRect, b: CellRect): boolean {
-  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }

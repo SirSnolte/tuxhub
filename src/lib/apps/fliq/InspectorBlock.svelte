@@ -21,6 +21,7 @@
   } from "./layout-model";
   import {
     ANALOG_DEFAULTS,
+    drawsText,
     GLOW_DEFAULTS,
     itemTextStyle,
     RING_DEFAULTS,
@@ -77,8 +78,10 @@
   const colorLabel = $derived(
     settings.has("labelSize") && !settings.has("textSize") ? t("fliq.insp.labelColor") : t("fliq.insp.textColor"),
   );
+  /** Like Fliq: the section only when the block uses one of its settings (a progress bar does not). */
   const hasText = $derived(
-    !isGroup || ["align", "font", "color", "textSize", "size", "letterSpacing"].some((s) => settings.has(s as never)),
+    (block.kind !== "clock" && items.some(drawsText)) ||
+      ["align", "font", "color", "textSize", "size", "letterSpacing"].some((s) => settings.has(s as never)),
   );
 
   function patch(p: Partial<LayoutBlock>, key: string | null = null) {

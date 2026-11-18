@@ -100,14 +100,18 @@ export class LayoutLibrary {
     return !saved || canonical(saved.layout) !== canonical(layout);
   }
 
-  /** `name` (trimmed, at most 80 characters), or "name 2", "name 3"… when it is taken. */
+  /**
+   * `name` (trimmed, at most 80 characters), or "name 2", "name 3"… when it is taken; a long
+   * name is shortened so its number still fits Fliq's 80 characters.
+   */
   uniqueName(name: string): string {
     const base = cut(name);
     const taken = new Set(this.layouts.map((s) => s.name));
     if (!taken.has(base)) return base;
     let number = 2;
-    while (taken.has(`${base} ${number}`)) number++;
-    return `${base} ${number}`;
+    const numbered = () => `${cut([...base].slice(0, MAX_NAME_LENGTH - ` ${number}`.length).join(""))} ${number}`;
+    while (taken.has(numbered())) number++;
+    return numbered();
   }
 
   /** A new saved layout; null when the library is full. */

@@ -8,7 +8,7 @@
 import { kindInfo } from "./fliq-options.ts";
 import { checkedEdit, gridPatchValid, isLocked } from "./layout-check.ts";
 import { LayoutGrid } from "./layout-grid.ts";
-import type { CellRect, ClockLayout, DropZone, GroupItem, LayoutBlock, MemberKind } from "./layout-types.ts";
+import { GRID_LIMITS, MAX_BLOCKS, type CellRect, type ClockLayout, type DropZone, type GroupItem, type LayoutBlock, type MemberKind } from "./layout-types.ts";
 
 export * from "./layout-types.ts";
 export { checkedEdit, clampText, gridValue, isColor, isLocked, readLayout, safeColor } from "./layout-check.ts";
@@ -20,20 +20,42 @@ export function sizesFor(kind: string): { w: number; h: number }[] {
   return [own, { w: 2, h: 1 }, { w: 1, h: 1 }];
 }
 
-/** Whether a block of `kind` finds room. */
-export function canAdd(layout: ClockLayout, kind: MemberKind): boolean {
-  return new LayoutGrid(layout).firstFreeSpot(sizesFor(kind)) !== null;
+/**
+ * The grid with room for a block of `kind`: as it is when a spot is free, else with one column
+ * more, else with one row more. Null when the grid cannot grow either.
+ */
+function roomFor(layout: ClockLayout, kind: string): { grid: LayoutGrid; spot: CellRect } | null {
+  const sizes = sizesFor(kind);
+  const candidates = [
+    layout,
+    layout.columns < GRID_LIMITS.maxColumns ? new LayoutGrid(layout).resized(layout.columns + 1, layout.rows) : null,
+    layout.rows < GRID_LIMITS.maxRows ? new LayoutGrid(layout).resized(layout.columns, layout.rows + 1) : null,
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const grid = new LayoutGrid(candidate);
+    const spot = grid.firstFreeSpot(sizes);
+    if (spot) return { grid, spot };
+  }
+  return null;
 }
 
-/** A new block of `kind` on the first free spot, with Fliq's defaults for the kind. */
+/** Whether a block of `kind` finds room, growing the grid if needed. */
+export function canAdd(layout: ClockLayout, kind: MemberKind): boolean {
+  return layout.blocks.length < MAX_BLOCKS && roomFor(layout, kind) !== null;
+}
+
+/**
+ * A new block of `kind` with Fliq's defaults for the kind, on the first free spot; when there
+ * is none, the grid first gets a column more, else a row more. Null when nothing fits.
+ */
 export function addBlock(layout: ClockLayout, kind: MemberKind): { layout: ClockLayout; id: number } | null {
-  const grid = new LayoutGrid(layout);
-  const spot = grid.firstFreeSpot(sizesFor(kind));
+  const room = canAdd(layout, kind) ? roomFor(layout, kind) : null;
   const info = kindInfo(kind);
-  if (!spot || !info) return null;
-  const id = grid.nextBlockId();
-  const block: LayoutBlock = { id, kind, ...structuredClone(info.defaults), ...spot };
-  return { layout: { ...layout, blocks: [...layout.blocks, block] }, id };
+  if (!room || !info) return null;
+  const id = room.grid.nextBlockId();
+  const block: LayoutBlock = { id, kind, ...structuredClone(info.defaults), ...room.spot };
+  return { layout: { ...room.grid.layout, blocks: [...room.grid.layout.blocks, block] }, id };
 }
 
 /** Deleting works on every block, locked ones too. */

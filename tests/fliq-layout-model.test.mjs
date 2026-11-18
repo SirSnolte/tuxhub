@@ -273,10 +273,23 @@ test("texts are cut at 200 characters, by character", () => {
   assert.equal(updateBlock(layout, 1, { text: "a".repeat(201) }), null);
 });
 
-test("no block can be added to a full grid; a new one takes the space that is left", () => {
+test("a full grid grows by a column, else by a row, before a block is refused", () => {
   const full = layoutOf(2, 1, [text(1, 0, 0), text(2, 1, 0)]);
-  assert.equal(canAdd(full, "text"), false);
-  assert.equal(addBlock(full, "text"), null);
+  const wider = addBlock(full, "text");
+  assert.equal(wider.layout.columns, 3);
+  assert.deepEqual(wider.layout.blocks.find((b) => b.id === wider.id), { id: 3, kind: "text", x: 2, y: 0, w: 1, h: 1, display: "text", text: "Hello" });
+  const blocks8 = Array.from({ length: 8 }, (_, i) => text(i + 1, i, 0));
+  const taller = addBlock(layoutOf(8, 1, blocks8), "date");
+  assert.equal(taller.layout.columns, 8);
+  assert.equal(taller.layout.rows, 2);
+  assert.equal(taller.layout.blocks.at(-1).y, 1);
+  const blocks32 = Array.from({ length: 32 }, (_, i) => text(i + 1, i % 8, Math.floor(i / 8)));
+  const fullest = layoutOf(8, 4, blocks32);
+  assert.equal(canAdd(fullest, "text"), false);
+  assert.equal(addBlock(fullest, "text"), null);
+});
+
+test("a new block takes the space that is left", () => {
   const half = layoutOf(2, 1, [text(1, 0, 0)]);
   assert.equal(canAdd(half, "clock"), true);
   // A clock wants 3 x 1; it takes the 1 x 1 that is left, with Fliq's defaults.

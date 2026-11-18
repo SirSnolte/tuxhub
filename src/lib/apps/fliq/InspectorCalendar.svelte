@@ -51,10 +51,18 @@
     onpatch(next as CalendarBlockSettings);
   }
 
-  /** A whole number typed into a field, or undefined while it is not one. */
-  function whole(e: Event): number | undefined {
+  /**
+   * Sends a whole number from a field within [min, max]. Anything else is not sent: the field
+   * goes back to the stored value.
+   */
+  function number(e: Event, field: "days" | "maxEntries" | "eveningHour", min: number, max: number, fallback: number) {
+    const input = e.target as HTMLInputElement;
     const n = Number(valueOf(e));
-    return Number.isInteger(n) ? n : undefined;
+    if (valueOf(e).trim() !== "" && Number.isInteger(n) && n >= min && n <= max) {
+      change({ [field]: n });
+    } else {
+      input.value = String(settings[field] ?? fallback);
+    }
   }
 
   function toggle(id: string, checked: boolean) {
@@ -122,7 +130,7 @@
         min={1}
         max={MAX_RANGE_DAYS}
         value={String(settings.days ?? CALENDAR_DEFAULTS.days)}
-        onchange={(e: Event) => change({ days: whole(e) })}
+        onchange={(e: Event) => number(e, "days", 1, MAX_RANGE_DAYS, CALENDAR_DEFAULTS.days)}
       >
         <span slot="label">{t("fliq.calendar.days", { max: MAX_RANGE_DAYS })}</span>
       </wa-input>
@@ -136,7 +144,7 @@
       min={1}
       max={50}
       value={String(settings.maxEntries ?? CALENDAR_DEFAULTS.maxEntries)}
-      onchange={(e: Event) => change({ maxEntries: whole(e) })}
+      onchange={(e: Event) => number(e, "maxEntries", 1, 50, CALENDAR_DEFAULTS.maxEntries)}
     >
       <span slot="label">{t("fliq.calendar.maxEntries")}</span>
     </wa-input>
@@ -169,7 +177,7 @@
         min={0}
         max={23}
         value={String(settings.eveningHour)}
-        onchange={(e: Event) => change({ eveningHour: whole(e) ?? DEFAULT_EVENING_HOUR })}
+        onchange={(e: Event) => number(e, "eveningHour", 0, 23, DEFAULT_EVENING_HOUR)}
       >
         <span slot="label">{t("fliq.calendar.eveningHour")}</span>
         <span slot="end">:00</span>

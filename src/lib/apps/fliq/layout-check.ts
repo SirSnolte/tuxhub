@@ -14,6 +14,7 @@ import {
   isProgressBar,
   MAX_BLOCKS,
   MAX_RANGE_DAYS,
+  overlap,
   STYLE_COLOR_FIELDS,
   type CellRect,
   type ClockLayout,
@@ -261,10 +262,6 @@ const PLACE_RULES: Record<string, Rule> = {
   w: BLOCK_RULES.w,
   h: BLOCK_RULES.h,
 };
-
-function overlap(a: CellRect, b: CellRect): boolean {
-  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
-}
 
 function checkLayout(value: unknown): void {
   const source = record(value);

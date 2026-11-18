@@ -56,6 +56,9 @@
 
   let width = $state(0);
   const grid = $derived(new LayoutGrid(layout));
+  /** Ids of locked blocks, checked once per layout instead of on every use. */
+  const lockedIds = $derived(new Set(layout.blocks.filter(isLocked).map((b) => b.id)));
+  const locked = (block: LayoutBlock) => lockedIds.has(block.id);
   const natural = $derived(grid.size(1));
   const scale = $derived(width > RULER ? Math.min(2, Math.max(0.2, (width - RULER) / natural.width)) : 1);
   const size = $derived(grid.size(scale));
@@ -95,7 +98,7 @@
     e.stopPropagation();
     memberMenu = null;
     // A locked block can only be selected (and then deleted), never dragged.
-    if (isLocked(block)) {
+    if (locked(block)) {
       onselect(block.id, e.shiftKey || e.ctrlKey || e.metaKey);
       return;
     }
@@ -236,11 +239,11 @@
 
   /** What a block shows; a locked block shows nothing of its own (its fields are unchecked). */
   function items(block: LayoutBlock): GroupItem[] {
-    return isLocked(block) ? [] : LayoutGrid.itemsOf(block);
+    return locked(block) ? [] : LayoutGrid.itemsOf(block);
   }
 
   function blockLabel(block: LayoutBlock): string {
-    if (isLocked(block)) return t("fliq.layout.locked");
+    if (locked(block)) return t("fliq.layout.locked");
     return `${t(`fliq.kind.${block.kind}` as Key)}: ${items(block).map(itemLabel).join(", ")}`;
   }
 
@@ -255,7 +258,7 @@
     const parts = [`left:${r.left}px`, `top:${r.top}px`, `width:${r.width}px`, `height:${r.height}px`];
     parts.push(`font-size:${Math.max(10, Math.min(r.height * 0.32, 28))}px`);
     // A locked block's fields are unchecked: none of them reaches the CSS.
-    if (isLocked(block)) return parts.join(";");
+    if (locked(block)) return parts.join(";");
     const color = safeColor(block.color, defaultColor);
     if (color) parts.push(`color:${color}`);
     const font = knownFont(block.font) ?? defaultFont;
@@ -290,7 +293,7 @@
   }
 
   function openMemberMenu(e: MouseEvent, block: LayoutBlock, index: number) {
-    if (block.kind !== "group" || isLocked(block) || !surface) return;
+    if (block.kind !== "group" || locked(block) || !surface) return;
     e.preventDefault();
     e.stopPropagation();
     const box = surface.getBoundingClientRect();
@@ -388,20 +391,20 @@
 
       {#each layout.blocks as block (block.id)}
         {@const isSelected = selected.includes(block.id)}
-        {@const locked = isLocked(block)}
+        {@const isBlockLocked = locked(block)}
         <div
           class="block"
           class:selected={isSelected}
-          class:locked
+          class:locked={isBlockLocked}
           class:dragging={drag?.moved && drag.id === block.id}
-          class:stacked={!locked && block.kind === "group" && block.direction === "column"}
+          class:stacked={!isBlockLocked && block.kind === "group" && block.direction === "column"}
           data-block={block.id}
           style={blockStyle(block)}
           role="button"
           tabindex="0"
           aria-pressed={isSelected}
           aria-label={blockLabel(block)}
-          title={locked ? t("fliq.layout.locked") : undefined}
+          title={isBlockLocked ? t("fliq.layout.locked") : undefined}
           onpointerdown={(e) => start(e, block, "move")}
           onkeydown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
@@ -410,16 +413,16 @@
             }
           }}
         >
-          {#if locked}
+          {#if isBlockLocked}
             <Lock size={14} aria-hidden="true" />
           {/if}
           {#each items(block) as item, index (index)}
             {#if index > 0 && block.direction !== "column"}<span class="sep" aria-hidden="true">·</span>{/if}
             <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <span class="item" class:card={!locked && itemTextStyle(item, block) === "flip" && drawsText(item)}
+            <span class="item" class:card={!isBlockLocked && itemTextStyle(item, block) === "flip" && drawsText(item)}
               oncontextmenu={(e) => openMemberMenu(e, block, index)}>{itemLabel(item)}</span>
           {/each}
-          {#if isSelected && selected.length === 1 && !locked}
+          {#if isSelected && selected.length === 1 && !isBlockLocked}
             <span class="handle right" aria-hidden="true" onpointerdown={(e) => start(e, block, "right")}></span>
             <span class="handle bottom" aria-hidden="true" onpointerdown={(e) => start(e, block, "bottom")}></span>
             <span class="handle corner" aria-hidden="true" onpointerdown={(e) => start(e, block, "corner")}></span>

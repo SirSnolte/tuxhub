@@ -29,6 +29,13 @@ test("edge case 14: names are made unique, renaming to nothing keeps the name", 
   assert.deepEqual(copy.layouts.map((s) => [s.id, s.name]), [[1, "Mein"], [2, "Mein 2"], [3, "Mein 3"]]);
   assert.deepEqual(library.without(1).map((s) => s.id), [2]);
   assert.deepEqual(library.withSaved(1, layout("New")).find((s) => s.id === 1).layout, layout("New"));
+  // A taken name of 80 characters makes room for its number, so Fliq still takes it.
+  const long = "y".repeat(80);
+  const taken = new LayoutLibrary([{ id: 1, name: long, layout: layout() }]);
+  const numbered = taken.withNew(long, layout()).layouts[1].name;
+  assert.equal([...numbered].length, 80);
+  assert.ok(numbered.endsWith(" 2"));
+  assert.equal([...new LayoutLibrary(taken.withNew(long, layout()).layouts).withRenamed(1, long + "z").find((s) => s.id === 1).name].length <= 80, true);
   // Names are cut to Fliq's 80 characters.
   assert.equal([...new LayoutLibrary([]).withNew("x".repeat(90), layout()).layouts[0].name].length, 80);
 });

@@ -261,6 +261,11 @@ export const DEFAULT_LAYOUT: ClockLayout = {
   ],
 };
 
+/** Whether two cell rectangles share a cell. */
+export function overlap(a: CellRect, b: CellRect): boolean {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
 /** A progress bar fills its block's width and has no text, so it cannot join a group. */
 export function isProgressBar(block: { kind: string; clockStyle?: unknown; progressShape?: unknown }): boolean {
   return block.kind === "clock" && block.clockStyle === "progress" && (block.progressShape ?? "bar") === "bar";
