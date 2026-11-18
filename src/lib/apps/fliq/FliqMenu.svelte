@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { Clock, CloudSun, Info, LayoutGrid, Settings2 } from "@lucide/svelte";
+  import { CalendarDays, Clock, CloudSun, Info, LayoutGrid, Settings2 } from "@lucide/svelte";
   import { t, type Key } from "../../i18n.svelte";
   import { onLiveEvent } from "../../state.svelte";
   import type { MenuProps } from "../menus";
@@ -8,6 +8,7 @@
   import LayoutEditor from "./LayoutEditor.svelte";
   import TimePage from "./TimePage.svelte";
   import WeatherPage from "./WeatherPage.svelte";
+  import CalendarPage from "./CalendarPage.svelte";
   import GeneralPage from "./GeneralPage.svelte";
   import AboutPage from "./AboutPage.svelte";
 
@@ -24,6 +25,7 @@
     { id: "layout", icon: LayoutGrid },
     { id: "time", icon: Clock },
     { id: "weather", icon: CloudSun },
+    { id: "calendar", icon: CalendarDays },
     { id: "general", icon: Settings2 },
     { id: "about", icon: Info },
   ] as const;
@@ -93,6 +95,7 @@
     </wa-tab-panel>
     <wa-tab-panel name="time"><TimePage {store} /></wa-tab-panel>
     <wa-tab-panel name="weather"><WeatherPage {store} /></wa-tab-panel>
+    <wa-tab-panel name="calendar"><CalendarPage {store} /></wa-tab-panel>
     <wa-tab-panel name="general"><GeneralPage {store} /></wa-tab-panel>
     <wa-tab-panel name="about"><AboutPage version={store.version || status.version || ""} /></wa-tab-panel>
   </wa-tab-group>

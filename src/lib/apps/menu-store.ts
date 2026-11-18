@@ -12,6 +12,11 @@ export interface MenuStoreOptions {
   onRefused?: (key: string, message: string) => void;
   /** Whether the menu can show a value; others are not taken over. */
   accept?: (key: string, value: unknown) => boolean;
+  /**
+   * Rebuilds an accepted value before the menu keeps it, e.g. to drop fields it must never
+   * hold. Runs after `accept`; without it values are kept as they come.
+   */
+  normalize?: (key: string, value: unknown) => unknown;
   /** A value from the application did not pass `accept`. */
   onUnusable?: (key: string) => void;
   /** The connection ended while sending. */
@@ -57,8 +62,9 @@ export class StoredSettings {
     const values = answer && typeof answer.values === "object" && answer.values !== null ? answer.values : {};
     this.#confirmed = {};
     const shown: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(values)) {
-      if (!this.#usable(key, value)) continue;
+    for (const [key, raw] of Object.entries(values)) {
+      if (!this.#usable(key, raw)) continue;
+      const value = this.#normalized(key, raw);
       this.#confirmed[key] = value;
       shown[key] = this.editing(key) && key in this.values ? this.values[key] : value;
     }
@@ -93,8 +99,9 @@ export class StoredSettings {
   /** `settings-changed` of the application. */
   changed(incoming: Record<string, unknown>) {
     let update = false;
-    for (const [key, value] of Object.entries(incoming)) {
-      if (!(key in this.#confirmed) || !this.#usable(key, value)) continue;
+    for (const [key, raw] of Object.entries(incoming)) {
+      if (!(key in this.#confirmed) || !this.#usable(key, raw)) continue;
+      const value = this.#normalized(key, raw);
       this.#confirmed[key] = value;
       if (this.editing(key)) {
         this.#held.set(key, value);
@@ -128,6 +135,10 @@ export class StoredSettings {
     return false;
   }
 
+  #normalized(key: string, value: unknown): unknown {
+    return this.#options.normalize ? this.#options.normalize(key, value) : value;
+  }
+
   #write(key: string, value: unknown) {
     if (this.#inFlight.has(key)) {
       this.#queued.set(key, value);
@@ -144,7 +155,10 @@ export class StoredSettings {
     try {
       const answer = (await this.#call("settings.set", { key, value })) as { value?: unknown } | null;
       if (stale()) return;
-      const applied = answer && "value" in answer ? answer.value : value;
+      // What the application applied (it may have normalized the value). An answer the menu
+      // cannot show is not taken; the value sent, which the menu made itself, stays.
+      const answered = answer && "value" in answer ? answer.value : value;
+      const applied = this.#usable(key, answered) ? this.#normalized(key, answered) : value;
       this.#confirmed[key] = applied;
       // The answer comes after the application applied the value, so it is
       // newer than a change from outside that arrived meanwhile.

@@ -96,7 +96,7 @@
       </div>
     {:else if blocks.length === 1}
       {#key blocks[0].id}
-        <InspectorBlock {layout} block={blocks[0]} {oncommit} {onfinish} {onfocusfield} {onselect} />
+        <InspectorBlock {layout} block={blocks[0]} calendars={store.calendars} {oncommit} {onfinish} {onfocusfield} {onselect} />
       {/key}
     {:else if blocks.length > 1}
       <div class="fields">

@@ -30,7 +30,9 @@
   import type { Commit } from "./inspector";
   import ColorField from "./ColorField.svelte";
   import FontSelect from "./FontSelect.svelte";
+  import InspectorCalendar from "./InspectorCalendar.svelte";
   import InspectorContent from "./InspectorContent.svelte";
+  import type { CalendarEntry } from "./calendar-model";
   import InspectorStyle from "./InspectorStyle.svelte";
   import RangeField from "./RangeField.svelte";
 
@@ -45,9 +47,12 @@
     onfinish,
     onfocusfield,
     onselect,
+    calendars,
   }: {
     layout: ClockLayout;
     block: LayoutBlock;
+    /** Fliq's calendars for a calendar block's choice; null with an older Fliq. */
+    calendars: CalendarEntry[] | null;
     oncommit: Commit;
     onfinish: () => void;
     onfocusfield: () => void;
@@ -170,6 +175,17 @@
                   {onfocusfield}
                   {onfinish}
                 />
+                {#if item.kind === "calendar"}
+                  <InspectorCalendar
+                    {item}
+                    {calendars}
+                    idPrefix="member-{block.id}-{index}"
+                    onpatch={(calendar) => patchMember(index, { calendar })}
+                    ontyped={(calendar) => patchMember(index, { calendar }, `text-member-calendar-${block.id}-${index}`)}
+                    {onfocusfield}
+                    {onfinish}
+                  />
+                {/if}
               </div>
             {/if}
           </li>
@@ -190,6 +206,21 @@
         {#if block.kind === "clock"}<InspectorStyle {block} onpatch={(p) => patch(p)} />{/if}
       </div>
     </wa-details>
+    {#if block.kind === "calendar"}
+      <wa-details summary={t("fliq.insp.section.calendar")} open>
+        <div class="section">
+          <InspectorCalendar
+            item={items[0]}
+            {calendars}
+            idPrefix="block-{block.id}"
+            onpatch={(calendar) => patch({ calendar })}
+            ontyped={(calendar) => patch({ calendar }, `text-calendar-${block.id}`)}
+            {onfocusfield}
+            {onfinish}
+          />
+        </div>
+      </wa-details>
+    {/if}
   {/if}
 
   {#if hasText}
