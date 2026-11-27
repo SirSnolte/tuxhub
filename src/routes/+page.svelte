@@ -15,6 +15,7 @@
   import Workshop from "$lib/Workshop.svelte";
   import HubSettings from "$lib/HubSettings.svelte";
   import SelfUpdate from "$lib/SelfUpdate.svelte";
+  import { loadPlatform } from "$lib/platform.svelte";
 
   type View = { kind: "workshop" } | { kind: "settings" } | { kind: "tool"; id: string };
 
@@ -124,6 +125,7 @@
     refresh().then(() => {
       if (tools.length) view = { kind: "tool", id: tools[0].entry.id };
     });
+    loadPlatform();
     loadApps();
     const stopWatching = watchApps();
     api.shortcuts().then((s) => (shortcuts = s));

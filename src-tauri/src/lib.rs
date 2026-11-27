@@ -1190,7 +1190,8 @@ fn can_launch(inst: &Installed, manifest: &Manifest) -> bool {
 /// Whether the app has the "In tuxhub / Own window" toggle: an app that runs
 /// per xpra, recorded by tuxhub (an announced tool has no record to keep it).
 fn has_window_toggle(inst: &Installed, manifest: &Manifest) -> bool {
-    tools::integration_of(manifest) == tools::Integration::Embedded
+    cfg!(unix)
+        && tools::integration_of(manifest) == tools::Integration::Embedded
         && manifest.level() == 0
         && can_launch(inst, manifest)
         && !matches!(inst.entry.source, Source::External { .. })
@@ -1910,6 +1911,22 @@ fn embed_missing() -> Option<String> {
     embed::missing()
 }
 
+/// This computer's operating system and what tuxhub can do there.
+#[derive(Serialize)]
+struct PlatformInfo {
+    os: tools::Platform,
+    /// Apps can run inside tuxhub (xpra, Linux only).
+    embed: bool,
+}
+
+#[tauri::command]
+fn platform_info() -> PlatformInfo {
+    PlatformInfo {
+        os: tools::Platform::current(),
+        embed: cfg!(unix),
+    }
+}
+
 /// Shows the app inside tuxhub. An app that runs outside tuxhub fails with
 /// [`embed::RUNNING_OUTSIDE`]; with `restart` (the user's yes) it is quit
 /// first and started here.
@@ -1919,6 +1936,9 @@ async fn embed_start(
     id: String,
     restart: bool,
 ) -> Result<embed::EmbedInfo, String> {
+    if !cfg!(unix) {
+        return Err("apps run in their own window on this system".into());
+    }
     let hub = app.state::<Hub>();
     let inst = tools::load(&hub.tools_dir, &id)?;
     embed::start(
@@ -2233,6 +2253,7 @@ pub fn run() {
             tool_web_status,
             tool_web_window,
             embed_missing,
+            platform_info,
             embed_start,
             embed_status,
             embed_stop,

@@ -116,6 +116,8 @@ export type WorkshopItem = {
 };
 /** An operating system tuxhub runs on. */
 export type Platform = "linux" | "windows";
+/** This computer's system; `embed`: apps can run inside tuxhub (xpra). */
+export type PlatformInfo = { os: Platform; embed: boolean };
 export type Workshop = { entries: WorkshopItem[]; live: boolean };
 
 export type ShortcutStatus = {
@@ -320,6 +322,7 @@ export const api = {
   webStatus: (id: string) => invoke<boolean>("tool_web_status", { id }),
   webWindow: (id: string) => invoke<void>("tool_web_window", { id }),
   embedMissing: () => invoke<string | null>("embed_missing"),
+  platformInfo: () => invoke<PlatformInfo>("platform_info"),
   /** Fails with `running-outside` when the app runs outside tuxhub;
    * `restart` closes it first. */
   embedStart: (id: string, restart = false) => invoke<{ url: string }>("embed_start", { id, restart }),
