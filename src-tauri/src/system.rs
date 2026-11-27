@@ -6,7 +6,9 @@
 use crate::Hub;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, Wry};
@@ -160,6 +162,7 @@ fn tr(en: &'static str, de: &'static str) -> &'static str {
     if german() { de } else { en }
 }
 
+#[cfg(unix)]
 fn autostart_file() -> Option<PathBuf> {
     let config = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
@@ -169,6 +172,24 @@ fn autostart_file() -> Option<PathBuf> {
 
 /// Creates or removes the autostart entry. Also called at startup so the
 /// entry always points to the running installation.
+#[cfg(windows)]
+pub fn apply_autostart(s: &HubSettings) -> Result<(), String> {
+    if !s.autostart {
+        return crate::platform::set_autostart(None);
+    }
+    let exe =
+        std::env::current_exe().map_err(|e| format!("the executable path is unknown: {e}"))?;
+    let args: &[&str] = if s.start_minimized {
+        &[MINIMIZED_ARG]
+    } else {
+        &[]
+    };
+    crate::platform::set_autostart(Some(&crate::platform::run_command(&exe, args)))
+}
+
+/// Creates or removes the autostart entry. Also called at startup so the
+/// entry always points to the running installation.
+#[cfg(unix)]
 pub fn apply_autostart(s: &HubSettings) -> Result<(), String> {
     let path = autostart_file().ok_or("HOME is not set")?;
     if !s.autostart {
@@ -293,6 +314,7 @@ pub fn set_tray_updates(app: &AppHandle, count: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn older_settings_show_only_apps_of_this_system() {

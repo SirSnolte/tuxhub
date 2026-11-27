@@ -14,7 +14,6 @@ use crate::manifest::{Manifest, safe_relative, valid_id};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -960,7 +959,7 @@ pub async fn detect(entry: &Entry, programs: &Programs) -> Detected {
 
 /// Whether `path` is a file this user may run.
 fn is_executable(path: &Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    std::fs::metadata(path).is_ok_and(|m| crate::platform::is_executable(path, &m))
 }
 
 /// Whether the program of a launcher is still there.
@@ -1239,8 +1238,7 @@ async fn fetch_release<R: Runtime>(
         // A single file (AppImage or binary).
         let target = files.join(&name);
         std::fs::rename(&download, &target).map_err(|e| e.to_string())?;
-        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
-            .map_err(|e| e.to_string())?;
+        crate::platform::make_executable(&target).map_err(|e| e.to_string())?;
     }
 
     // Archives with exactly one top-level folder: use it as the root.
@@ -1548,7 +1546,7 @@ fn detect_executable(dir: &Path) -> Option<String> {
         .map(|e| {
             let exec = e
                 .metadata()
-                .is_ok_and(|m| m.permissions().mode() & 0o111 != 0);
+                .is_ok_and(|m| crate::platform::is_executable(&e.path(), &m));
             (e.file_name().to_string_lossy().into_owned(), exec)
         })
         .collect();
@@ -1921,6 +1919,7 @@ pub fn app_running(tools_dir: &Path, inst: &Installed) -> bool {
 /// Processes of the current user that run `program`. The processes of other
 /// users cannot be read and are left out. The app of an AppImage runs from a
 /// temporary mount; it is found by `APPIMAGE` in its environment.
+#[cfg(unix)]
 pub fn processes(program: &Path) -> Vec<u32> {
     let program = program
         .canonicalize()
@@ -1942,6 +1941,31 @@ pub fn processes(program: &Path) -> Vec<u32> {
         .collect()
 }
 
+/// Processes of the current user that run `program`.
+#[cfg(windows)]
+pub fn processes(program: &Path) -> Vec<u32> {
+    let program = program
+        .canonicalize()
+        .unwrap_or_else(|_| program.to_path_buf());
+    crate::platform::process_paths()
+        .into_iter()
+        .filter(|(_, exe)| same_file_name(exe, &program))
+        .map(|(pid, _)| pid)
+        .collect()
+}
+
+/// Whether two Windows paths name the same file: Windows ignores case, and
+/// `canonicalize` adds a `\\?\` prefix the process list does not have.
+#[cfg(any(windows, test))]
+fn same_file_name(a: &Path, b: &Path) -> bool {
+    let plain = |p: &Path| {
+        let s = p.to_string_lossy().to_lowercase();
+        s.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(s)
+    };
+    plain(a) == plain(b)
+}
+
+#[cfg(unix)]
 fn is_appimage(program: &Path) -> bool {
     program
         .extension()
@@ -1949,6 +1973,7 @@ fn is_appimage(program: &Path) -> bool {
 }
 
 /// Whether the environment of `pid` holds exactly `var` (`APPIMAGE=<path>`).
+#[cfg(unix)]
 fn started_by(pid: u32, var: &[u8]) -> bool {
     std::fs::read(format!("/proc/{pid}/environ"))
         .is_ok_and(|env| env.split(|b| *b == 0).any(|entry| entry == var))
@@ -1956,6 +1981,7 @@ fn started_by(pid: u32, var: &[u8]) -> bool {
 
 /// Whether `exe`, the target of `/proc/<pid>/exe`, is `program`. When an
 /// update replaced the file, the kernel appends " (deleted)".
+#[cfg(unix)]
 fn runs(exe: &Path, program: &Path) -> bool {
     exe == program
         || exe
@@ -2012,7 +2038,7 @@ pub async fn quit(program: &Path) -> Result<(), String> {
     if left.is_empty() {
         return Ok(());
     }
-    signal("TERM", &left).await?;
+    end(&left, false).await?;
     for _ in 0..30 {
         tokio::time::sleep(Duration::from_millis(100)).await;
         let running = processes(program);
@@ -2021,10 +2047,19 @@ pub async fn quit(program: &Path) -> Result<(), String> {
             return Ok(());
         }
     }
-    signal("KILL", &left).await
+    end(&left, true).await
 }
 
-async fn signal(name: &str, pids: &[u32]) -> Result<(), String> {
+/// Asks processes to end, or ends them at once with `force`.
+#[cfg(windows)]
+async fn end(pids: &[u32], force: bool) -> Result<(), String> {
+    crate::platform::end_processes(pids, force).await
+}
+
+/// Sends SIGTERM, or SIGKILL with `force`.
+#[cfg(unix)]
+async fn end(pids: &[u32], force: bool) -> Result<(), String> {
+    let name = if force { "KILL" } else { "TERM" };
     // A process may exit in between, so the exit status does not matter.
     Command::new("kill")
         .arg(format!("-{name}"))
@@ -2314,7 +2349,7 @@ pub async fn update_flatpak<R: Runtime>(
 /// Starts a program the test just copied. Another test may fork while the
 /// copy is still open for writing; exec then fails with "Text file busy" for
 /// a moment.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) async fn spawn_copied(program: &Path, args: &[&str]) -> std::process::Child {
     for _ in 0..100 {
         match std::process::Command::new(program).args(args).spawn() {
@@ -2330,13 +2365,13 @@ pub(crate) async fn spawn_copied(program: &Path, args: &[&str]) -> std::process:
 /// Stand-ins for flatpak, rpm and dpkg-query: shell scripts that log each
 /// call to `<dir>/calls` and then run the body a test gives them. A program
 /// a test does not set is missing.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) struct Fakes {
     pub dir: PathBuf,
     pub programs: Programs,
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 impl Fakes {
     pub fn new(name: &str) -> Self {
         let dir = std::env::temp_dir().join(format!("tuxhub-fakes-{name}-{}", std::process::id()));
@@ -2419,15 +2454,16 @@ impl Fakes {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 impl Drop for Fakes {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 
+/// Tests that run on both systems.
 #[cfg(test)]
-mod tests {
+mod platform_tests {
     use super::*;
 
     fn parse_entry(json: Value) -> Entry {
@@ -2447,6 +2483,18 @@ mod tests {
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
         e
+    }
+
+    #[test]
+    fn windows_paths_compare_without_case_and_prefix() {
+        assert!(same_file_name(
+            Path::new(r"C:\Program Files\Fliq\Fliq.exe"),
+            Path::new(r"\\?\c:\program files\fliq\FLIQ.EXE"),
+        ));
+        assert!(!same_file_name(
+            Path::new(r"C:\Fliq\Fliq.exe"),
+            Path::new(r"C:\Fliq\Fliq2.exe"),
+        ));
     }
 
     #[test]
@@ -2525,6 +2573,12 @@ mod tests {
         })));
         assert!(e.supports(Platform::Linux) && e.supports(Platform::Windows));
     }
+}
+
+/// Linux behavior: these tests run programs and fake ones as shell scripts.
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
 
     #[test]
     fn reads_announcements_of_external_tools() {

@@ -218,10 +218,10 @@ mod tests {
         .unwrap();
         std::fs::write(
             tools_dir.join("w/tool.json"),
-            format!(
-                r#"{{"entry":{{"id":"w","name":"W","source":{{"type":"local","path":"{}"}}}}}}"#,
-                tool_dir.display()
-            ),
+            serde_json::json!({
+                "entry": {"id": "w", "name": "W", "source": {"type": "local", "path": tool_dir}}
+            })
+            .to_string(),
         )
         .unwrap();
         app.manage(Hub::for_test(tools_dir, base.join("settings")));

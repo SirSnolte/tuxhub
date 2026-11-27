@@ -1135,7 +1135,7 @@ async fn scan_apps(
 }
 
 /// [`list_cached`] for given folders, without a cache.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 async fn list_in(
     dirs: &[PathBuf],
     desktop: &str,
@@ -1231,7 +1231,7 @@ async fn cached_apps(
     apps
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

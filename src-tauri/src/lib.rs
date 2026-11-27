@@ -7,6 +7,7 @@ mod local_remove;
 mod local_updates;
 mod manifest;
 mod native;
+mod platform;
 mod shortcuts;
 mod sidebar;
 mod system;
@@ -321,14 +322,13 @@ async fn ensure_live_within(hub: &Hub, id: &str, wait: std::time::Duration) -> R
     // is tried again for a short while.
     let mut attempts = 0;
     let mut child = loop {
-        let spawned = tokio::process::Command::new(&exe)
-            .args(&start.args)
+        let mut cmd = tokio::process::Command::new(&exe);
+        cmd.args(&start.args)
             .current_dir(&root)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .process_group(0)
-            .spawn();
+            .stderr(std::process::Stdio::null());
+        let spawned = platform::detach(&mut cmd).spawn();
         match spawned {
             Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 20 => {
                 attempts += 1;
@@ -899,7 +899,7 @@ fn sidebar_state(hub: &Hub, records: &[Installed]) -> (sidebar::Sidebar, Vec<Str
 }
 
 /// The pinned tools, top first.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn current_order(hub: &Hub) -> Vec<String> {
     sidebar_state(hub, &tools::load_all(&hub.tools_dir)).1
 }
@@ -2081,14 +2081,21 @@ fn percent_decode(s: &str) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // Must be the first plugin: a second launch only brings the window to the front.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             system::show_window(app)
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_process::init());
+    #[cfg(windows)]
+    let builder = builder.plugin(
+        tauri_plugin_global_shortcut::Builder::new()
+            .with_handler(|app, shortcut, event| shortcuts::handle(app, shortcut, event.state))
+            .build(),
+    );
+    builder
         .register_uri_scheme_protocol("tool", |ctx, req| serve_tool(ctx.app_handle(), req.uri()))
         .register_uri_scheme_protocol("appicon", |_ctx, req| serve_app_icon(req.uri()))
         .register_asynchronous_uri_scheme_protocol("toolweb", |ctx, req, responder| {
@@ -2250,7 +2257,32 @@ async fn stop_children<R: tauri::Runtime>(app: &AppHandle<R>) {
     futures_util::join!(embed::stop_all(app), hub.runtime.stop_all());
 }
 
+/// Tests that run on both systems.
 #[cfg(test)]
+mod platform_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn workshop_index_uses_the_source_of_this_system() {
+        let s = json!([{
+            "id": "both", "name": "Both", "repo": "o/both",
+            "platforms": ["linux", "windows"],
+            "source": { "type": "github-release", "asset": "*.AppImage" },
+            "sources": { "windows": { "type": "github-release", "asset": "*_x64-setup.exe" } },
+        }])
+        .to_string();
+        let e = &parse_workshop(&s).unwrap()[0];
+        let want = match tools::Platform::current() {
+            tools::Platform::Linux => "*.AppImage",
+            tools::Platform::Windows => "*_x64-setup.exe",
+        };
+        assert!(matches!(&e.source, Source::GithubRelease { asset } if asset == want));
+    }
+}
+
+/// Linux behavior: these tests run programs and fake ones as shell scripts.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
@@ -2938,23 +2970,6 @@ while True:
         assert!(err.contains("not available on"), "{err}");
         assert!(f.calls().is_empty(), "{:?}", f.calls());
         assert!(!hub.tools_dir.join("other").exists());
-    }
-
-    #[test]
-    fn workshop_index_uses_the_source_of_this_system() {
-        let s = json!([{
-            "id": "both", "name": "Both", "repo": "o/both",
-            "platforms": ["linux", "windows"],
-            "source": { "type": "github-release", "asset": "*.AppImage" },
-            "sources": { "windows": { "type": "github-release", "asset": "*_x64-setup.exe" } },
-        }])
-        .to_string();
-        let e = &parse_workshop(&s).unwrap()[0];
-        let want = match tools::Platform::current() {
-            tools::Platform::Linux => "*.AppImage",
-            tools::Platform::Windows => "*_x64-setup.exe",
-        };
-        assert!(matches!(&e.source, Source::GithubRelease { asset } if asset == want));
     }
 
     #[tokio::test]

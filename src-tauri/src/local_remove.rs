@@ -331,7 +331,7 @@ pub async fn remove(env: &Env<'_>, app: &LocalApp, keep_data: bool) -> Result<()
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::tools::Fakes;

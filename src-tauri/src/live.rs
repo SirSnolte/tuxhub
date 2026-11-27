@@ -1,6 +1,7 @@
 //! Live interface (integration level 3).
 //!
-//! A running application listens on `$XDG_RUNTIME_DIR/tuxhub/<id>.sock`. tuxhub
+//! A running application listens on `$XDG_RUNTIME_DIR/tuxhub/<id>.sock`
+//! (Linux) or on the named pipe `\\.\pipe\tuxhub-<id>` (Windows). tuxhub
 //! connects, sends `hello` and then requests the schema, the values and
 //! changes, one JSON object per line in the form of the RPC protocol of
 //! level 2. The application describes its settings itself; everything it sends
@@ -9,15 +10,24 @@
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
+#[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::{oneshot, watch};
+
+/// The connection to an application: a Unix socket or a named pipe.
+#[cfg(unix)]
+type Stream = tokio::net::UnixStream;
+#[cfg(windows)]
+type Stream = tokio::net::windows::named_pipe::NamedPipeClient;
+type OwnedReadHalf = tokio::io::ReadHalf<Stream>;
+type OwnedWriteHalf = tokio::io::WriteHalf<Stream>;
 
 /// Protocol version this tuxhub speaks.
 pub const PROTOCOL: u64 = 1;
@@ -701,7 +711,9 @@ pub struct Status {
 
 /// Connections to the live interfaces of running applications, one per tool.
 pub struct Live {
+    #[cfg(unix)]
     runtime_dir: Option<PathBuf>,
+    #[cfg(unix)]
     uid: u32,
     timeout: Duration,
     notify: Notify,
@@ -750,8 +762,8 @@ struct Conn {
 }
 
 impl Conn {
-    fn start(tool: &str, stream: UnixStream, notify: Notify) -> Arc<Self> {
-        let (read, write) = stream.into_split();
+    fn start(tool: &str, stream: Stream, notify: Notify) -> Arc<Self> {
+        let (read, write) = tokio::io::split(stream);
         let (stop_tx, stop_rx) = watch::channel(false);
         let conn = Arc::new(Self {
             tool: tool.to_string(),
@@ -948,6 +960,7 @@ fn parse_hello(v: &Value, locale: &str) -> Result<Hello, LiveError> {
 }
 
 /// User of this process: the owner of its `/proc` entry.
+#[cfg(unix)]
 fn own_uid() -> u32 {
     std::fs::metadata("/proc/self").map_or(u32::MAX, |m| m.uid())
 }
@@ -958,8 +971,13 @@ impl Live {
     /// `runtime_dir` is `$XDG_RUNTIME_DIR`; without it no application is
     /// reachable.
     pub fn new(runtime_dir: Option<PathBuf>, notify: Notify) -> Self {
+        // Windows checks the user by the account of the pipe's server.
+        #[cfg(windows)]
+        let _ = runtime_dir;
         Self {
+            #[cfg(unix)]
             runtime_dir,
+            #[cfg(unix)]
             uid: own_uid(),
             timeout: TIMEOUT,
             notify,
@@ -967,7 +985,7 @@ impl Live {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn for_test(
         runtime_dir: Option<PathBuf>,
         uid: u32,
@@ -984,6 +1002,7 @@ impl Live {
     }
 
     /// Socket of tool `id`.
+    #[cfg(unix)]
     pub fn socket(&self, id: &str) -> Option<PathBuf> {
         if !crate::manifest::valid_id(id) {
             return None;
@@ -1003,13 +1022,34 @@ impl Live {
 
     /// Connects to a socket that passes the checks. `None` when nobody
     /// listens.
-    async fn dial(&self, id: &str) -> Option<UnixStream> {
+    #[cfg(unix)]
+    async fn dial(&self, id: &str) -> Option<Stream> {
         let path = self.socket(id)?;
         check_socket(&path, self.uid).ok()?;
-        tokio::time::timeout(self.timeout, UnixStream::connect(&path))
+        tokio::time::timeout(self.timeout, Stream::connect(&path))
             .await
             .ok()?
             .ok()
+    }
+
+    /// Connects to the pipe of tool `id` when its server runs as this user.
+    /// A busy pipe (all instances connected) is tried again until the timeout.
+    #[cfg(windows)]
+    async fn dial(&self, id: &str) -> Option<Stream> {
+        let name = pipe_name(id)?;
+        let open = async {
+            loop {
+                match tokio::net::windows::named_pipe::ClientOptions::new().open(&name) {
+                    Ok(client) => return Some(client),
+                    Err(e) if e.raw_os_error() == Some(PIPE_BUSY) => {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                    Err(_) => return None,
+                }
+            }
+        };
+        let client = tokio::time::timeout(self.timeout, open).await.ok()??;
+        crate::platform::pipe_server_is_own_user(&client).then_some(client)
     }
 
     /// The open connection to tool `id`, or a new one after `hello`.
@@ -1195,7 +1235,18 @@ impl Live {
     }
 }
 
+/// `ERROR_PIPE_BUSY`: every instance of the pipe has a client.
+#[cfg(windows)]
+const PIPE_BUSY: i32 = 231;
+
+/// The named pipe of tool `id`, for valid ids only.
+#[cfg(any(windows, test))]
+pub fn pipe_name(id: &str) -> Option<String> {
+    crate::manifest::valid_id(id).then(|| format!(r"\\.\pipe\tuxhub-{id}"))
+}
+
 /// The socket must be a socket (not a symbolic link) of user `uid`.
+#[cfg(unix)]
 pub fn check_socket(path: &Path, uid: u32) -> Result<(), String> {
     let md = std::fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
     if !md.file_type().is_socket() {
@@ -1210,6 +1261,14 @@ pub fn check_socket(path: &Path, uid: u32) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pipe_names_need_a_valid_tool_id() {
+        assert_eq!(pipe_name("fliq").as_deref(), Some(r"\\.\pipe\tuxhub-fliq"));
+        for bad in ["", "../x", r"a\b", "Fliq Clock", "x/y"] {
+            assert_eq!(pipe_name(bad), None, "{bad:?}");
+        }
+    }
     use serde_json::json;
 
     fn schema(fields: Value) -> Schema {
@@ -1577,7 +1636,7 @@ mod tests {
 
 /// Edge cases of the connection (SPEC 7), against a test application that
 /// listens on a Unix socket.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod conn_tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
@@ -1721,7 +1780,7 @@ mod conn_tests {
     }
 
     async fn serve(
-        stream: UnixStream,
+        stream: tokio::net::UnixStream,
         handler: Handler,
         received: Received,
         mut notes: broadcast::Receiver<String>,
