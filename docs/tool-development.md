@@ -246,6 +246,11 @@ start the application itself (`[run]`).
   running; tuxhub then offers to start it.
 - Before it connects, tuxhub checks that the file is a socket (not a
   symbolic link) and belongs to the user running tuxhub.
+- On Windows the application listens on the named pipe
+  `\\.\pipe\tuxhub-<id>` instead, with the same messages. It keeps one
+  pipe instance waiting for the next client while others are connected.
+  tuxhub connects only when the pipe's server runs as the same account as
+  tuxhub.
 - Messages are UTF-8 JSON, one object per line, at most 1 MiB per line.
   They use the same form as the RPC protocol of level 2: requests carry an
   `id`, responses repeat it, notifications have none.

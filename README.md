@@ -5,7 +5,7 @@
 <h1 align="center">tuxhub</h1>
 
 <p align="center">
-  A modular hub for gaming on Linux.
+  A modular hub for gaming on Linux and Windows.
 </p>
 
 <p align="center">
@@ -13,8 +13,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/SirSnolte/tuxhub" alt="License: MIT"></a>
 </p>
 
-tuxhub installs, updates and launches gaming tools for Linux from a curated
-workshop. Each tool is an independent application with its own repository.
+tuxhub installs, updates and launches gaming tools for Linux and Windows from
+a curated workshop. Each tool is an independent application with its own repository.
 tuxhub downloads it from its official source, keeps it up to date and lets you
 use it either in its own window or directly inside tuxhub.
 
@@ -47,7 +47,11 @@ use it either in its own window or directly inside tuxhub.
   calendars, saved layouts) in tuxhub's design. Fliq itself only provides
   the socket.
 - **Global hotkeys on Wayland** through the XDG desktop portal, without reading
-  keyboard input.
+  keyboard input; on Windows through the system's hotkey registration.
+- **Linux and Windows:** the workshop lists the apps for your system. A
+  setting also shows the apps of the other system, marked as such. On
+  Windows, apps install with their own setup program and always run in their
+  own window.
 - English and German user interface.
 
 ## Installation
@@ -60,11 +64,16 @@ Download the package for your distribution from the
 | Fedora, openSUSE | `.rpm` |
 | Debian, Ubuntu, Linux Mint | `.deb` |
 | Other distributions | `.AppImage` |
+| Windows 10, 11 | `_x64-setup.exe` |
 
 ```bash
 sudo dnf install ./tuxhub-*.x86_64.rpm      # Fedora
 sudo apt install ./tuxhub_*_amd64.deb       # Debian, Ubuntu
 ```
+
+On Windows, run the setup program; it installs tuxhub for your user account
+without administrator rights. The installer is not code-signed yet, so
+Windows SmartScreen asks once: choose "More info", then "Run anyway".
 
 tuxhub updates itself from then on. Installing an update of the `.rpm` or
 `.deb` package asks for your password once, as for any system package.
@@ -80,8 +89,9 @@ tuxhub updates itself from then on. Installing an update of the `.rpm` or
 
 ## Building from source
 
-Requirements: Rust (stable), Node.js 20 or later, and the WebKitGTK
-development files.
+Requirements: Rust (stable), Node.js 20 or later, and on Linux the WebKitGTK
+development files. On Windows, Rust needs the Microsoft C++ Build Tools;
+WebView2 is part of Windows 10 and 11.
 
 ```bash
 # Fedora
@@ -110,6 +120,22 @@ The workshop index is [`registry/index.json`](registry/index.json). Entries are
 reviewed before they are added. Third-party tools are developed by their
 respective authors; tuxhub installs them only from their official sources and
 does not modify them.
+
+Each entry names the systems it runs on in `platforms` (`"linux"`,
+`"windows"`; Linux when missing). `source` is the source older tuxhub
+versions read; `sources` and `manifests` add a source and a manifest for a
+single system:
+
+```json
+{
+  "id": "fliq",
+  "platforms": ["linux", "windows"],
+  "source": { "type": "system-package", "package": "fliq", "rpm": "*.x86_64.rpm", "command": "/usr/bin/desktop-flipclock" },
+  "sources": { "windows": { "type": "github-release", "asset": "*_x64-setup.exe" } },
+  "manifest": { "embed": false, "live": true },
+  "manifests": { "windows": { "embed": false } }
+}
+```
 
 Proposals for new entries are welcome as issues. Please include the repository,
 the source (GitHub release or Flathub) and a short description.

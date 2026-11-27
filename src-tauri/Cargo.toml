@@ -1,7 +1,7 @@
 [package]
 name = "tuxhub"
-version = "0.13.0"
-description = "Modular hub for gaming on Linux"
+version = "0.14.0"
+description = "Modular hub for gaming on Linux and Windows"
 authors = ["SirSnolte"]
 edition = "2024"
 

@@ -4,6 +4,34 @@ All notable changes to tuxhub are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.14.0] - 2026-11-27
+
+### Added
+
+- tuxhub runs on Windows 10 and 11 and is released as an installer
+  (`tuxhub_<version>_x64-setup.exe`, installed for the current user). It
+  updates itself on Windows as on Linux.
+- Apps on Windows install with their own setup program from their GitHub
+  release. tuxhub finds what the installer installed, starts and quits the
+  app, recognizes it while it runs, updates it with the next installer and
+  removes it with its own uninstaller.
+- The workshop lists the apps for this computer's operating system. The new
+  setting "Show workshop apps for all operating systems" also lists the
+  others, marked "Linux only" or "Windows only"; they cannot be installed.
+- Workshop entries name their systems (`platforms`) and may carry a source
+  and a manifest per system (`sources`, `manifests`). Older tuxhub versions
+  keep reading `source` and `manifest`.
+- On Windows, the live interface connects over the named pipe
+  `\\.\pipe\tuxhub-<id>`, and global hotkeys are registered with the
+  system.
+
+### Changed
+
+- Fliq and GIF Color Changer are available on Windows. Fliq's menu in
+  tuxhub stays on Linux until Fliq offers its live interface on Windows.
+- On Windows, apps always run in their own window; running them inside
+  tuxhub needs xpra and stays a Linux feature.
+
 ## [0.13.0] - 2026-11-18
 
 ### Fixed
@@ -404,6 +432,7 @@ First public release.
 - System tray, autostart and single-instance behavior.
 - English and German user interface.
 
+[0.14.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.14.0
 [0.13.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.13.0
 [0.12.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.12.0
 [0.11.0]: https://github.com/SirSnolte/tuxhub/releases/tag/v0.11.0
