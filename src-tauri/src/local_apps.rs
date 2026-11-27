@@ -985,6 +985,7 @@ pub fn local_entry(app: &LocalApp) -> Entry {
         translations: Default::default(),
         platforms: Vec::new(),
         sources: Default::default(),
+        manifests: Default::default(),
     }
 }
 

@@ -2287,6 +2287,21 @@ mod platform_tests {
     use serde_json::json;
 
     #[test]
+    fn bundled_workshop_names_the_systems_of_every_app() {
+        let entries = parse_workshop(WORKSHOP_BUNDLED).unwrap();
+        assert_eq!(entries.len(), 6);
+        let on = |p| {
+            entries
+                .iter()
+                .filter(|e| e.supports(p))
+                .map(|e| e.id.as_str())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(on(tools::Platform::Linux).len(), 6);
+        assert_eq!(on(tools::Platform::Windows), ["fliq", "gif-color-changer"]);
+    }
+
+    #[test]
     fn workshop_index_uses_the_source_of_this_system() {
         let s = json!([{
             "id": "both", "name": "Both", "repo": "o/both",

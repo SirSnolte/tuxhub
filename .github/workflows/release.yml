@@ -8,13 +8,45 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    # An older Ubuntu release keeps the packages compatible with older glibc versions.
+  create-release:
     runs-on: ubuntu-22.04
+    outputs:
+      id: ${{ steps.release.outputs.id }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Verify that the tag matches the application version
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "Tag $GITHUB_REF_NAME does not match version $version"; exit 1; }
+
+      - name: Create a draft release with the notes from the changelog
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '$0 ~ "^## \\[" v "\\]" {found=1; next} found && /^## \[/ {exit} found && !/^\[[^]]*\]: /' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "No changelog entry for $version"; exit 1; }
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "tuxhub $GITHUB_REF_NAME" --notes-file notes.md
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id")
+          test -n "$id"
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        # An older Ubuntu release keeps the Linux packages compatible with
+        # older glibc versions.
+        os: [ubuntu-22.04, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
 
       - name: Install system dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
@@ -30,32 +62,20 @@ jobs:
 
       - run: npm ci
 
-      - name: Verify that the tag matches the application version
-        run: |
-          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          test "v$version" = "$GITHUB_REF_NAME" || { echo "Tag $GITHUB_REF_NAME does not match version $version"; exit 1; }
-
-      - name: Extract release notes from the changelog
-        id: notes
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          notes=$(awk -v v="$version" '$0 ~ "^## \\[" v "\\]" {found=1; next} found && /^## \[/ {exit} found && !/^\[[^]]*\]: /' CHANGELOG.md)
-          test -n "$notes" || { echo "No changelog entry for $version"; exit 1; }
-          {
-            echo "body<<NOTES_EOF"
-            echo "$notes"
-            echo "NOTES_EOF"
-          } >> "$GITHUB_OUTPUT"
-
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: tuxhub ${{ github.ref_name }}
-          releaseBody: ${{ steps.notes.outputs.body }}
-          releaseDraft: false
-          prerelease: false
+          releaseId: ${{ needs.create-release.outputs.id }}
           includeUpdaterJson: true
+
+  publish-release:
+    needs: [create-release, build]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest

@@ -70,6 +70,14 @@ pub struct Entry {
         skip_serializing_if = "BTreeMap::is_empty"
     )]
     pub sources: BTreeMap<Platform, Source>,
+    /// Manifests for single systems; they replace `manifest` there, for
+    /// example for an app whose live interface exists on Linux only.
+    #[serde(
+        default,
+        deserialize_with = "lenient_manifests",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub manifests: BTreeMap<Platform, Manifest>,
 }
 
 /// An operating system tuxhub runs on.
@@ -125,6 +133,21 @@ where
         .filter_map(|(k, s)| {
             let p = serde_json::from_value(Value::String(k)).ok()?;
             Some((p, serde_json::from_value(s).ok()?))
+        })
+        .collect())
+}
+
+/// Reads `manifests`, leaving out systems this version does not know and
+/// manifests it cannot read.
+fn lenient_manifests<'de, D>(de: D) -> Result<BTreeMap<Platform, Manifest>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<BTreeMap<String, Value>>::deserialize(de)?.unwrap_or_default();
+    Ok(v.into_iter()
+        .filter_map(|(k, m)| {
+            let p = serde_json::from_value(Value::String(k)).ok()?;
+            Some((p, serde_json::from_value(m).ok()?))
         })
         .collect())
 }
@@ -185,8 +208,26 @@ impl Entry {
     /// The entry as this computer uses it: `source` is the source for
     /// `platform`. Entries for other systems stay as they are.
     pub fn for_platform(mut self, platform: Platform) -> Self {
-        if let Some(source) = self.source_for(platform) {
-            self.source = source.clone();
+        if let Some(source) = self.source_for(platform).cloned() {
+            // The common source stays the source of the other systems.
+            for p in self.listed_platforms() {
+                if p != platform && !self.sources.contains_key(&p) {
+                    self.sources.insert(p, self.source.clone());
+                }
+            }
+            self.source = source;
+        }
+        if let Some(m) = self.manifests.get(&platform).cloned() {
+            for p in self.listed_platforms() {
+                if p != platform
+                    && !self.manifests.contains_key(&p)
+                    && let Some(common) = &self.manifest
+                {
+                    self.manifests.insert(p, common.clone());
+                }
+            }
+            self.integration = Some(integration_of(&m));
+            self.manifest = Some(m);
         }
         self
     }
@@ -716,6 +757,7 @@ fn announced(file: &Path, user: bool) -> Result<Installed, String> {
         translations: BTreeMap::new(),
         platforms: Vec::new(),
         sources: BTreeMap::new(),
+        manifests: BTreeMap::new(),
         id: a.id,
     };
     entry.validate()?;
@@ -1683,6 +1725,7 @@ pub fn link_local(tools_dir: &Path, path: &Path) -> Result<Installed, String> {
         translations: BTreeMap::new(),
         platforms: Vec::new(),
         sources: BTreeMap::new(),
+        manifests: BTreeMap::new(),
         id,
     };
     entry.validate()?;
@@ -2727,6 +2770,43 @@ mod platform_tests {
         }));
         assert!(e.supports(Platform::Linux));
         assert!(!e.supports(Platform::Windows));
+    }
+
+    #[test]
+    fn an_entry_for_one_system_still_knows_the_other() {
+        let e = parse_entry(entry_json(serde_json::json!({
+            "platforms": ["linux", "windows"],
+            "sources": {"windows": release("*_x64-setup.exe")},
+        })));
+        for p in [Platform::Linux, Platform::Windows] {
+            let e = e.clone().for_platform(p);
+            assert!(
+                e.supports(Platform::Linux) && e.supports(Platform::Windows),
+                "{p}"
+            );
+            let linux = e.clone().for_platform(Platform::Linux);
+            assert!(
+                matches!(&linux.source, Source::GithubRelease { asset } if asset == "*x86_64.AppImage")
+            );
+        }
+    }
+
+    #[test]
+    fn system_manifests_replace_the_common_one() {
+        let e = parse_entry(entry_json(serde_json::json!({
+            "platforms": ["linux", "windows"],
+            "sources": {"windows": release("*_x64-setup.exe")},
+            "integration": "socket",
+            "manifest": {"embed": false, "live": true},
+            "manifests": {"windows": {"embed": false}, "macos": {"embed": false}},
+        })));
+        assert_eq!(e.manifests.len(), 1);
+        let win = e.clone().for_platform(Platform::Windows);
+        assert!(!win.manifest.as_ref().unwrap().is_live());
+        assert_eq!(win.integration, Some(Integration::Standalone));
+        let linux = e.for_platform(Platform::Linux);
+        assert!(linux.manifest.as_ref().unwrap().is_live());
+        assert_eq!(linux.integration, Some(Integration::Socket));
     }
 
     #[test]
