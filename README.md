@@ -160,13 +160,15 @@ From then on tuxhub updates itself. Installing an update of the `.rpm` or
 ## ⚙️ How it works
 
 ```mermaid
-flowchart LR
-    R["Workshop index<br/>registry/index.json"] --> H(("tuxhub"))
-    S["Official sources<br/>GitHub · Flathub · dnf/apt · setup.exe"] --> H
-    H -->|installs · updates · launches| T["Tool<br/>own window or inside tuxhub"]
-    T <-->|"live interface<br/>JSON per line over a socket / named pipe"| H
-    H --> U["Native settings page,<br/>hotkeys, tray menu"]
+flowchart TB
+    R["Workshop index"] --> H((tuxhub))
+    S["Official sources"] --> H
+    H -->|install, update, launch| T["Your tools"]
+    T <-.->|live interface| H
+    H --> U["Native settings, hotkeys, tray"]
 ```
+
+The **workshop index** ([`registry/index.json`](registry/index.json)) names each tool and its **official source**: GitHub releases, Flathub, dnf or apt, or a Windows setup program. Tools that speak the **live interface** (one JSON object per line over a Unix socket or a Windows named pipe) get a native settings page, hotkeys and tray actions in tuxhub.
 
 <details>
 <summary><b>The main page in detail</b></summary>
