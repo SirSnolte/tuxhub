@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 400" width="1280" height="400" role="img" aria-label="tuxhub: one hub for all your gaming tools, on Linux and Windows">
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="45%" r="55%">
+      <stop offset="0" stop-color="#4fc97f" stop-opacity=".28"/>
+      <stop offset="1" stop-color="#4fc97f" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="acc" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5fd08e"/><stop offset="1" stop-color="#36a466"/>
+    </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#ffffff" stroke-opacity=".04"/>
+    </pattern>
+    <radialGradient id="fade" cx="50%" cy="50%" r="60%">
+      <stop offset=".3" stop-color="#fff"/><stop offset="1" stop-color="#000"/>
+    </radialGradient>
+    <mask id="m"><rect width="1280" height="400" fill="url(#fade)"/></mask>
+    <style>
+      .t{transform-box:fill-box;transform-origin:center;animation:pop 6s ease-in-out infinite}
+      .t2{animation-delay:.15s}.t3{animation-delay:.3s}.t4{animation-delay:.45s}
+      @keyframes pop{0%,70%,100%{transform:scale(1)}8%{transform:scale(.82)}16%{transform:scale(1.06)}22%{transform:scale(1)}}
+      .g{animation:breathe 6s ease-in-out infinite;transform-origin:640px 180px}
+      @keyframes breathe{0%,100%{opacity:.7;transform:scale(1)}50%{opacity:1;transform:scale(1.12)}}
+      .scan{animation:scan 6s linear infinite}
+      @keyframes scan{from{transform:translateX(-400px)}to{transform:translateX(1680px)}}
+      text{font-family:"Segoe UI","Inter",system-ui,-apple-system,sans-serif}
+    </style>
+  </defs>
+  <rect width="1280" height="400" rx="24" fill="#0d0f13"/>
+  <rect width="1280" height="400" rx="24" fill="url(#grid)" mask="url(#m)"/>
+  <ellipse class="g" cx="640" cy="180" rx="520" ry="240" fill="url(#glow)"/>
+  <rect class="scan" x="0" y="0" width="120" height="400" fill="#5fd08e" opacity=".04" transform="skewX(-20)"/>
+  <g transform="translate(588 62)">
+    <rect class="t" width="46" height="46" rx="13" fill="url(#acc)"/>
+    <rect class="t t2" x="58" width="46" height="46" rx="13" fill="#3a414d"/>
+    <rect class="t t3" y="58" width="46" height="46" rx="13" fill="#3a414d"/>
+    <rect class="t t4" x="58" y="58" width="46" height="46" rx="13" fill="#2b313b"/>
+  </g>
+  <text x="640" y="262" text-anchor="middle" font-size="88" font-weight="700" letter-spacing="-3" fill="#e9edf2">tux<tspan fill="#5fd08e">hub</tspan></text>
+  <text x="640" y="312" text-anchor="middle" font-size="26" fill="#9aa4b2">One hub for all your gaming tools.</text>
+  <g font-size="17" font-weight="600" fill="#cfd6de">
+    <rect x="512" y="336" width="120" height="36" rx="18" fill="#ffffff" fill-opacity=".05" stroke="#ffffff" stroke-opacity=".12"/>
+    <text x="572" y="360" text-anchor="middle">Linux</text>
+    <rect x="648" y="336" width="120" height="36" rx="18" fill="#ffffff" fill-opacity=".05" stroke="#ffffff" stroke-opacity=".12"/>
+    <text x="708" y="360" text-anchor="middle">Windows</text>
+  </g>
+</svg>

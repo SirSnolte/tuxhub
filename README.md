@@ -1,146 +1,175 @@
 <p align="center">
-  <img src="assets/logo.svg" width="96" height="96" alt="tuxhub logo">
-</p>
-
-<h1 align="center">tuxhub</h1>
-
-<p align="center">
-  A modular hub for gaming on Linux and Windows.
+  <img src="assets/readme/hero.svg" alt="tuxhub: one hub for all your gaming tools, on Linux and Windows" width="100%">
 </p>
 
 <p align="center">
-  <a href="https://github.com/SirSnolte/tuxhub/releases/latest"><img src="https://img.shields.io/github/v/release/SirSnolte/tuxhub" alt="Latest release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/SirSnolte/tuxhub" alt="License: MIT"></a>
+  <a href="https://github.com/SirSnolte/tuxhub/releases/latest"><img src="https://img.shields.io/github/v/release/SirSnolte/tuxhub?style=for-the-badge&color=36a466&labelColor=15181d&label=release" alt="Latest release"></a>
+  <a href="https://github.com/SirSnolte/tuxhub/releases"><img src="https://img.shields.io/github/downloads/SirSnolte/tuxhub/total?style=for-the-badge&color=36a466&labelColor=15181d" alt="Downloads"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/SirSnolte/tuxhub?style=for-the-badge&color=36a466&labelColor=15181d" alt="License: MIT"></a>
+  <br>
+  <img src="https://img.shields.io/badge/Linux-supported-5fd08e?style=flat-square&logo=linux&logoColor=white&labelColor=15181d" alt="Linux supported">
+  <img src="https://img.shields.io/badge/Windows%2010%20%7C%2011-supported-5fd08e?style=flat-square&logo=windows&logoColor=white&labelColor=15181d" alt="Windows 10 and 11 supported">
+  <img src="https://img.shields.io/badge/Tauri%202-Rust%20%2B%20Svelte%205-5fd08e?style=flat-square&logo=tauri&logoColor=white&labelColor=15181d" alt="Built with Tauri 2, Rust and Svelte 5">
 </p>
 
-tuxhub installs, updates and launches gaming tools for Linux and Windows from
-a curated workshop. Each tool is an independent application with its own repository.
-tuxhub downloads it from its official source, keeps it up to date and lets you
-use it either in its own window or directly inside tuxhub.
+<p align="center">
+  <b><a href="#-download">Download</a></b> ·
+  <a href="#-features">Features</a> ·
+  <a href="#%EF%B8%8F-screenshots">Screenshots</a> ·
+  <a href="#-for-app-developers">For developers</a> ·
+  <a href="#%EF%B8%8F-building-from-source">Build</a>
+</p>
 
-## Features
+<br>
 
-- **One workshop for every app:** the curated tuxhub tools on top, every
-  other app of the start menu below, grouped by area (gaming tools, games,
-  communication, media, office, graphics, tools, development, system). Start
-  menu entries of one program, such as LibreOffice or Wine, show as one
-  family. Catalog tools install from GitHub releases, distribution packages or
-  Flathub with one click; apps already on the computer are never installed a
-  second time.
-- **Your sidebar:** drag any app into the sidebar and reorder it there, with
-  undo; the open app's menu takes it out again. Without a mouse: the pin
-  button, the `P` key and `Alt`+arrow keys.
-- **Updates:** tuxhub checks its tools, every Flatpak and every distribution
-  package of the start menu, and updates them all with one click: all
-  packages with one password prompt. Updates of tuxhub itself are
-  cryptographically signed and verified before they are installed.
-- **Safe uninstall:** a preview names what is removed; packages of the system
-  or the desktop are never removed. Steam games are uninstalled by Steam.
-- **Run inside tuxhub:** standalone applications can run on a virtual display
-  and appear inside the tuxhub window. A separate window is always available.
-- **Integration for tool authors:** tools can provide settings, actions,
-  global hotkeys and their own interface through a small manifest and a
-  JSON-RPC protocol. See [docs/tool-development.md](docs/tool-development.md).
-- **Menus of their own for apps that only share a socket:** for the flip
-  clock [Fliq](https://github.com/Dav1d-Fn/Fliq-Desktop-Flipclock), tuxhub
-  brings Fliq's whole layout editor (blocks, styles, groups, drag and drop,
-  calendars, saved layouts) in tuxhub's design. Fliq itself only provides
-  the socket.
-- **Global hotkeys on Wayland** through the XDG desktop portal, without reading
-  keyboard input; on Windows through the system's hotkey registration.
-- **Linux and Windows:** the workshop lists the apps for your system. A
-  setting also shows the apps of the other system, marked as such. On
-  Windows, apps install with their own setup program and always run in their
-  own window.
-- English and German user interface.
+<p align="center">
+  <a href="assets/readme/tuxhub-preview.mp4">
+    <img src="assets/readme/tuxhub-preview.webp" alt="tuxhub preview: workshop, tool page and settings" width="880">
+  </a>
+  <br>
+  <sub>▶ <a href="assets/readme/tuxhub-preview.mp4">Watch the full-quality video</a> (1080p, 20 s)</sub>
+</p>
 
-## Installation
+<br>
 
-Download the package for your distribution from the
-[latest release](https://github.com/SirSnolte/tuxhub/releases/latest):
+**tuxhub** installs, updates and launches gaming tools from a curated
+workshop, on **Linux and Windows**. Each tool is an independent application
+with its own repository. tuxhub downloads it from its official source, keeps
+it up to date and lets you use it in its own window or right inside tuxhub,
+with settings rendered natively in tuxhub's own design.
 
-| Distribution | Package |
-|---|---|
-| Fedora, openSUSE | `.rpm` |
-| Debian, Ubuntu, Linux Mint | `.deb` |
-| Other distributions | `.AppImage` |
-| Windows 10, 11 | `_x64-setup.exe` |
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <h3>🧩 One workshop</h3>
+      Curated tuxhub tools on top, every other app of your system below,
+      grouped by area. One click to install from GitHub releases,
+      distribution packages or Flathub.
+    </td>
+    <td width="33%" valign="top">
+      <h3>🔄 Always current</h3>
+      Checks its tools, every Flatpak and every distribution package, and
+      updates them all with one click. Self-updates are cryptographically
+      signed and verified.
+    </td>
+    <td width="33%" valign="top">
+      <h3>🎛️ Native settings</h3>
+      Tools describe their settings over a tiny JSON protocol. tuxhub turns
+      them into a live settings page: every change applies instantly.
+    </td>
+  </tr>
+  <tr>
+    <td width="33%" valign="top">
+      <h3>⌨️ Global hotkeys</h3>
+      On Wayland through the XDG desktop portal, without reading keyboard
+      input; on Windows through the system's hotkey registration.
+    </td>
+    <td width="33%" valign="top">
+      <h3>🛡️ Safe uninstall</h3>
+      A preview names exactly what goes. Packages of the system or the
+      desktop are never removed; Steam games are uninstalled by Steam.
+    </td>
+    <td width="33%" valign="top">
+      <h3>🐧 + 🪟 Cross-platform</h3>
+      The workshop lists the apps for your system. One setting also shows
+      the apps of the other system, clearly marked.
+    </td>
+  </tr>
+</table>
+
+## 📥 Download
+
+<table>
+  <tr>
+    <th>System</th><th>Package</th><th></th>
+  </tr>
+  <tr>
+    <td>🪟 <b>Windows 10, 11</b></td>
+    <td><code>tuxhub_*_x64-setup.exe</code></td>
+    <td rowspan="4" align="center">
+      <a href="https://github.com/SirSnolte/tuxhub/releases/latest"><img src="https://img.shields.io/badge/Download-latest%20release-36a466?style=for-the-badge&labelColor=15181d" alt="Download the latest release"></a>
+    </td>
+  </tr>
+  <tr><td>🐧 <b>Fedora, openSUSE</b></td><td><code>.rpm</code></td></tr>
+  <tr><td>🐧 <b>Debian, Ubuntu, Linux Mint</b></td><td><code>.deb</code></td></tr>
+  <tr><td>🐧 <b>Other distributions</b></td><td><code>.AppImage</code></td></tr>
+</table>
 
 ```bash
 sudo dnf install ./tuxhub-*.x86_64.rpm      # Fedora
 sudo apt install ./tuxhub_*_amd64.deb       # Debian, Ubuntu
 ```
 
-On Windows, run the setup program; it installs tuxhub for your user account
+**Windows:** run the setup program. It installs tuxhub for your user account
 without administrator rights. The installer is not code-signed yet, so
-Windows SmartScreen asks once: choose "More info", then "Run anyway".
+Windows SmartScreen asks once: choose *More info*, then *Run anyway*.
 
-tuxhub updates itself from then on. Installing an update of the `.rpm` or
+From then on tuxhub updates itself. Installing an update of the `.rpm` or
 `.deb` package asks for your password once, as for any system package.
 
-### Optional dependencies
+<details>
+<summary><b>Optional dependencies on Linux</b></summary>
 
 | Feature | Requirement |
 |---|---|
-| Running applications inside tuxhub | `xpra` (available in the repositories of all major distributions) |
+| Running applications inside tuxhub | `xpra` (in the repositories of all major distributions) |
 | Installing Flatpak applications | `flatpak` |
 | Installing distribution packages | `pkexec` (polkit) and dnf, zypper or apt |
 | Global hotkeys | A desktop that implements the GlobalShortcuts portal, such as KDE Plasma or GNOME 48 and later |
 
-## Building from source
+</details>
 
-Requirements: Rust (stable), Node.js 20 or later, and on Linux the WebKitGTK
-development files. On Windows, Rust needs the Microsoft C++ Build Tools;
-WebView2 is part of Windows 10 and 11.
+## ✨ Features
 
-```bash
-# Fedora
-sudo dnf install webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel
-# Debian, Ubuntu
-sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+- **One workshop for every app:** the curated tuxhub tools on top, every
+  other app of the start menu below, grouped by area (gaming tools, games,
+  communication, media, office, graphics, tools, development, system). Start
+  menu entries of one program, such as LibreOffice or Wine, show as one
+  family. Apps already on the computer are never installed a second time.
+- **Your sidebar:** drag any app into the sidebar and reorder it there, with
+  undo. Without a mouse: the pin button, the `P` key and `Alt`+arrow keys.
+- **Updates for everything:** tuxhub tools, every Flatpak and every
+  distribution package of the start menu, with one password prompt for all
+  packages.
+- **Run inside tuxhub:** on Linux, standalone applications can run on a
+  virtual display and appear inside the tuxhub window. A separate window is
+  always available, and on Windows apps always run in their own window.
+- **Menus of their own for apps that only share a socket:** for the flip
+  clock [Fliq](https://github.com/Dav1d-Fn/Fliq-Desktop-Flipclock), tuxhub
+  brings Fliq's whole layout editor (blocks, styles, groups, drag and drop,
+  calendars, saved layouts) in tuxhub's design.
+- **Tray, autostart and close-to-tray**, so hotkeys keep working when the
+  window is closed.
+- English and German user interface.
+
+## 🖼️ Screenshots
+
+<table>
+  <tr>
+    <td colspan="2"><img src="assets/readme/workshop.png" alt="The workshop with tuxhub tools and their integration level"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="assets/readme/tool.png" alt="A tool page with launch button and the tool's own documentation"></td>
+    <td width="50%"><img src="assets/readme/settings.png" alt="Settings: language, autostart, tray, updates and hotkeys"></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><sub>Workshop · Tool page · Settings (tuxhub 0.14.0 on Windows 11)</sub></td>
+  </tr>
+</table>
+
+## ⚙️ How it works
+
+```mermaid
+flowchart LR
+    R["Workshop index<br/>registry/index.json"] --> H(("tuxhub"))
+    S["Official sources<br/>GitHub · Flathub · dnf/apt · setup.exe"] --> H
+    H -->|installs · updates · launches| T["Tool<br/>own window or inside tuxhub"]
+    T <-->|"live interface<br/>JSON per line over a socket / named pipe"| H
+    H --> U["Native settings page,<br/>hotkeys, tray menu"]
 ```
 
-```bash
-npm ci
-npm run tauri dev      # development build with live reload
-npm run tauri build    # release build and packages
-```
-
-Tests and checks:
-
-```bash
-cargo test
-cargo clippy --all-targets -- -D warnings
-npm run check
-```
-
-## Workshop
-
-The workshop index is [`registry/index.json`](registry/index.json). Entries are
-reviewed before they are added. Third-party tools are developed by their
-respective authors; tuxhub installs them only from their official sources and
-does not modify them.
-
-Each entry names the systems it runs on in `platforms` (`"linux"`,
-`"windows"`; Linux when missing). `source` is the source older tuxhub
-versions read; `sources` and `manifests` add a source and a manifest for a
-single system:
-
-```json
-{
-  "id": "fliq",
-  "platforms": ["linux", "windows"],
-  "source": { "type": "system-package", "package": "fliq", "rpm": "*.x86_64.rpm", "command": "/usr/bin/desktop-flipclock" },
-  "sources": { "windows": { "type": "github-release", "asset": "*_x64-setup.exe" } },
-  "manifest": { "embed": false, "live": true },
-  "manifests": { "windows": { "embed": false } }
-}
-```
-
-Proposals for new entries are welcome as issues. Please include the repository,
-the source (GitHub release or Flathub) and a short description.
-
-### The main page
+<details>
+<summary><b>The main page in detail</b></summary>
 
 The tuxhub logo opens the main page. It reads the start menu and the local
 AppStream data and needs no network, except for the catalog and the update
@@ -177,56 +206,114 @@ check.
   preview is checked again right before removing. AppImages are removed only
   inside your home folder; scripts and web apps are not removed.
 
-## For app developers
+</details>
 
-tuxhub is meant to be the place where Linux gaming software feels at home.
-Any application can appear in the workshop, and with a few lines of code it
-can do much more than start and stop:
+## 🧑‍💻 For app developers
+
+tuxhub is meant to be the place where gaming software feels at home. Any
+application can appear in the workshop, and with a few lines of code it can
+do much more than start and stop:
 
 - **Live settings:** a running application describes its settings and
   actions over a local socket. tuxhub shows them as a native settings page,
   in its own design, in English and German, and every change takes effect
-  immediately in the application. Tabs with icons, presets with color
-  swatches, fields that appear only when they matter, a folded "Advanced"
-  part and a reset per field are all part of the description.
+  immediately. Tabs with icons, presets with color swatches, fields that
+  appear only when they matter, a folded "Advanced" part and a reset per
+  field are all part of the description.
 - **Update-proof:** the application describes its settings itself, at
   runtime. When you add, rename or remove a setting in a new release, the
   page in tuxhub follows without any change on our side.
-- **No dependencies:** the protocol is one JSON object per line on a Unix
-  socket. Any language can implement it; the
+- **No dependencies:** one JSON object per line on a Unix socket (on
+  Windows a named pipe). Any language can implement it; the
   [developer documentation](docs/tool-development.md#live-interface-level-3)
   contains the full protocol and a reference application.
 
-How an application gets into tuxhub:
+**Getting into tuxhub:**
 
-1. You implement the live interface (protocol 1) in your application, or we
+1. Implement the live interface (protocol 1) in your application, or we
    propose it to you as a pull request.
-2. You or we open a pull request for this repository that adds the workshop
-   entry: source (GitHub release, distribution package or Flathub), icon,
-   description and `"live": true`.
+2. You or we open a pull request that adds the workshop entry: source
+   (GitHub release, distribution package or Flathub), icon, description and
+   `"live": true`.
 3. We review the entry and test it with the current release of your
-   application. From then on, every release of your application is picked
-   up by tuxhub automatically.
+   application. From then on, every release is picked up automatically.
 
 The live interface is available from tuxhub 0.5.0, its optional additions
 (protocol 1.1) from tuxhub 0.6.0.
 
-## Security
+<details>
+<summary><b>Workshop entry format</b></summary>
+
+The workshop index is [`registry/index.json`](registry/index.json). Entries
+are reviewed before they are added. Third-party tools are developed by their
+respective authors; tuxhub installs them only from their official sources and
+does not modify them.
+
+Each entry names the systems it runs on in `platforms` (`"linux"`,
+`"windows"`; Linux when missing). `source` is the source older tuxhub
+versions read; `sources` and `manifests` add a source and a manifest for a
+single system:
+
+```json
+{
+  "id": "fliq",
+  "platforms": ["linux", "windows"],
+  "source": { "type": "system-package", "package": "fliq", "rpm": "*.x86_64.rpm", "command": "/usr/bin/desktop-flipclock" },
+  "sources": { "windows": { "type": "github-release", "asset": "*_x64-setup.exe" } },
+  "manifest": { "embed": false, "live": true },
+  "manifests": { "windows": { "embed": false } }
+}
+```
+
+Proposals for new entries are welcome as issues. Please include the
+repository, the source (GitHub release or Flathub) and a short description.
+
+</details>
+
+## 🛠️ Building from source
+
+Requirements: Rust (stable), Node.js 20 or later, and on Linux the WebKitGTK
+development files. On Windows, Rust needs the Microsoft C++ Build Tools;
+WebView2 is part of Windows 10 and 11.
+
+```bash
+# Fedora
+sudo dnf install webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel
+# Debian, Ubuntu
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+```
+
+```bash
+npm ci
+npm run tauri dev      # development build with live reload
+npm run tauri build    # release build and packages
+```
+
+Tests and checks:
+
+```bash
+cargo test
+cargo clippy --all-targets -- -D warnings
+npm run check
+```
+
+## 🔒 Security
 
 Tools installed through tuxhub run with the permissions of your user account,
 like any other application. Please report vulnerabilities as described in
 [SECURITY.md](SECURITY.md).
 
-## Contributing
+## 🤝 Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## License
+## 📄 License
 
 tuxhub is released under the [MIT License](LICENSE). Bundled third-party
 components and their licenses are listed in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-Linux is a registered trademark of Linus Torvalds. All other product names are
-trademarks of their respective owners. tuxhub is not affiliated with the
-projects listed in its workshop.
+<sub>Linux is a registered trademark of Linus Torvalds. Windows is a
+trademark of Microsoft. All other product names are trademarks of their
+respective owners. tuxhub is not affiliated with the projects listed in its
+workshop.</sub>
