@@ -194,8 +194,11 @@ pub fn uninstall_command(entry: &UninstallEntry) -> Option<Vec<String>> {
         // `MsiExec.exe /I{GUID}` in an uninstall entry opens the repair
         // dialog; `/X` removes.
         for a in args.iter_mut().skip(1) {
-            if a.len() > 2 && a[..2].eq_ignore_ascii_case("/i") && a[2..].starts_with('{') {
-                *a = format!("/X{}", &a[2..]);
+            if let (Some(flag), Some(product)) = (a.get(..2), a.get(2..))
+                && flag.eq_ignore_ascii_case("/i")
+                && product.starts_with('{')
+            {
+                *a = format!("/X{product}");
             }
         }
         if !args.iter().any(|a| a.eq_ignore_ascii_case("/qn")) {
@@ -434,6 +437,12 @@ mod tests {
         assert_eq!(
             uninstall_command(&e).unwrap(),
             ["MsiExec.exe", "/X{ABC}", "/qn"]
+        );
+
+        e.uninstall = Some("MsiExec.exe /\u{c4}x".into());
+        assert_eq!(
+            uninstall_command(&e).unwrap(),
+            ["MsiExec.exe", "/\u{c4}x", "/qn"]
         );
 
         e.uninstall = Some("uninstall.exe".into());

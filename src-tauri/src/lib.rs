@@ -1991,8 +1991,8 @@ fn serve_tool(app: &AppHandle, uri: &tauri::http::Uri) -> Response<Vec<u8>> {
     };
     let not_found = || reply(StatusCode::NOT_FOUND, "text/plain", b"not found".to_vec());
 
-    let id = uri.host().unwrap_or_default();
-    let path = percent_decode(uri.path().trim_start_matches('/'));
+    let (id, path) = tool_target(uri);
+    let id = id.as_str();
     if path == "__tuxhub/bridge.js" {
         return reply(
             StatusCode::OK,
@@ -2020,6 +2020,20 @@ fn serve_tool(app: &AppHandle, uri: &tauri::http::Uri) -> Response<Vec<u8>> {
     match std::fs::read(&file) {
         Ok(body) => reply(StatusCode::OK, mime_for(&file), body),
         Err(_) => not_found(),
+    }
+}
+
+/// The tool and the file a tool URL names: `tool://<id>/<path>`, or on
+/// Windows, where the system's web view serves the scheme as
+/// `http://tool.localhost/…`, `http://tool.localhost/<id>/<path>`.
+fn tool_target(uri: &tauri::http::Uri) -> (String, String) {
+    let path = uri.path().trim_start_matches('/');
+    match uri.host() {
+        Some(host) if host.ends_with(".localhost") => {
+            let (id, rest) = path.split_once('/').unwrap_or((path, ""));
+            (percent_decode(id), percent_decode(rest))
+        }
+        host => (host.unwrap_or_default().to_string(), percent_decode(path)),
     }
 }
 
@@ -2287,6 +2301,34 @@ mod platform_tests {
     use serde_json::json;
 
     #[test]
+    fn decodes() {
+        assert_eq!(percent_decode("a%20b.html"), "a b.html");
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%2"), "%2");
+    }
+
+    #[test]
+    fn tool_urls_name_the_tool_in_the_host_or_on_windows_in_the_path() {
+        let at = |s: &str| {
+            let uri: tauri::http::Uri = s.parse().unwrap();
+            tool_target(&uri)
+        };
+        assert_eq!(
+            at("tool://fliq/ui/index.html"),
+            ("fliq".into(), "ui/index.html".into())
+        );
+        assert_eq!(
+            at("http://tool.localhost/fliq/ui/a%20b.png"),
+            ("fliq".into(), "ui/a b.png".into())
+        );
+        assert_eq!(
+            at("http://tool.localhost/fliq"),
+            ("fliq".into(), String::new())
+        );
+        assert_eq!(at("http://tool.localhost/"), (String::new(), String::new()));
+    }
+
+    #[test]
     fn bundled_workshop_names_the_systems_of_every_app() {
         let entries = parse_workshop(WORKSHOP_BUNDLED).unwrap();
         assert_eq!(entries.len(), 6);
@@ -2323,13 +2365,6 @@ mod platform_tests {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-
-    #[test]
-    fn decodes() {
-        assert_eq!(percent_decode("a%20b.html"), "a b.html");
-        assert_eq!(percent_decode("100%"), "100%");
-        assert_eq!(percent_decode("%2"), "%2");
-    }
 
     /// App icons are served as inert images: no other origin may read them,
     /// and an SVG can run nothing.

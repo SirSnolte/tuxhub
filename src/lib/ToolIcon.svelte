@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { platform } from "./platform.svelte";
+  import { toolUrl } from "./tool-url";
   import {
     FolderCode,
     Gauge,
@@ -38,7 +40,7 @@
     if (!icon || failed) return null;
     if (icon.startsWith("https://") || icon.startsWith("appicon://")) return icon;
     if (toolId && /\.(png|svg|webp|jpe?g)$/i.test(icon) && !icon.includes("..")) {
-      return `tool://${toolId}/${icon.replace(/^\/+/, "")}`;
+      return toolUrl(platform.os, toolId, icon);
     }
     return null;
   });

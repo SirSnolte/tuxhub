@@ -339,7 +339,7 @@
   </wa-radio-group>
 {/if}
 
-{#if url || (starting && mode === "hub")}
+{#if url || (starting && !ownWindowMode)}
   <div class="embed card">
     {#if url}
       <iframe
@@ -390,7 +390,7 @@
       <div class="text">
         <h2>{tool.entry.name}</h2>
         <p class="muted">{describe(tool.entry)}</p>
-        {#if missing && !ownWindowMode}
+        {#if missing && !ownWindowMode && platform.loaded}
           <wa-callout variant="warning">
             <p>{t("embed.missing", { dep: missing })}</p>
             {#if missing === "xpra"}

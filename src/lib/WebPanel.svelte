@@ -4,14 +4,19 @@
   import { api, errText, type Tool } from "./api";
   import { toast } from "./state.svelte";
   import { launchedKey } from "./installed-apps";
+  import { platform } from "./platform.svelte";
 
   let { tool }: { tool: Tool } = $props();
 
   const id = $derived(tool.entry.id);
   // Keep path and query of web_url; host and port are handled by the proxy.
+  // Windows' web view cannot keep the tool in a custom scheme's host, so the
+  // local web interface loads directly there; one that forbids embedding
+  // opens in its own window.
   const src = $derived.by(() => {
     try {
       const u = new URL(tool.manifest.web_url!);
+      if (platform.os === "windows") return u.href;
       return `toolweb://${id}${u.pathname}${u.search}`;
     } catch {
       return "";

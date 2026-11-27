@@ -2,7 +2,7 @@
 // at start; until then the Linux defaults apply.
 import { api, type PlatformInfo } from "./api";
 
-export const platform = $state<PlatformInfo>({ os: "linux", embed: true });
+export const platform = $state<PlatformInfo & { loaded: boolean }>({ os: "linux", embed: true, loaded: false });
 
 export async function loadPlatform(): Promise<void> {
   try {
@@ -10,4 +10,5 @@ export async function loadPlatform(): Promise<void> {
   } catch {
     // An older backend: Linux.
   }
+  platform.loaded = true;
 }
