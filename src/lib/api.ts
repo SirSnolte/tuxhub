@@ -110,7 +110,12 @@ export type WorkshopItem = {
   pinned: boolean;
   present: boolean;
   integration?: Integration | null;
+  /** Installs on this computer's operating system. */
+  supported?: boolean;
+  platforms?: Platform[];
 };
+/** An operating system tuxhub runs on. */
+export type Platform = "linux" | "windows";
 export type Workshop = { entries: WorkshopItem[]; live: boolean };
 
 export type ShortcutStatus = {
@@ -130,6 +135,8 @@ export type HubSettings = {
   app_areas?: Record<string, string>;
   workshop_view?: "grid" | "list";
   workshop_collapsed?: string[];
+  /** Also list workshop apps for other operating systems. */
+  show_all_platforms?: boolean;
 };
 
 /** Error of the live interface: `code` selects the text, `message` has the details. */

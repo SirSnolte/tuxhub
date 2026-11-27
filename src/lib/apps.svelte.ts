@@ -27,6 +27,7 @@ export function allEntries(): WEntry[] {
     tools: apps.tools,
     updates: apps.updates,
     overrides: apps.settings?.app_areas ?? {},
+    showAllPlatforms: apps.settings?.show_all_platforms ?? false,
   });
 }
 

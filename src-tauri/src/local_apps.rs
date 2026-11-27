@@ -983,6 +983,8 @@ pub fn local_entry(app: &LocalApp) -> Entry {
         manifest: None,
         integration: None,
         translations: Default::default(),
+        platforms: Vec::new(),
+        sources: Default::default(),
     }
 }
 

@@ -1,7 +1,7 @@
 // The workshop's model, without Svelte: every app of the catalog and the
 // start menu once, in areas, start menu entries of one program as a family,
 // and the search, quick views and sorting the page shows them with.
-import type { Integration, LocalAppView, Tool, WorkshopItem } from "./api";
+import type { Integration, LocalAppView, Platform, Tool, WorkshopItem } from "./api";
 
 export const AREAS = ["gaming", "games", "comm", "media", "office", "graphics", "tools", "dev", "system"] as const;
 export type Area = (typeof AREAS)[number];
@@ -34,7 +34,18 @@ export type Member = {
   view?: LocalAppView;
   item?: WorkshopItem;
   tool?: Tool;
+  /** The systems a catalog app runs on, when this computer's is not one of them. */
+  foreign?: Platform[];
 };
+
+/** The text key telling that a catalog app is for another system: the one
+ * system it names, else a general note. None for apps of this system. */
+export function foreignKey(
+  m: Pick<Member, "foreign">,
+): "workshop.only.linux" | "workshop.only.windows" | "workshop.notForThisSystem" | null {
+  if (!m.foreign) return null;
+  return m.foreign.length === 1 ? `workshop.only.${m.foreign[0]}` : "workshop.notForThisSystem";
+}
 
 /** A tile of the workshop: an app or a family of apps. */
 export type WEntry = {
@@ -235,6 +246,8 @@ export type EntriesInput = {
   updates: Record<string, string>;
   /** Desktop id -> area the user chose. */
   overrides: Record<string, string>;
+  /** Also list catalog apps for other operating systems. */
+  showAllPlatforms?: boolean;
 };
 
 function localMember(view: LocalAppView, overrides: Record<string, string>): Member {
@@ -291,6 +304,8 @@ export function entries(input: EntriesInput): WEntry[] {
   const out: WEntry[] = [];
   for (const item of input.catalog) {
     if (item.entry.id === OWN) continue;
+    const foreign = item.supported === false;
+    if (foreign && !item.installed && !input.showAllPlatforms) continue;
     const view = local.find((v) => !used.has(v) && sameApp(item, v));
     if (view) used.add(view);
     const tool = toolOf(item.entry.id);
@@ -315,6 +330,7 @@ export function entries(input: EntriesInput): WEntry[] {
       view,
       item,
       tool,
+      ...(foreign ? { foreign: item.platforms ?? [] } : {}),
     };
     out.push(entryOf(member.key, member.name, [member], true));
   }

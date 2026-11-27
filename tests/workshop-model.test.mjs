@@ -353,3 +353,28 @@ test("a family counts as present by whichever member is pinned", () => {
 test("apps that cannot be pinned are left out", () => {
   assert.deepEqual(sidebarDrop([tile(member("fliq", { installed: false }))]), { add: [], present: [] });
 });
+
+// Apps of other operating systems
+test("apps of another system are hidden unless all systems are shown", () => {
+  const catalog = [
+    item("clock", { type: "github-release", asset: "*.zip" }),
+    item("clicker", { type: "github-release", asset: "*.tar.gz" }, { supported: false, platforms: ["linux"] }),
+  ];
+  assert.deepEqual(
+    build([], catalog).map((e) => e.lead.toolId),
+    ["clock"],
+  );
+  const all = build([], catalog, { showAllPlatforms: true });
+  assert.deepEqual(
+    all.map((e) => [e.lead.toolId, e.lead.foreign ?? null]),
+    [
+      ["clock", null],
+      ["clicker", ["linux"]],
+    ],
+  );
+});
+
+test("an installed app of another system stays visible", () => {
+  const catalog = [item("old", { type: "github-release", asset: "*.tar.gz" }, { supported: false, platforms: ["linux"], installed: true })];
+  assert.equal(build([], catalog).length, 1);
+});

@@ -30,6 +30,8 @@ pub struct HubSettings {
     pub workshop_view: WorkshopView,
     /// Workshop areas the user folded.
     pub workshop_collapsed: Vec<String>,
+    /// Also list workshop apps for other operating systems.
+    pub show_all_platforms: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,6 +63,7 @@ impl Default for HubSettings {
             app_areas: BTreeMap::new(),
             workshop_view: WorkshopView::Grid,
             workshop_collapsed: vec!["system".into()],
+            show_all_platforms: false,
         }
     }
 }
@@ -98,7 +101,9 @@ impl HubSettings {
                 self.app_areas.remove(desktop_id);
             }
             Some(a) if AREAS.contains(&a.as_str()) => {
-                if self.app_areas.len() >= MAX_AREA_CHOICES && !self.app_areas.contains_key(desktop_id) {
+                if self.app_areas.len() >= MAX_AREA_CHOICES
+                    && !self.app_areas.contains_key(desktop_id)
+                {
                     return Err("too many area choices".into());
                 }
                 self.app_areas.insert(desktop_id.to_string(), a);
@@ -290,6 +295,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn older_settings_show_only_apps_of_this_system() {
+        let s: HubSettings = serde_json::from_str(r#"{"autostart": true}"#).unwrap();
+        assert!(s.autostart);
+        assert!(!s.show_all_platforms);
+    }
+
+    #[test]
     fn version_change_is_reported_once() {
         let dir = std::env::temp_dir().join(format!("tuxhub-version-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -338,14 +350,16 @@ mod tests {
     #[test]
     fn workshop_prefs_are_checked() {
         let mut s = HubSettings::default();
-        s.set_workshop_prefs("list", vec!["games".into(), "system".into()]).unwrap();
+        s.set_workshop_prefs("list", vec!["games".into(), "system".into()])
+            .unwrap();
         assert_eq!(s.workshop_view, WorkshopView::List);
         assert_eq!(s.workshop_collapsed, ["games", "system"]);
         assert!(s.set_workshop_prefs("tiles", vec![]).is_err());
         assert!(s.set_workshop_prefs("grid", vec!["../x".into()]).is_err());
         assert_eq!(s.workshop_view, WorkshopView::List);
         // Duplicates are dropped.
-        s.set_workshop_prefs("grid", vec!["dev".into(), "dev".into()]).unwrap();
+        s.set_workshop_prefs("grid", vec!["dev".into(), "dev".into()])
+            .unwrap();
         assert_eq!(s.workshop_collapsed, ["dev"]);
     }
 
@@ -370,7 +384,11 @@ mod tests {
         s.save(&path).unwrap();
         assert!(!path.with_extension("json.tmp").exists());
         assert_eq!(HubSettings::load(&path).app_areas, s.app_areas);
-        std::fs::write(&path, format!("{{\"autostart\":true,\"x\":\"{}\"}}", " ".repeat(70_000))).unwrap();
+        std::fs::write(
+            &path,
+            format!("{{\"autostart\":true,\"x\":\"{}\"}}", " ".repeat(70_000)),
+        )
+        .unwrap();
         assert!(!HubSettings::load(&path).autostart);
     }
 }

@@ -8,7 +8,7 @@
   import { labels } from "./apps.svelte";
   import ToolIcon from "./ToolIcon.svelte";
   import LevelMeter from "./LevelMeter.svelte";
-  import type { WEntry } from "./workshop-model";
+  import { foreignKey, type WEntry } from "./workshop-model";
 
   let {
     entry,
@@ -44,6 +44,7 @@
 
   const lead = $derived(entry.lead);
   const family = $derived(entry.members.length > 1);
+  const foreign = $derived(foreignKey(lead));
   const pinLabel = $derived(entry.pinned ? t("ws.unpin") : t("ws.pin"));
   let iconEl = $state<HTMLElement>();
 
@@ -119,7 +120,9 @@
     <span class="d">{lead.summary}</span>
     <span class="row-bottom">
       <LevelMeter level={entry.level} labelled />
-      {#if !entry.installed}
+      {#if foreign && !entry.installed}
+        <wa-tag size="s" appearance="outlined" title={t("workshop.notForThisSystem")}>{t(foreign)}</wa-tag>
+      {:else if !entry.installed}
         <wa-button size="s" variant="brand" loading={busy} onclick={() => onprimary?.(entry)}>
           <span slot="start"><Download size={15} aria-hidden="true" /></span>
           {lead.item && workshopAction(lead.item) === "adopt" ? t("workshop.adopt") : t("workshop.install")}
@@ -144,7 +147,7 @@
       <span class="sm">{lead.summary}</span>
     </span>
     {#if areaColumn}<span class="c-area small muted">{labels.area(entry.area)}</span>{/if}
-    <span class="c-src small">{labels.source(lead.source)}</span>
+    <span class="c-src small">{foreign ? t(foreign) : labels.source(lead.source)}</span>
     <span class="c-lvl small"><LevelMeter level={entry.level} labelled /></span>
     <span class="acts">
       {#if entry.update}
@@ -157,7 +160,7 @@
     <span class="corner r">{@render pinButton()}</span>
     {@render icon(52)}
     <span class="name">{entry.name}</span>
-    <span class="meta"><LevelMeter level={entry.level} /><span class="src">{labels.source(lead.source)}</span></span>
+    <span class="meta"><LevelMeter level={entry.level} /><span class="src">{foreign ? t(foreign) : labels.source(lead.source)}</span></span>
   {/if}
 </article>
 

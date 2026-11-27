@@ -55,6 +55,142 @@ pub struct Entry {
     /// Localized texts by language code, for example `{"de": {"description": "…"}}`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub translations: BTreeMap<String, Value>,
+    /// Operating systems the app runs on. Missing means Linux, as for every
+    /// entry written before Windows support; unknown systems are ignored.
+    #[serde(
+        default,
+        deserialize_with = "lenient_platforms",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub platforms: Vec<Platform>,
+    /// Sources for single systems; they win over `source`, which stays the
+    /// source older tuxhub versions read. Unknown systems are ignored.
+    #[serde(
+        default,
+        deserialize_with = "lenient_sources",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub sources: BTreeMap<Platform, Source>,
+}
+
+/// An operating system tuxhub runs on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Platform {
+    Linux,
+    Windows,
+}
+
+impl std::fmt::Display for Platform {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Linux => "Linux",
+            Self::Windows => "Windows",
+        })
+    }
+}
+
+impl Platform {
+    /// The system this build of tuxhub runs on.
+    pub const fn current() -> Self {
+        if cfg!(windows) {
+            Self::Windows
+        } else {
+            Self::Linux
+        }
+    }
+}
+
+/// Reads `platforms`, leaving out systems this version does not know.
+fn lenient_platforms<'de, D>(de: D) -> Result<Vec<Platform>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<Vec<Value>>::deserialize(de)?.unwrap_or_default();
+    let mut out: Vec<Platform> = v
+        .into_iter()
+        .filter_map(|p| serde_json::from_value(p).ok())
+        .collect();
+    out.dedup();
+    Ok(out)
+}
+
+/// Reads `sources`, leaving out systems this version does not know and
+/// sources it cannot read.
+fn lenient_sources<'de, D>(de: D) -> Result<BTreeMap<Platform, Source>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<BTreeMap<String, Value>>::deserialize(de)?.unwrap_or_default();
+    Ok(v.into_iter()
+        .filter_map(|(k, s)| {
+            let p = serde_json::from_value(Value::String(k)).ok()?;
+            Some((p, serde_json::from_value(s).ok()?))
+        })
+        .collect())
+}
+
+/// The systems a source can install on, judged by its kind and, for
+/// release downloads, by the file type of the asset pattern.
+fn source_platforms(source: &Source) -> &'static [Platform] {
+    const LINUX: &[Platform] = &[Platform::Linux];
+    const WINDOWS: &[Platform] = &[Platform::Windows];
+    const BOTH: &[Platform] = &[Platform::Linux, Platform::Windows];
+    let asset = match source {
+        Source::GithubRelease { asset } => asset.as_str(),
+        Source::External {
+            asset: Some(asset), ..
+        } => asset.as_str(),
+        Source::Local { .. } | Source::External { .. } => return BOTH,
+        Source::Flatpak { .. }
+        | Source::SystemPackage { .. }
+        | Source::DistroPackage { .. }
+        | Source::Launcher { .. } => return LINUX,
+    };
+    let asset = asset.to_ascii_lowercase();
+    if asset.ends_with(".exe") || asset.ends_with(".msi") {
+        WINDOWS
+    } else if asset.ends_with(".zip") {
+        BOTH
+    } else {
+        LINUX
+    }
+}
+
+impl Entry {
+    /// The systems the entry names; Linux when it names none.
+    pub fn listed_platforms(&self) -> Vec<Platform> {
+        if self.platforms.is_empty() {
+            vec![Platform::Linux]
+        } else {
+            self.platforms.clone()
+        }
+    }
+
+    /// The source that installs the app on `platform`, if there is one.
+    pub fn source_for(&self, platform: Platform) -> Option<&Source> {
+        if !self.listed_platforms().contains(&platform) {
+            return None;
+        }
+        let source = self.sources.get(&platform).unwrap_or(&self.source);
+        source_platforms(source)
+            .contains(&platform)
+            .then_some(source)
+    }
+
+    /// Whether the app can be installed on `platform`.
+    pub fn supports(&self, platform: Platform) -> bool {
+        self.source_for(platform).is_some()
+    }
+
+    /// The entry as this computer uses it: `source` is the source for
+    /// `platform`. Entries for other systems stay as they are.
+    pub fn for_platform(mut self, platform: Platform) -> Self {
+        if let Some(source) = self.source_for(platform) {
+            self.source = source.clone();
+        }
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -563,6 +699,8 @@ fn announced(file: &Path, user: bool) -> Result<Installed, String> {
         manifest: None,
         integration: None,
         translations: BTreeMap::new(),
+        platforms: Vec::new(),
+        sources: BTreeMap::new(),
         id: a.id,
     };
     entry.validate()?;
@@ -1446,6 +1584,8 @@ pub fn link_local(tools_dir: &Path, path: &Path) -> Result<Installed, String> {
         manifest: None,
         integration: None,
         translations: BTreeMap::new(),
+        platforms: Vec::new(),
+        sources: BTreeMap::new(),
         id,
     };
     entry.validate()?;
@@ -2289,6 +2429,102 @@ impl Drop for Fakes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse_entry(json: Value) -> Entry {
+        serde_json::from_value(json).unwrap()
+    }
+
+    fn release(asset: &str) -> Value {
+        serde_json::json!({"type": "github-release", "asset": asset})
+    }
+
+    fn entry_json(extra: Value) -> Value {
+        let mut e = serde_json::json!({
+            "id": "app", "name": "App", "repo": "o/app",
+            "source": release("*x86_64.AppImage"),
+        });
+        e.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        e
+    }
+
+    #[test]
+    fn entry_without_platforms_is_linux_only() {
+        let e = parse_entry(entry_json(serde_json::json!({})));
+        assert_eq!(e.listed_platforms(), vec![Platform::Linux]);
+        assert!(e.supports(Platform::Linux));
+        assert!(!e.supports(Platform::Windows));
+    }
+
+    #[test]
+    fn unknown_platforms_and_sources_are_ignored() {
+        let e = parse_entry(entry_json(serde_json::json!({
+            "platforms": ["linux", "macos"],
+            "sources": {"macos": release("*.dmg"), "windows": {"type": "future"}},
+        })));
+        assert_eq!(e.platforms, vec![Platform::Linux]);
+        assert!(e.sources.is_empty());
+        assert!(e.validate().is_ok());
+    }
+
+    #[test]
+    fn windows_needs_a_windows_source() {
+        let e = parse_entry(entry_json(
+            serde_json::json!({"platforms": ["linux", "windows"]}),
+        ));
+        assert!(e.supports(Platform::Linux));
+        assert!(
+            !e.supports(Platform::Windows),
+            "an AppImage does not install on Windows"
+        );
+    }
+
+    #[test]
+    fn system_sources_win_over_the_common_source() {
+        let e = parse_entry(entry_json(serde_json::json!({
+            "platforms": ["linux", "windows"],
+            "sources": {"windows": release("*_x64-setup.exe")},
+        })));
+        assert!(e.supports(Platform::Windows));
+        let win = e.clone().for_platform(Platform::Windows);
+        assert!(
+            matches!(&win.source, Source::GithubRelease { asset } if asset == "*_x64-setup.exe")
+        );
+        let linux = e.for_platform(Platform::Linux);
+        assert!(
+            matches!(&linux.source, Source::GithubRelease { asset } if asset == "*x86_64.AppImage")
+        );
+    }
+
+    #[test]
+    fn windows_only_entry_keeps_its_source() {
+        let e = parse_entry(entry_json(serde_json::json!({
+            "platforms": ["windows"],
+            "source": release("*.msi"),
+        })));
+        assert!(e.supports(Platform::Windows));
+        assert!(!e.supports(Platform::Linux));
+    }
+
+    #[test]
+    fn linux_kinds_of_sources_never_install_on_windows() {
+        let e = parse_entry(serde_json::json!({
+            "id": "sc", "name": "SC", "platforms": ["linux", "windows"],
+            "source": {"type": "flatpak", "flatpak_id": "com.example.App"},
+        }));
+        assert!(e.supports(Platform::Linux));
+        assert!(!e.supports(Platform::Windows));
+    }
+
+    #[test]
+    fn zip_archives_install_on_both_systems() {
+        let e = parse_entry(entry_json(serde_json::json!({
+            "platforms": ["linux", "windows"],
+            "source": release("*-portable.zip"),
+        })));
+        assert!(e.supports(Platform::Linux) && e.supports(Platform::Windows));
+    }
 
     #[test]
     fn reads_announcements_of_external_tools() {

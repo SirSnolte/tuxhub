@@ -5,6 +5,7 @@
   import { i18n, LOCALES, setLocale, t, type Locale } from "./i18n.svelte";
   import { selfUpdate } from "./selfupdate.svelte";
   import { checkedOf, valueOf } from "./wa";
+  import { apps } from "./apps.svelte";
 
   let {
     shortcuts,
@@ -27,6 +28,8 @@
     try {
       await api.setHubSettings(next);
       hs = next;
+      // The workshop reads its own copy of the settings.
+      if (apps.settings) apps.settings = { ...apps.settings, [key]: value };
     } catch (e) {
       toast(errText(e));
     }
@@ -96,6 +99,13 @@
       </wa-switch>
       <wa-switch class="setting" checked={hs.check_updates} onchange={(e: Event) => setHub("check_updates", checkedOf(e))}>
         {t("hub.checkUpdates")}
+      </wa-switch>
+      <wa-switch
+        class="setting"
+        checked={hs.show_all_platforms ?? false}
+        onchange={(e: Event) => setHub("show_all_platforms", checkedOf(e))}
+      >
+        {t("hub.showAllPlatforms")}
       </wa-switch>
       <div class="card-actions">
         <wa-button appearance="outlined" loading={checking} onclick={checkTools}>

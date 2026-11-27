@@ -133,6 +133,7 @@ fn parse_workshop(s: &str) -> Result<Vec<Entry>, String> {
         serde_json::from_str(s).map_err(|e| format!("invalid workshop index: {e}"))?;
     Ok(entries
         .into_iter()
+        .map(|e| e.for_platform(tools::Platform::current()))
         .filter(|e| match e.validate() {
             Ok(()) => true,
             Err(err) => {
@@ -393,6 +394,10 @@ struct WorkshopItem {
     /// How deeply tuxhub integrates the app; none when the workshop does
     /// not say and the app is not installed.
     integration: Option<tools::Integration>,
+    /// The app installs on this computer's operating system.
+    supported: bool,
+    /// The systems the app runs on.
+    platforms: Vec<tools::Platform>,
 }
 
 /// The workshop entries with their state. Installations are looked for side
@@ -402,7 +407,9 @@ async fn workshop_items(hub: &Hub, entries: Vec<Entry>) -> Vec<WorkshopItem> {
     let pinned = sidebar_state(hub, &records).1;
     let installed: Vec<String> = records.iter().map(|t| t.entry.id.clone()).collect();
     let present = futures_util::future::join_all(entries.iter().map(|e| async {
-        !installed.contains(&e.id) && tools::detect(e, &hub.programs).await.any()
+        e.supports(tools::Platform::current())
+            && !installed.contains(&e.id)
+            && tools::detect(e, &hub.programs).await.any()
     }))
     .await;
     entries
@@ -415,6 +422,8 @@ async fn workshop_items(hub: &Hub, entries: Vec<Entry>) -> Vec<WorkshopItem> {
                 pinned: pinned.contains(&entry.id),
                 integration: workshop_integration(&hub.tools_dir, &entry, record),
                 present,
+                supported: entry.supports(tools::Platform::current()),
+                platforms: entry.listed_platforms(),
                 entry,
             }
         })
@@ -589,6 +598,10 @@ async fn install_entry<R: tauri::Runtime>(
     hub: &Hub,
     entry: &Entry,
 ) -> Result<Installed, String> {
+    let platform = tools::Platform::current();
+    if !entry.supports(platform) {
+        return Err(format!("{} is not available on {platform}", entry.name));
+    }
     let previous = tools::load(&hub.tools_dir, &entry.id).ok();
     let found = tools::detect(previous.as_ref().map_or(entry, |p| &p.entry), &hub.programs).await;
     match &previous {
@@ -952,10 +965,12 @@ async fn pin_tools(
                 let now = tools::load_all(&hub.tools_dir);
                 match now.iter().find(|r| local_apps::same_app(&r.entry, app)) {
                     Some(r) => r.entry.id.clone(),
-                    None => add_local_app(hub, apps, catalog.clone(), &app.desktop_id)
-                        .await?
-                        .entry
-                        .id,
+                    None => {
+                        add_local_app(hub, apps, catalog.clone(), &app.desktop_id)
+                            .await?
+                            .entry
+                            .id
+                    }
                 }
             }
         };
@@ -977,7 +992,10 @@ async fn pin_tools(
     let (mut saved, mut order) = sidebar_state(hub, &records);
     saved.hidden.retain(|h| !unhide.contains(h));
     // New ones go to `at`; pinned ones stay where they are.
-    let fresh: Vec<String> = pinned.into_iter().filter(|id| !before.contains(id)).collect();
+    let fresh: Vec<String> = pinned
+        .into_iter()
+        .filter(|id| !before.contains(id))
+        .collect();
     order.retain(|o| !fresh.contains(o));
     sidebar::insert(&mut order, &fresh, at);
     saved.order = order.clone();
@@ -1668,7 +1686,9 @@ fn app_area_set(app: AppHandle, desktop_id: String, area: Option<String>) -> Res
 /// The workshop's view (`grid`/`list`) and folded areas.
 #[tauri::command]
 fn workshop_prefs_set(app: AppHandle, view: String, collapsed: Vec<String>) -> Result<(), String> {
-    change_settings(&app.state::<Hub>(), |s| s.set_workshop_prefs(&view, collapsed))
+    change_settings(&app.state::<Hub>(), |s| {
+        s.set_workshop_prefs(&view, collapsed)
+    })
 }
 
 /// The version tuxhub was updated from, once per update.
@@ -1833,7 +1853,11 @@ async fn local_app_remove_preview(
 /// Uninstalls an app of the start menu after checking the preview again.
 /// The user interface quits a running app first.
 #[tauri::command]
-async fn local_app_remove(app: AppHandle, desktop_id: String, keep_data: bool) -> Result<(), String> {
+async fn local_app_remove(
+    app: AppHandle,
+    desktop_id: String,
+    keep_data: bool,
+) -> Result<(), String> {
     let hub = app.state::<Hub>();
     let local = listed_app(&hub, &desktop_id).await?;
     if let Some(id) = is_tuxhub_tool(&hub, &local) {
@@ -2871,6 +2895,66 @@ while True:
             "{:?}",
             start.elapsed()
         );
+    }
+
+    /// An entry for the other system: Windows on Linux, Linux on Windows.
+    fn foreign_app(id: &str) -> Entry {
+        let (platform, asset) = match tools::Platform::current() {
+            tools::Platform::Linux => ("windows", "*_x64-setup.exe"),
+            tools::Platform::Windows => ("linux", "*.AppImage"),
+        };
+        let mut e = workshop_entry(id, json!({ "type": "github-release", "asset": asset }));
+        e.platforms = serde_json::from_value(json!([platform])).unwrap();
+        e
+    }
+
+    #[tokio::test]
+    async fn workshop_marks_apps_of_other_systems() {
+        let (hub, f) = hub_with_fakes("workshop-foreign");
+        f.flatpak_with(&[]);
+        let native = workshop_entry(
+            "native",
+            json!({ "type": "github-release", "asset": "*.zip" }),
+        );
+        let mut native = native;
+        native.platforms = vec![tools::Platform::current()];
+        let items = workshop_items(&hub, vec![native, foreign_app("other")]).await;
+        let supported: Vec<_> = items
+            .iter()
+            .map(|i| (i.entry.id.as_str(), i.supported))
+            .collect();
+        assert_eq!(supported, [("native", true), ("other", false)]);
+        assert_eq!(items[1].platforms.len(), 1);
+        assert!(!items[1].present);
+    }
+
+    #[tokio::test]
+    async fn install_refuses_an_app_of_another_system() {
+        let (hub, f) = hub_with_fakes("install-foreign");
+        let app = tauri::test::mock_app();
+        let err = install_entry(app.handle(), &hub, &foreign_app("other"))
+            .await
+            .unwrap_err();
+        assert!(err.contains("not available on"), "{err}");
+        assert!(f.calls().is_empty(), "{:?}", f.calls());
+        assert!(!hub.tools_dir.join("other").exists());
+    }
+
+    #[test]
+    fn workshop_index_uses_the_source_of_this_system() {
+        let s = json!([{
+            "id": "both", "name": "Both", "repo": "o/both",
+            "platforms": ["linux", "windows"],
+            "source": { "type": "github-release", "asset": "*.AppImage" },
+            "sources": { "windows": { "type": "github-release", "asset": "*_x64-setup.exe" } },
+        }])
+        .to_string();
+        let e = &parse_workshop(&s).unwrap()[0];
+        let want = match tools::Platform::current() {
+            tools::Platform::Linux => "*.AppImage",
+            tools::Platform::Windows => "*_x64-setup.exe",
+        };
+        assert!(matches!(&e.source, Source::GithubRelease { asset } if asset == want));
     }
 
     #[tokio::test]
@@ -4321,25 +4405,52 @@ while True:
         // Two start menu entries of one program.
         let mut a = installed_program("office-writer.desktop", "/bin/sh");
         a.name = "Writer".into();
-        let apps = [a.clone(), installed_program("office-calc.desktop", "/bin/sh")];
-        let order = pin_tools(&hub, &apps, vec![], &ids(&["desktop:office-writer.desktop"]), Some(1))
-            .await
-            .unwrap();
+        let apps = [
+            a.clone(),
+            installed_program("office-calc.desktop", "/bin/sh"),
+        ];
+        let order = pin_tools(
+            &hub,
+            &apps,
+            vec![],
+            &ids(&["desktop:office-writer.desktop"]),
+            Some(1),
+        )
+        .await
+        .unwrap();
         let writer = local_apps::local_id("office-writer.desktop");
-        assert_eq!(order, vec!["alpha".to_string(), writer.clone(), "beta".into()]);
+        assert_eq!(
+            order,
+            vec!["alpha".to_string(), writer.clone(), "beta".into()]
+        );
         // Pinned already: stays where it is.
-        let again = pin_tools(&hub, &apps, vec![], &ids(&["desktop:office-writer.desktop"]), Some(0))
-            .await
-            .unwrap();
+        let again = pin_tools(
+            &hub,
+            &apps,
+            vec![],
+            &ids(&["desktop:office-writer.desktop"]),
+            Some(0),
+        )
+        .await
+        .unwrap();
         assert_eq!(again, order);
         assert_eq!(tools::load_all(&hub.tools_dir).len(), 3);
         assert_eq!(sidebar_saved(&hub).unwrap().order, order);
         // Several at once land in the given order at `at`; `at` past the end
         // means the end.
-        let order = pin_tools(&hub, &apps, vec![], &ids(&["desktop:office-calc.desktop"]), Some(99))
-            .await
-            .unwrap();
-        assert_eq!(order.last().unwrap(), &local_apps::local_id("office-calc.desktop"));
+        let order = pin_tools(
+            &hub,
+            &apps,
+            vec![],
+            &ids(&["desktop:office-calc.desktop"]),
+            Some(99),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            order.last().unwrap(),
+            &local_apps::local_id("office-calc.desktop")
+        );
     }
 
     #[tokio::test]
@@ -4353,9 +4464,15 @@ while True:
         pin_tools(&hub, &apps, vec![], &ids(&["desktop:x.desktop"]), None)
             .await
             .unwrap();
-        let order = pin_tools(&hub, &apps, vec![], &ids(&["desktop:x-second.desktop"]), None)
-            .await
-            .unwrap();
+        let order = pin_tools(
+            &hub,
+            &apps,
+            vec![],
+            &ids(&["desktop:x-second.desktop"]),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(order.len(), 1);
         assert_eq!(tools::load_all(&hub.tools_dir).len(), 1);
     }
@@ -4373,7 +4490,11 @@ while True:
         assert!(!saved.pinned);
         assert!(hub.settings_path("alpha").is_file());
         // Not in the sidebar, but still installed for the workshop.
-        let listed: Vec<_> = tool_views(&hub).await.into_iter().map(|t| t.entry.id).collect();
+        let listed: Vec<_> = tool_views(&hub)
+            .await
+            .into_iter()
+            .map(|t| t.entry.id)
+            .collect();
         assert_eq!(listed, ids(&["beta"]));
         // Pinned again: back without a new record.
         let order = pin_tools(&hub, &[], vec![], &ids(&["alpha"]), Some(0))
@@ -4404,7 +4525,11 @@ while True:
         own_tools(&hub, &["a", "b", "c"]);
         set_sidebar_order(&hub, &ids(&["c", "a", "b"])).unwrap();
         let before = std::fs::read_to_string(sidebar_file(&hub)).unwrap();
-        for bad in [ids(&["c", "a"]), ids(&["c", "a", "b", "d"]), ids(&["c", "a", "a", "b"])] {
+        for bad in [
+            ids(&["c", "a"]),
+            ids(&["c", "a", "b", "d"]),
+            ids(&["c", "a", "a", "b"]),
+        ] {
             assert_eq!(
                 set_sidebar_order(&hub, &bad).unwrap_err(),
                 "order does not match the sidebar"
@@ -4434,7 +4559,11 @@ while True:
         own_tools(&hub, &["a", "b", "c", "d"]);
         unpin_tool(&hub, "b").unwrap();
         set_sidebar_order(&hub, &ids(&["d", "a", "c"])).unwrap();
-        let listed: Vec<_> = tool_views(&hub).await.into_iter().map(|t| t.entry.id).collect();
+        let listed: Vec<_> = tool_views(&hub)
+            .await
+            .into_iter()
+            .map(|t| t.entry.id)
+            .collect();
         assert_eq!(listed, ids(&["d", "a", "c"]));
     }
 
@@ -4449,7 +4578,11 @@ while True:
         let id = local_apps::local_id("a.desktop");
         assert!(order.contains(&id));
         hub.updates.lock().unwrap().insert(id.clone(), "2".into());
-        hub.local_updates.lock().unwrap().versions.insert("a.desktop".into(), "2".into());
+        hub.local_updates
+            .lock()
+            .unwrap()
+            .versions
+            .insert("a.desktop".into(), "2".into());
         forget_removed(&hub, &apps[0]);
         assert_eq!(current_order(&hub), ids(&["alpha"]));
         assert_eq!(sidebar_saved(&hub).unwrap().order, ids(&["alpha"]));
@@ -4477,8 +4610,13 @@ while True:
         let (hub, f) = hub_with_fakes("launch-local");
         let marker = f.dir.join("started");
         let script = f.dir.join("app.sh");
-        std::fs::write(&script, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
-        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\ntouch '{}'\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
         let app = installed_program("a.desktop", script.to_str().unwrap());
         launch_local(&hub, &app).await.unwrap();
         for _ in 0..100 {
