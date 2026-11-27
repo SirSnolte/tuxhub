@@ -3,7 +3,7 @@
   import { api, errText, type HubSettings, type ShortcutStatus } from "./api";
   import { toast } from "./state.svelte";
   import { i18n, LOCALES, setLocale, t, type Locale } from "./i18n.svelte";
-  import { selfUpdate } from "./selfupdate.svelte";
+  import { selfUpdate } from "./self-update.svelte";
   import { checkedOf, valueOf } from "./wa";
   import { apps } from "./apps.svelte";
 
