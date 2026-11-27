@@ -7,6 +7,7 @@
     "repo": "SirSnolte/tuxhub-autoclicker",
     "integration": "socket",
     "source": { "type": "github-release", "asset": "*x86_64-linux.tar.gz" },
+    "platforms": ["linux"],
     "translations": {
       "de": { "description": "Automatisches Klicken sowie Makros für Tastatur und Maus. Funktioniert unter Wayland und X11, mit globalen Hotkeys." }
     }
@@ -20,6 +21,7 @@
     "repo": "SirSnolte/tuxhub-push-to-mute",
     "integration": "socket",
     "source": { "type": "github-release", "asset": "*x86_64-linux.tar.gz" },
+    "platforms": ["linux"],
     "translations": {
       "de": { "description": "Schaltet Discord, TeamSpeak und andere Sprachchats stumm, während du im Spiel per Push-to-Talk sprichst. Die Taste erreicht das Spiel weiterhin." }
     }
@@ -33,6 +35,7 @@
     "repo": "SirSnolte/tuxhub-always-online",
     "integration": "socket",
     "source": { "type": "github-release", "asset": "*x86_64-linux.tar.gz" },
+    "platforms": ["linux"],
     "translations": {
       "de": { "description": "Hält Discord, Steam und andere Programme davon ab, dich auf Abwesend zu setzen, solange du am Computer bist. Mit optionalem Zeitplan und längster Laufzeit." }
     }
@@ -47,6 +50,7 @@
     "homepage": "https://github.com/Dav1d-Fn/StreamController-BetterVolumeMixer",
     "integration": "embedded",
     "source": { "type": "flatpak", "flatpak_id": "com.core447.StreamController" },
+    "platforms": ["linux"],
     "translations": {
       "de": { "description": "Steuerung von Elgato-Stream-Deck-Geräten mit Plugin-Unterstützung. Das Plugin BetterVolumeMixer von Dav1d-Fn ergänzt die Lautstärkeregelung pro Anwendung." }
     }
@@ -54,7 +58,7 @@
   {
     "id": "fliq",
     "name": "Fliq",
-    "description": "Flip clock for the desktop. On KDE Plasma and wlroots compositors it stays visible above fullscreen games. Installed as a system package. By Dav1d-Fn.",
+    "description": "Flip clock for the desktop. On KDE Plasma and wlroots compositors it stays visible above fullscreen games. On Linux it is installed as a system package. By Dav1d-Fn.",
     "icon": "https://raw.githubusercontent.com/Dav1d-Fn/Fliq-Desktop-Flipclock/HEAD/src-tauri/icons/128x128.png",
     "category": "overlay",
     "repo": "Dav1d-Fn/Fliq-Desktop-Flipclock",
@@ -67,8 +71,11 @@
       "command": "/usr/bin/desktop-flipclock"
     },
     "manifest": { "embed": false, "live": true },
+    "platforms": ["linux", "windows"],
+    "sources": { "windows": { "type": "github-release", "asset": "*_x64-setup.exe" } },
+    "manifests": { "windows": { "embed": false } },
     "translations": {
-      "de": { "description": "Klappuhr für den Desktop. Unter KDE Plasma und wlroots-Compositors bleibt sie auch über Spielen im Vollbild sichtbar. Wird als Systempaket installiert. Von Dav1d-Fn." }
+      "de": { "description": "Klappuhr für den Desktop. Unter KDE Plasma und wlroots-Compositors bleibt sie auch über Spielen im Vollbild sichtbar. Unter Linux wird sie als Systempaket installiert. Von Dav1d-Fn." }
     }
   },
   {
@@ -80,6 +87,8 @@
     "repo": "Dav1d-Fn/gif-color-changer",
     "integration": "embedded",
     "source": { "type": "github-release", "asset": "*amd64.AppImage" },
+    "platforms": ["linux", "windows"],
+    "sources": { "windows": { "type": "github-release", "asset": "*_x64-setup.exe" } },
     "translations": {
       "de": { "description": "Farben in animierten GIFs präzise und verlustfrei ersetzen. Die gesamte Verarbeitung erfolgt lokal. Von Dav1d-Fn." }
     }

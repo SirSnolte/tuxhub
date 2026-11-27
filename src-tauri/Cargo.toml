@@ -1,7 +1,7 @@
 [package]
 name = "tuxhub"
-version = "0.13.0"
-description = "Modular hub for gaming on Linux"
+version = "0.14.0"
+description = "Modular hub for gaming on Linux and Windows"
 authors = ["SirSnolte"]
 edition = "2024"
 
@@ -21,13 +21,26 @@ serde_json = "1"
 tokio = { version = "1", features = ["process", "io-util", "time", "sync", "macros", "rt-multi-thread", "net"] }
 toml = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
-ashpd = { version = "0.13", default-features = false, features = ["tokio", "global_shortcuts"] }
 futures-util = "0.3"
 url = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 quick-xml = "0.42"
 flate2 = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "global_shortcuts"] }
+
+[target.'cfg(windows)'.dependencies]
+tauri-plugin-global-shortcut = "2"
+windows-registry = "0.6"
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+] }
 
 
 [dev-dependencies]

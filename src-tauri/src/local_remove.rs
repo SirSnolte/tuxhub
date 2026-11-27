@@ -234,9 +234,7 @@ pub async fn preview(env: &Env<'_>, app: &LocalApp) -> RemovePreview {
             RemovePreview::new("flatpak", vec![flatpak_id.clone()], system)
         }
         LocalSource::Rpm { package } => dnf_preview(env.programs, package, env.protected_dir).await,
-        LocalSource::Deb { .. } => {
-            RemovePreview::blocked("none", "package-manager")
-        }
+        LocalSource::Deb { .. } => RemovePreview::blocked("none", "package-manager"),
         LocalSource::Game { store, game } => match store.as_str() {
             "steam" if steam_app_id(game).is_some() => RemovePreview::new("steam", vec![], false),
             "heroic" | "lutris" => RemovePreview::new(store, vec![], false),
@@ -333,7 +331,7 @@ pub async fn remove(env: &Env<'_>, app: &LocalApp, keep_data: bool) -> Result<()
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::tools::Fakes;
@@ -633,10 +631,7 @@ Transaction Summary:
             program: "/home/u/start.sh".into(),
         });
         let p = preview(&s.env(), &a).await;
-        assert_eq!(
-            p,
-            RemovePreview::blocked("none", "not-a-package")
-        );
+        assert_eq!(p, RemovePreview::blocked("none", "not-a-package"));
         assert!(remove(&s.env(), &a, true).await.is_err());
         assert!(s.f.calls().is_empty());
     }

@@ -14,7 +14,6 @@ use crate::manifest::{Manifest, safe_relative, valid_id};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -55,6 +54,183 @@ pub struct Entry {
     /// Localized texts by language code, for example `{"de": {"description": "…"}}`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub translations: BTreeMap<String, Value>,
+    /// Operating systems the app runs on. Missing means Linux, as for every
+    /// entry written before Windows support; unknown systems are ignored.
+    #[serde(
+        default,
+        deserialize_with = "lenient_platforms",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub platforms: Vec<Platform>,
+    /// Sources for single systems; they win over `source`, which stays the
+    /// source older tuxhub versions read. Unknown systems are ignored.
+    #[serde(
+        default,
+        deserialize_with = "lenient_sources",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub sources: BTreeMap<Platform, Source>,
+    /// Manifests for single systems; they replace `manifest` there, for
+    /// example for an app whose live interface exists on Linux only.
+    #[serde(
+        default,
+        deserialize_with = "lenient_manifests",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub manifests: BTreeMap<Platform, Manifest>,
+}
+
+/// An operating system tuxhub runs on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Platform {
+    Linux,
+    Windows,
+}
+
+impl std::fmt::Display for Platform {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Linux => "Linux",
+            Self::Windows => "Windows",
+        })
+    }
+}
+
+impl Platform {
+    /// The system this build of tuxhub runs on.
+    pub const fn current() -> Self {
+        if cfg!(windows) {
+            Self::Windows
+        } else {
+            Self::Linux
+        }
+    }
+}
+
+/// Reads `platforms`, leaving out systems this version does not know.
+fn lenient_platforms<'de, D>(de: D) -> Result<Vec<Platform>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<Vec<Value>>::deserialize(de)?.unwrap_or_default();
+    let mut out: Vec<Platform> = v
+        .into_iter()
+        .filter_map(|p| serde_json::from_value(p).ok())
+        .collect();
+    out.dedup();
+    Ok(out)
+}
+
+/// Reads `sources`, leaving out systems this version does not know and
+/// sources it cannot read.
+fn lenient_sources<'de, D>(de: D) -> Result<BTreeMap<Platform, Source>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<BTreeMap<String, Value>>::deserialize(de)?.unwrap_or_default();
+    Ok(v.into_iter()
+        .filter_map(|(k, s)| {
+            let p = serde_json::from_value(Value::String(k)).ok()?;
+            Some((p, serde_json::from_value(s).ok()?))
+        })
+        .collect())
+}
+
+/// Reads `manifests`, leaving out systems this version does not know and
+/// manifests it cannot read.
+fn lenient_manifests<'de, D>(de: D) -> Result<BTreeMap<Platform, Manifest>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<BTreeMap<String, Value>>::deserialize(de)?.unwrap_or_default();
+    Ok(v.into_iter()
+        .filter_map(|(k, m)| {
+            let p = serde_json::from_value(Value::String(k)).ok()?;
+            Some((p, serde_json::from_value(m).ok()?))
+        })
+        .collect())
+}
+
+/// The systems a source can install on, judged by its kind and, for
+/// release downloads, by the file type of the asset pattern.
+fn source_platforms(source: &Source) -> &'static [Platform] {
+    const LINUX: &[Platform] = &[Platform::Linux];
+    const WINDOWS: &[Platform] = &[Platform::Windows];
+    const BOTH: &[Platform] = &[Platform::Linux, Platform::Windows];
+    let asset = match source {
+        Source::GithubRelease { asset } => asset.as_str(),
+        Source::External {
+            asset: Some(asset), ..
+        } => asset.as_str(),
+        Source::Local { .. } | Source::External { .. } => return BOTH,
+        Source::Flatpak { .. }
+        | Source::SystemPackage { .. }
+        | Source::DistroPackage { .. }
+        | Source::Launcher { .. } => return LINUX,
+    };
+    let asset = asset.to_ascii_lowercase();
+    if asset.ends_with(".exe") || asset.ends_with(".msi") {
+        WINDOWS
+    } else if asset.ends_with(".zip") {
+        BOTH
+    } else {
+        LINUX
+    }
+}
+
+impl Entry {
+    /// The systems the entry names; Linux when it names none.
+    pub fn listed_platforms(&self) -> Vec<Platform> {
+        if self.platforms.is_empty() {
+            vec![Platform::Linux]
+        } else {
+            self.platforms.clone()
+        }
+    }
+
+    /// The source that installs the app on `platform`, if there is one.
+    pub fn source_for(&self, platform: Platform) -> Option<&Source> {
+        if !self.listed_platforms().contains(&platform) {
+            return None;
+        }
+        let source = self.sources.get(&platform).unwrap_or(&self.source);
+        source_platforms(source)
+            .contains(&platform)
+            .then_some(source)
+    }
+
+    /// Whether the app can be installed on `platform`.
+    pub fn supports(&self, platform: Platform) -> bool {
+        self.source_for(platform).is_some()
+    }
+
+    /// The entry as this computer uses it: `source` is the source for
+    /// `platform`. Entries for other systems stay as they are.
+    pub fn for_platform(mut self, platform: Platform) -> Self {
+        if let Some(source) = self.source_for(platform).cloned() {
+            // The common source stays the source of the other systems.
+            for p in self.listed_platforms() {
+                if p != platform && !self.sources.contains_key(&p) {
+                    self.sources.insert(p, self.source.clone());
+                }
+            }
+            self.source = source;
+        }
+        if let Some(m) = self.manifests.get(&platform).cloned() {
+            for p in self.listed_platforms() {
+                if p != platform
+                    && !self.manifests.contains_key(&p)
+                    && let Some(common) = &self.manifest
+                {
+                    self.manifests.insert(p, common.clone());
+                }
+            }
+            self.integration = Some(integration_of(&m));
+            self.manifest = Some(m);
+        }
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -329,10 +505,25 @@ pub struct Installed {
     /// and stay installed; records from before this field are pinned.
     #[serde(default = "pinned_by_default")]
     pub pinned: bool,
+    /// Installed by running the release's installer (Windows): the program
+    /// and how to remove it, instead of files below the tool folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<Setup>,
 }
 
 fn pinned_by_default() -> bool {
     true
+}
+
+/// What tuxhub keeps about an app it installed with an installer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Setup {
+    /// The uninstall entry, to find the app again after an update.
+    pub key: String,
+    /// The program, by absolute path.
+    pub program: String,
+    /// The command that removes the app without questions.
+    pub uninstall: Vec<String>,
 }
 
 /// Where an embedded app runs: inside tuxhub (xpra) or in its own window.
@@ -381,6 +572,7 @@ impl Installed {
             duplicate_dismissed: false,
             window: WindowMode::Hub,
             pinned: true,
+            setup: None,
         }
     }
 
@@ -563,6 +755,9 @@ fn announced(file: &Path, user: bool) -> Result<Installed, String> {
         manifest: None,
         integration: None,
         translations: BTreeMap::new(),
+        platforms: Vec::new(),
+        sources: BTreeMap::new(),
+        manifests: BTreeMap::new(),
         id: a.id,
     };
     entry.validate()?;
@@ -822,7 +1017,7 @@ pub async fn detect(entry: &Entry, programs: &Programs) -> Detected {
 
 /// Whether `path` is a file this user may run.
 fn is_executable(path: &Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    std::fs::metadata(path).is_ok_and(|m| crate::platform::is_executable(path, &m))
 }
 
 /// Whether the program of a launcher is still there.
@@ -1085,6 +1280,19 @@ async fn fetch_release<R: Runtime>(
         )
         .await?;
         std::fs::remove_file(&download).map_err(|e| e.to_string())?;
+    } else if lower.ends_with(".zip") && cfg!(windows) {
+        // Windows' own tar reads zip archives.
+        run(
+            "tar",
+            &[
+                "-xf",
+                &download.to_string_lossy(),
+                "-C",
+                &files.to_string_lossy(),
+            ],
+        )
+        .await?;
+        std::fs::remove_file(&download).map_err(|e| e.to_string())?;
     } else if lower.ends_with(".zip") {
         run(
             "unzip",
@@ -1101,8 +1309,7 @@ async fn fetch_release<R: Runtime>(
         // A single file (AppImage or binary).
         let target = files.join(&name);
         std::fs::rename(&download, &target).map_err(|e| e.to_string())?;
-        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
-            .map_err(|e| e.to_string())?;
+        crate::platform::make_executable(&target).map_err(|e| e.to_string())?;
     }
 
     // Archives with exactly one top-level folder: use it as the root.
@@ -1318,6 +1525,10 @@ async fn install_github<R: Runtime>(
     // Install into a staging folder and swap at the end, so an interrupted
     // update never breaks the installed version.
     let staging = tools_dir.join(format!(".{id}.new"));
+    #[cfg(windows)]
+    if let Some(kind) = crate::win_apps::installer_of(pattern) {
+        return install_setup(app, tools_dir, &staging, entry, repo, pattern, kind).await;
+    }
     let (tag, root) = fetch_release(app, &staging, id, repo, pattern).await?;
 
     let mut inst = Installed {
@@ -1342,6 +1553,72 @@ async fn install_github<R: Runtime>(
         let _ = std::fs::remove_dir_all(&old);
     }
     std::fs::rename(&staging, &dir).map_err(|e| e.to_string())?;
+    Ok(inst)
+}
+
+/// Longest time an installer may run, including the user's answer to an
+/// administrator prompt.
+#[cfg(windows)]
+const SETUP_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// Downloads the release's installer, runs it and records what it
+/// installed (see [`crate::win_apps`]). An update runs the new installer
+/// over the installed version, as the app's own updater would.
+#[cfg(windows)]
+async fn install_setup<R: Runtime>(
+    app: &AppHandle<R>,
+    tools_dir: &Path,
+    staging: &Path,
+    entry: &Entry,
+    repo: &str,
+    pattern: &str,
+    kind: crate::win_apps::Installer,
+) -> Result<Installed, String> {
+    use crate::win_apps;
+    let id = entry.id.as_str();
+    let (tag, file) = download_release(app, staging, id, repo, pattern).await?;
+    let previous = load(tools_dir, id).ok();
+    let known_key = previous
+        .as_ref()
+        .and_then(|p| p.setup.as_ref())
+        .map(|s| s.key.clone());
+    let read = || tokio::task::spawn_blocking(win_apps::read_all);
+    let before = read().await.map_err(|e| e.to_string())?;
+
+    progress(app, stage(id, "setup", None));
+    let (program, args) = win_apps::install_command(kind, &file);
+    let status = tokio::time::timeout(
+        SETUP_TIMEOUT,
+        Command::new(&program)
+            .args(&args)
+            .current_dir(staging)
+            .status(),
+    )
+    .await
+    .map_err(|_| format!("the installer of {} did not finish", entry.name))?
+    .map_err(|e| format!("could not run the installer: {e}"))?;
+    let _ = std::fs::remove_dir_all(staging);
+    if !status.success() {
+        return Err(format!(
+            "the installer of {} failed (exit code {})",
+            entry.name,
+            status.code().unwrap_or(-1)
+        ));
+    }
+
+    let after = read().await.map_err(|e| e.to_string())?;
+    let found = win_apps::pick(&before, &after, &entry.name, known_key.as_deref())
+        .ok_or_else(|| format!("{} was installed, but tuxhub did not find it", entry.name))?;
+    let fallback = found.location.as_deref().and_then(win_apps::program_in);
+    let setup = win_apps::setup_of(found, fallback)?;
+    let inst = Installed {
+        version: Some(tag),
+        setup: Some(setup),
+        ..Installed::new(entry.clone())
+    };
+    let dir = tools_dir.join(id);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    write_record(&dir, &inst)?;
     Ok(inst)
 }
 
@@ -1410,7 +1687,7 @@ fn detect_executable(dir: &Path) -> Option<String> {
         .map(|e| {
             let exec = e
                 .metadata()
-                .is_ok_and(|m| m.permissions().mode() & 0o111 != 0);
+                .is_ok_and(|m| crate::platform::is_executable(&e.path(), &m));
             (e.file_name().to_string_lossy().into_owned(), exec)
         })
         .collect();
@@ -1446,6 +1723,9 @@ pub fn link_local(tools_dir: &Path, path: &Path) -> Result<Installed, String> {
         manifest: None,
         integration: None,
         translations: BTreeMap::new(),
+        platforms: Vec::new(),
+        sources: BTreeMap::new(),
+        manifests: BTreeMap::new(),
         id,
     };
     entry.validate()?;
@@ -1560,8 +1840,57 @@ pub async fn uninstall(
     {
         remove_system_package(package, rpm.is_some(), deb.is_some()).await?;
     }
+    if let Some(setup) = &inst.setup {
+        run_uninstaller(&inst.entry.name, &setup.uninstall).await?;
+        #[cfg(windows)]
+        wait_removed(&inst.entry.name, &setup.key).await?;
+    }
     // For local tools only the link is removed, never the folder itself.
     std::fs::remove_dir_all(tools_dir.join(inst.id())).map_err(|e| e.to_string())
+}
+
+/// Runs the stored uninstall command of an app tuxhub installed with its
+/// installer, and waits for it.
+async fn run_uninstaller(name: &str, command: &[String]) -> Result<(), String> {
+    let (program, args) = command
+        .split_first()
+        .ok_or_else(|| format!("{name} has no uninstall command"))?;
+    let status = tokio::time::timeout(
+        Duration::from_secs(30 * 60),
+        Command::new(program).args(args).status(),
+    )
+    .await
+    .map_err(|_| format!("the uninstaller of {name} did not finish"))?
+    .map_err(|e| format!("could not run the uninstaller of {name}: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "the uninstaller of {name} failed (exit code {})",
+            status.code().unwrap_or(-1)
+        ))
+    }
+}
+
+/// Waits until the uninstall entry `key` is gone: an NSIS uninstaller
+/// copies itself to a temporary folder and returns before it has finished.
+#[cfg(windows)]
+async fn wait_removed(name: &str, key: &str) -> Result<(), String> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5 * 60);
+    loop {
+        let entries = tokio::task::spawn_blocking(crate::win_apps::read_all)
+            .await
+            .map_err(|e| e.to_string())?;
+        if !entries.iter().any(|e| e.key == key) {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!(
+                "{name} is still installed after its uninstaller ran"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
 }
 
 /// How a tool is launched: program, arguments and working directory.
@@ -1612,6 +1941,22 @@ pub fn launch_cmd(tools_dir: &Path, inst: &Installed) -> Result<LaunchCmd, Strin
                 program: program.into(),
                 args: args.to_vec(),
                 cwd: None,
+                flatpak: false,
+            })
+        }
+        _ if inst.setup.is_some() => {
+            let setup = inst.setup.as_ref().unwrap();
+            let exe = PathBuf::from(&setup.program);
+            if !exe.is_absolute() || !exe.is_file() {
+                return Err(format!(
+                    "{} is missing; install the app again",
+                    setup.program
+                ));
+            }
+            Ok(LaunchCmd {
+                cwd: exe.parent().map(Path::to_path_buf),
+                program: exe,
+                args: vec![],
                 flatpak: false,
             })
         }
@@ -1781,6 +2126,7 @@ pub fn app_running(tools_dir: &Path, inst: &Installed) -> bool {
 /// Processes of the current user that run `program`. The processes of other
 /// users cannot be read and are left out. The app of an AppImage runs from a
 /// temporary mount; it is found by `APPIMAGE` in its environment.
+#[cfg(unix)]
 pub fn processes(program: &Path) -> Vec<u32> {
     let program = program
         .canonicalize()
@@ -1802,6 +2148,31 @@ pub fn processes(program: &Path) -> Vec<u32> {
         .collect()
 }
 
+/// Processes of the current user that run `program`.
+#[cfg(windows)]
+pub fn processes(program: &Path) -> Vec<u32> {
+    let program = program
+        .canonicalize()
+        .unwrap_or_else(|_| program.to_path_buf());
+    crate::platform::process_paths()
+        .into_iter()
+        .filter(|(_, exe)| same_file_name(exe, &program))
+        .map(|(pid, _)| pid)
+        .collect()
+}
+
+/// Whether two Windows paths name the same file: Windows ignores case, and
+/// `canonicalize` adds a `\\?\` prefix the process list does not have.
+#[cfg(any(windows, test))]
+fn same_file_name(a: &Path, b: &Path) -> bool {
+    let plain = |p: &Path| {
+        let s = p.to_string_lossy().to_lowercase();
+        s.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(s)
+    };
+    plain(a) == plain(b)
+}
+
+#[cfg(unix)]
 fn is_appimage(program: &Path) -> bool {
     program
         .extension()
@@ -1809,6 +2180,7 @@ fn is_appimage(program: &Path) -> bool {
 }
 
 /// Whether the environment of `pid` holds exactly `var` (`APPIMAGE=<path>`).
+#[cfg(unix)]
 fn started_by(pid: u32, var: &[u8]) -> bool {
     std::fs::read(format!("/proc/{pid}/environ"))
         .is_ok_and(|env| env.split(|b| *b == 0).any(|entry| entry == var))
@@ -1816,6 +2188,7 @@ fn started_by(pid: u32, var: &[u8]) -> bool {
 
 /// Whether `exe`, the target of `/proc/<pid>/exe`, is `program`. When an
 /// update replaced the file, the kernel appends " (deleted)".
+#[cfg(unix)]
 fn runs(exe: &Path, program: &Path) -> bool {
     exe == program
         || exe
@@ -1872,7 +2245,7 @@ pub async fn quit(program: &Path) -> Result<(), String> {
     if left.is_empty() {
         return Ok(());
     }
-    signal("TERM", &left).await?;
+    end(&left, false).await?;
     for _ in 0..30 {
         tokio::time::sleep(Duration::from_millis(100)).await;
         let running = processes(program);
@@ -1881,10 +2254,19 @@ pub async fn quit(program: &Path) -> Result<(), String> {
             return Ok(());
         }
     }
-    signal("KILL", &left).await
+    end(&left, true).await
 }
 
-async fn signal(name: &str, pids: &[u32]) -> Result<(), String> {
+/// Asks processes to end, or ends them at once with `force`.
+#[cfg(windows)]
+async fn end(pids: &[u32], force: bool) -> Result<(), String> {
+    crate::platform::end_processes(pids, force).await
+}
+
+/// Sends SIGTERM, or SIGKILL with `force`.
+#[cfg(unix)]
+async fn end(pids: &[u32], force: bool) -> Result<(), String> {
+    let name = if force { "KILL" } else { "TERM" };
     // A process may exit in between, so the exit status does not matter.
     Command::new("kill")
         .arg(format!("-{name}"))
@@ -2174,7 +2556,7 @@ pub async fn update_flatpak<R: Runtime>(
 /// Starts a program the test just copied. Another test may fork while the
 /// copy is still open for writing; exec then fails with "Text file busy" for
 /// a moment.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) async fn spawn_copied(program: &Path, args: &[&str]) -> std::process::Child {
     for _ in 0..100 {
         match std::process::Command::new(program).args(args).spawn() {
@@ -2190,13 +2572,13 @@ pub(crate) async fn spawn_copied(program: &Path, args: &[&str]) -> std::process:
 /// Stand-ins for flatpak, rpm and dpkg-query: shell scripts that log each
 /// call to `<dir>/calls` and then run the body a test gives them. A program
 /// a test does not set is missing.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) struct Fakes {
     pub dir: PathBuf,
     pub programs: Programs,
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 impl Fakes {
     pub fn new(name: &str) -> Self {
         let dir = std::env::temp_dir().join(format!("tuxhub-fakes-{name}-{}", std::process::id()));
@@ -2279,14 +2661,166 @@ impl Fakes {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 impl Drop for Fakes {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 
+/// Tests that run on both systems.
 #[cfg(test)]
+mod platform_tests {
+    use super::*;
+
+    fn parse_entry(json: Value) -> Entry {
+        serde_json::from_value(json).unwrap()
+    }
+
+    fn release(asset: &str) -> Value {
+        serde_json::json!({"type": "github-release", "asset": asset})
+    }
+
+    fn entry_json(extra: Value) -> Value {
+        let mut e = serde_json::json!({
+            "id": "app", "name": "App", "repo": "o/app",
+            "source": release("*x86_64.AppImage"),
+        });
+        e.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        e
+    }
+
+    #[test]
+    fn windows_paths_compare_without_case_and_prefix() {
+        assert!(same_file_name(
+            Path::new(r"C:\Program Files\Fliq\Fliq.exe"),
+            Path::new(r"\\?\c:\program files\fliq\FLIQ.EXE"),
+        ));
+        assert!(!same_file_name(
+            Path::new(r"C:\Fliq\Fliq.exe"),
+            Path::new(r"C:\Fliq\Fliq2.exe"),
+        ));
+    }
+
+    #[test]
+    fn entry_without_platforms_is_linux_only() {
+        let e = parse_entry(entry_json(serde_json::json!({})));
+        assert_eq!(e.listed_platforms(), vec![Platform::Linux]);
+        assert!(e.supports(Platform::Linux));
+        assert!(!e.supports(Platform::Windows));
+    }
+
+    #[test]
+    fn unknown_platforms_and_sources_are_ignored() {
+        let e = parse_entry(entry_json(serde_json::json!({
+            "platforms": ["linux", "macos"],
+            "sources": {"macos": release("*.dmg"), "windows": {"type": "future"}},
+        })));
+        assert_eq!(e.platforms, vec![Platform::Linux]);
+        assert!(e.sources.is_empty());
+        assert!(e.validate().is_ok());
+    }
+
+    #[test]
+    fn windows_needs_a_windows_source() {
+        let e = parse_entry(entry_json(
+            serde_json::json!({"platforms": ["linux", "windows"]}),
+        ));
+        assert!(e.supports(Platform::Linux));
+        assert!(
+            !e.supports(Platform::Windows),
+            "an AppImage does not install on Windows"
+        );
+    }
+
+    #[test]
+    fn system_sources_win_over_the_common_source() {
+        let e = parse_entry(entry_json(serde_json::json!({
+            "platforms": ["linux", "windows"],
+            "sources": {"windows": release("*_x64-setup.exe")},
+        })));
+        assert!(e.supports(Platform::Windows));
+        let win = e.clone().for_platform(Platform::Windows);
+        assert!(
+            matches!(&win.source, Source::GithubRelease { asset } if asset == "*_x64-setup.exe")
+        );
+        let linux = e.for_platform(Platform::Linux);
+        assert!(
+            matches!(&linux.source, Source::GithubRelease { asset } if asset == "*x86_64.AppImage")
+        );
+    }
+
+    #[test]
+    fn windows_only_entry_keeps_its_source() {
+        let e = parse_entry(entry_json(serde_json::json!({
+            "platforms": ["windows"],
+            "source": release("*.msi"),
+        })));
+        assert!(e.supports(Platform::Windows));
+        assert!(!e.supports(Platform::Linux));
+    }
+
+    #[test]
+    fn linux_kinds_of_sources_never_install_on_windows() {
+        let e = parse_entry(serde_json::json!({
+            "id": "sc", "name": "SC", "platforms": ["linux", "windows"],
+            "source": {"type": "flatpak", "flatpak_id": "com.example.App"},
+        }));
+        assert!(e.supports(Platform::Linux));
+        assert!(!e.supports(Platform::Windows));
+    }
+
+    #[test]
+    fn an_entry_for_one_system_still_knows_the_other() {
+        let e = parse_entry(entry_json(serde_json::json!({
+            "platforms": ["linux", "windows"],
+            "sources": {"windows": release("*_x64-setup.exe")},
+        })));
+        for p in [Platform::Linux, Platform::Windows] {
+            let e = e.clone().for_platform(p);
+            assert!(
+                e.supports(Platform::Linux) && e.supports(Platform::Windows),
+                "{p}"
+            );
+            let linux = e.clone().for_platform(Platform::Linux);
+            assert!(
+                matches!(&linux.source, Source::GithubRelease { asset } if asset == "*x86_64.AppImage")
+            );
+        }
+    }
+
+    #[test]
+    fn system_manifests_replace_the_common_one() {
+        let e = parse_entry(entry_json(serde_json::json!({
+            "platforms": ["linux", "windows"],
+            "sources": {"windows": release("*_x64-setup.exe")},
+            "integration": "socket",
+            "manifest": {"embed": false, "live": true},
+            "manifests": {"windows": {"embed": false}, "macos": {"embed": false}},
+        })));
+        assert_eq!(e.manifests.len(), 1);
+        let win = e.clone().for_platform(Platform::Windows);
+        assert!(!win.manifest.as_ref().unwrap().is_live());
+        assert_eq!(win.integration, Some(Integration::Standalone));
+        let linux = e.for_platform(Platform::Linux);
+        assert!(linux.manifest.as_ref().unwrap().is_live());
+        assert_eq!(linux.integration, Some(Integration::Socket));
+    }
+
+    #[test]
+    fn zip_archives_install_on_both_systems() {
+        let e = parse_entry(entry_json(serde_json::json!({
+            "platforms": ["linux", "windows"],
+            "source": release("*-portable.zip"),
+        })));
+        assert!(e.supports(Platform::Linux) && e.supports(Platform::Windows));
+    }
+}
+
+/// Linux behavior: these tests run programs and fake ones as shell scripts.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

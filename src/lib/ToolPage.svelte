@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
+  import { platform } from "./platform.svelte";
+  import { toolUrl } from "./tool-url";
   import {
     AppWindow,
     CircleStop,
@@ -471,6 +473,8 @@
     <!--
       The page has its own origin (tool://<id>), separate from tuxhub and from
       other tools, so it can only reach tuxhub through the bridge (postMessage).
+      On Windows all tool pages share the origin http://tool.localhost, still
+      separate from tuxhub.
       allow-same-origin keeps that origin: with an opaque origin WebKitGTK does
       not load the page's scripts and stylesheets from the tool: scheme.
       The page background is transparent, so its cards sit on the tuxhub page.
@@ -482,7 +486,7 @@
       class="tool-ui"
       class:loading={!frameLoaded}
       title={tool.entry.name}
-      src={`tool://${id}/${m.ui}`}
+      src={toolUrl(platform.os, id, m.ui)}
       onload={() => (frameLoaded = true)}
       sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
     ></iframe>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { platform } from "./platform.svelte";
   import { t } from "./i18n.svelte";
   import { Play } from "@lucide/svelte";
   import ToolIcon from "./ToolIcon.svelte";
@@ -45,12 +46,15 @@
   });
 
   /** The app has the "In tuxhub / Own window" toggle. */
-  const toggle = $derived(canToggleWindow(tool));
+  const toggle = $derived(canToggleWindow(tool) && platform.embed);
   /** Where the app runs when it is started; follows the stored choice. */
   let mode = $state<WindowMode>("hub");
   $effect.pre(() => {
     mode = tool.window;
   });
+  /** The app starts in its own window: the user's choice, or the only way
+   * where apps cannot run inside tuxhub (Windows). */
+  const ownWindowMode = $derived((toggle && mode === "own") || !platform.embed);
   let group = $state<HTMLElement>();
   /** The mode the user switches to while the app runs in the other one. */
   let switching = $state<WindowMode | null>(null);
@@ -238,7 +242,7 @@
   }
 
   async function start() {
-    if (toggle && mode === "own") {
+    if (ownWindowMode) {
       starting = true;
       try {
         const started = await api.launch(id);
@@ -335,7 +339,7 @@
   </wa-radio-group>
 {/if}
 
-{#if url || (starting && mode === "hub")}
+{#if url || (starting && !ownWindowMode)}
   <div class="embed card">
     {#if url}
       <iframe
@@ -386,7 +390,7 @@
       <div class="text">
         <h2>{tool.entry.name}</h2>
         <p class="muted">{describe(tool.entry)}</p>
-        {#if missing && !(toggle && mode === "own")}
+        {#if missing && !ownWindowMode && platform.loaded}
           <wa-callout variant="warning">
             <p>{t("embed.missing", { dep: missing })}</p>
             {#if missing === "xpra"}
@@ -398,7 +402,7 @@
           </wa-callout>
         {/if}
         <div class="buttons">
-          {#if toggle && mode === "own"}
+          {#if ownWindowMode}
             <wa-button variant="brand" loading={starting} onclick={start}>
               <span slot="start"><Play size={15} aria-hidden="true" /></span>
               {t("embed.startOwn")}
@@ -411,7 +415,7 @@
           {/if}
         </div>
         <p class="muted small">
-          {toggle ? t("embed.hintToggle") : t("embed.hint")}
+          {!platform.embed ? t("embed.hintOwnOnly") : toggle ? t("embed.hintToggle") : t("embed.hint")}
         </p>
       </div>
     </div>

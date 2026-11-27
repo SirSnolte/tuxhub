@@ -180,7 +180,7 @@ impl Runtime {
     }
 
     /// Registers a process as tool `id` without reading its output. Returns its pid.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) async fn spawn_for_test(&self, id: &str, program: &str, args: &[&str]) -> u32 {
         let mut child = Command::new(program)
             .args(args)

@@ -376,7 +376,7 @@ async fn upgrade_packages(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::tools::Fakes;

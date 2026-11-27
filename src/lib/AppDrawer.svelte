@@ -14,7 +14,7 @@
   import ToolIcon from "./ToolIcon.svelte";
   import LevelMeter from "./LevelMeter.svelte";
   import Readme from "./Readme.svelte";
-  import { AREAS, areaOf, type Level, type Member, type WEntry } from "./workshop-model";
+  import { AREAS, areaOf, foreignKey, type Level, type Member, type WEntry } from "./workshop-model";
 
   let {
     entry,
@@ -46,6 +46,7 @@
   ];
 
   const lead = $derived(entry?.lead);
+  const foreign = $derived(lead ? foreignKey(lead) : null);
   const pinned = $derived(entry?.pinned ?? false);
   const automatic = $derived(lead ? areaOf(lead, {}) : "tools");
   const chosen = $derived(lead?.desktopId ? (lead.view && lead.area !== automatic ? lead.area : "") : "");
@@ -99,6 +100,7 @@
         {#if lead.summary}<p class="muted small">{lead.summary}</p>{/if}
         <div class="tags">
           <wa-tag size="s">{labels.source(lead.source)}</wa-tag>
+          {#if foreign}<wa-tag size="s" variant="warning">{t(foreign)}</wa-tag>{/if}
           {#if !entry.catalog}<wa-tag size="s">{labels.area(entry.area)}</wa-tag>{/if}
           {#if entry.running}<wa-tag size="s" variant="success">{t("ws.running")}</wa-tag>{/if}
         </div>
@@ -109,6 +111,10 @@
       {#if entry.installed}
         <wa-button variant="brand" onclick={() => onlaunch(lead)}>
           <span slot="start"><Play size={16} aria-hidden="true" /></span>{t("workshop.open")}
+        </wa-button>
+      {:else if foreign}
+        <wa-button variant="brand" disabled title={t("workshop.notForThisSystem")}>
+          <span slot="start"><Download size={16} aria-hidden="true" /></span>{t("workshop.install")}
         </wa-button>
       {:else}
         <wa-button variant="brand" loading={busy} onclick={() => oninstall(entry)}>

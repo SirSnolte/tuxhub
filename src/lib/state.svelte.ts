@@ -7,7 +7,7 @@ export type ToolEvent = { addon: string; method: string; params: unknown };
 /** Installation progress as emitted by the backend (`tool-progress`). */
 export type Progress = {
   id: string;
-  stage: "resolving" | "downloading" | "extracting" | "flathub" | "flatpak";
+  stage: "resolving" | "downloading" | "extracting" | "setup" | "flathub" | "flatpak";
   /** File name (downloading) or Flatpak id (flatpak). */
   detail: string | null;
   bytes: number | null;

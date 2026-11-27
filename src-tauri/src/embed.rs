@@ -307,9 +307,7 @@ async fn open<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<EmbedInfo, Str
     std::fs::write(&watcher_py, WATCHER).map_err(|e| e.to_string())?;
     let run_sh = dir.join("run.sh");
     std::fs::write(&run_sh, run_script(&lc, &conf)).map_err(|e| e.to_string())?;
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&run_sh, std::fs::Permissions::from_mode(0o755))
-        .map_err(|e| e.to_string())?;
+    crate::platform::make_executable(&run_sh).map_err(|e| e.to_string())?;
 
     let taken: Vec<u32> = sessions.values().map(|s| s.display).collect();
     let display = free_display(&taken).ok_or("no free X display found")?;
@@ -484,7 +482,7 @@ async fn shutdown(mut s: Session) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

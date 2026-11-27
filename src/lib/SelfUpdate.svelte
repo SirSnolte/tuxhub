@@ -3,7 +3,7 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { ArrowUp, CircleCheck } from "@lucide/svelte";
   import { t } from "./i18n.svelte";
-  import { notesHtml, selfUpdate } from "./selfupdate.svelte";
+  import { notesHtml, selfUpdate } from "./self-update.svelte";
 
   const RELEASES = "https://github.com/SirSnolte/tuxhub/releases";
 
