@@ -464,10 +464,25 @@ pub struct Installed {
     /// and stay installed; records from before this field are pinned.
     #[serde(default = "pinned_by_default")]
     pub pinned: bool,
+    /// Installed by running the release's installer (Windows): the program
+    /// and how to remove it, instead of files below the tool folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<Setup>,
 }
 
 fn pinned_by_default() -> bool {
     true
+}
+
+/// What tuxhub keeps about an app it installed with an installer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Setup {
+    /// The uninstall entry, to find the app again after an update.
+    pub key: String,
+    /// The program, by absolute path.
+    pub program: String,
+    /// The command that removes the app without questions.
+    pub uninstall: Vec<String>,
 }
 
 /// Where an embedded app runs: inside tuxhub (xpra) or in its own window.
@@ -516,6 +531,7 @@ impl Installed {
             duplicate_dismissed: false,
             window: WindowMode::Hub,
             pinned: true,
+            setup: None,
         }
     }
 
@@ -1222,6 +1238,19 @@ async fn fetch_release<R: Runtime>(
         )
         .await?;
         std::fs::remove_file(&download).map_err(|e| e.to_string())?;
+    } else if lower.ends_with(".zip") && cfg!(windows) {
+        // Windows' own tar reads zip archives.
+        run(
+            "tar",
+            &[
+                "-xf",
+                &download.to_string_lossy(),
+                "-C",
+                &files.to_string_lossy(),
+            ],
+        )
+        .await?;
+        std::fs::remove_file(&download).map_err(|e| e.to_string())?;
     } else if lower.ends_with(".zip") {
         run(
             "unzip",
@@ -1454,6 +1483,10 @@ async fn install_github<R: Runtime>(
     // Install into a staging folder and swap at the end, so an interrupted
     // update never breaks the installed version.
     let staging = tools_dir.join(format!(".{id}.new"));
+    #[cfg(windows)]
+    if let Some(kind) = crate::win_apps::installer_of(pattern) {
+        return install_setup(app, tools_dir, &staging, entry, repo, pattern, kind).await;
+    }
     let (tag, root) = fetch_release(app, &staging, id, repo, pattern).await?;
 
     let mut inst = Installed {
@@ -1478,6 +1511,72 @@ async fn install_github<R: Runtime>(
         let _ = std::fs::remove_dir_all(&old);
     }
     std::fs::rename(&staging, &dir).map_err(|e| e.to_string())?;
+    Ok(inst)
+}
+
+/// Longest time an installer may run, including the user's answer to an
+/// administrator prompt.
+#[cfg(windows)]
+const SETUP_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// Downloads the release's installer, runs it and records what it
+/// installed (see [`crate::win_apps`]). An update runs the new installer
+/// over the installed version, as the app's own updater would.
+#[cfg(windows)]
+async fn install_setup<R: Runtime>(
+    app: &AppHandle<R>,
+    tools_dir: &Path,
+    staging: &Path,
+    entry: &Entry,
+    repo: &str,
+    pattern: &str,
+    kind: crate::win_apps::Installer,
+) -> Result<Installed, String> {
+    use crate::win_apps;
+    let id = entry.id.as_str();
+    let (tag, file) = download_release(app, staging, id, repo, pattern).await?;
+    let previous = load(tools_dir, id).ok();
+    let known_key = previous
+        .as_ref()
+        .and_then(|p| p.setup.as_ref())
+        .map(|s| s.key.clone());
+    let read = || tokio::task::spawn_blocking(win_apps::read_all);
+    let before = read().await.map_err(|e| e.to_string())?;
+
+    progress(app, stage(id, "setup", None));
+    let (program, args) = win_apps::install_command(kind, &file);
+    let status = tokio::time::timeout(
+        SETUP_TIMEOUT,
+        Command::new(&program)
+            .args(&args)
+            .current_dir(staging)
+            .status(),
+    )
+    .await
+    .map_err(|_| format!("the installer of {} did not finish", entry.name))?
+    .map_err(|e| format!("could not run the installer: {e}"))?;
+    let _ = std::fs::remove_dir_all(staging);
+    if !status.success() {
+        return Err(format!(
+            "the installer of {} failed (exit code {})",
+            entry.name,
+            status.code().unwrap_or(-1)
+        ));
+    }
+
+    let after = read().await.map_err(|e| e.to_string())?;
+    let found = win_apps::pick(&before, &after, &entry.name, known_key.as_deref())
+        .ok_or_else(|| format!("{} was installed, but tuxhub did not find it", entry.name))?;
+    let fallback = found.location.as_deref().and_then(win_apps::program_in);
+    let setup = win_apps::setup_of(found, fallback)?;
+    let inst = Installed {
+        version: Some(tag),
+        setup: Some(setup),
+        ..Installed::new(entry.clone())
+    };
+    let dir = tools_dir.join(id);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    write_record(&dir, &inst)?;
     Ok(inst)
 }
 
@@ -1698,8 +1797,57 @@ pub async fn uninstall(
     {
         remove_system_package(package, rpm.is_some(), deb.is_some()).await?;
     }
+    if let Some(setup) = &inst.setup {
+        run_uninstaller(&inst.entry.name, &setup.uninstall).await?;
+        #[cfg(windows)]
+        wait_removed(&inst.entry.name, &setup.key).await?;
+    }
     // For local tools only the link is removed, never the folder itself.
     std::fs::remove_dir_all(tools_dir.join(inst.id())).map_err(|e| e.to_string())
+}
+
+/// Runs the stored uninstall command of an app tuxhub installed with its
+/// installer, and waits for it.
+async fn run_uninstaller(name: &str, command: &[String]) -> Result<(), String> {
+    let (program, args) = command
+        .split_first()
+        .ok_or_else(|| format!("{name} has no uninstall command"))?;
+    let status = tokio::time::timeout(
+        Duration::from_secs(30 * 60),
+        Command::new(program).args(args).status(),
+    )
+    .await
+    .map_err(|_| format!("the uninstaller of {name} did not finish"))?
+    .map_err(|e| format!("could not run the uninstaller of {name}: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "the uninstaller of {name} failed (exit code {})",
+            status.code().unwrap_or(-1)
+        ))
+    }
+}
+
+/// Waits until the uninstall entry `key` is gone: an NSIS uninstaller
+/// copies itself to a temporary folder and returns before it has finished.
+#[cfg(windows)]
+async fn wait_removed(name: &str, key: &str) -> Result<(), String> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5 * 60);
+    loop {
+        let entries = tokio::task::spawn_blocking(crate::win_apps::read_all)
+            .await
+            .map_err(|e| e.to_string())?;
+        if !entries.iter().any(|e| e.key == key) {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!(
+                "{name} is still installed after its uninstaller ran"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
 }
 
 /// How a tool is launched: program, arguments and working directory.
@@ -1750,6 +1898,22 @@ pub fn launch_cmd(tools_dir: &Path, inst: &Installed) -> Result<LaunchCmd, Strin
                 program: program.into(),
                 args: args.to_vec(),
                 cwd: None,
+                flatpak: false,
+            })
+        }
+        _ if inst.setup.is_some() => {
+            let setup = inst.setup.as_ref().unwrap();
+            let exe = PathBuf::from(&setup.program);
+            if !exe.is_absolute() || !exe.is_file() {
+                return Err(format!(
+                    "{} is missing; install the app again",
+                    setup.program
+                ));
+            }
+            Ok(LaunchCmd {
+                cwd: exe.parent().map(Path::to_path_buf),
+                program: exe,
+                args: vec![],
                 flatpak: false,
             })
         }

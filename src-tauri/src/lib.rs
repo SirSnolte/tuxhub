@@ -14,6 +14,8 @@ mod system;
 mod tools;
 mod updates;
 mod webui;
+#[cfg(any(windows, test))]
+mod win_apps;
 
 use manifest::Manifest;
 use serde::Serialize;
