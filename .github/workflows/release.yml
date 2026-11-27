@@ -28,8 +28,11 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           awk -v v="$version" '$0 ~ "^## \\[" v "\\]" {found=1; next} found && /^## \[/ {exit} found && !/^\[[^]]*\]: /' CHANGELOG.md > notes.md
           test -s notes.md || { echo "No changelog entry for $version"; exit 1; }
-          gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "tuxhub $GITHUB_REF_NAME" --notes-file notes.md
-          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id")
+          # The id comes from the answer: a new release shows up in the list
+          # of releases only after a moment.
+          id=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
+            -f tag_name="$GITHUB_REF_NAME" -f name="tuxhub $GITHUB_REF_NAME" \
+            -F draft=true -F body=@notes.md --jq .id)
           test -n "$id"
           echo "id=$id" >> "$GITHUB_OUTPUT"
 
